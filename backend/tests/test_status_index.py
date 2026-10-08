@@ -163,6 +163,26 @@ def test_stale_index_is_served_while_one_rebuild_runs(monkeypatch, tmp_path):
     asyncio.run(run())
 
 
+def test_tabs_are_told_when_a_rebuild_finishes_after_serving_old_statuses(monkeypatch, tmp_path):
+    cat = _cat(_e("a.txt"))
+    idx = _indexes(monkeypatch, tmp_path, cat)
+    told = []
+    idx.on_refreshed = lambda pair: told.append(pair.id)
+    pair, account = SimpleNamespace(id=1, account_id=5), SimpleNamespace()
+
+    async def run():
+        await idx.get(pair, account)  # first build: nobody saw old statuses
+        assert told == []
+        idx.invalidate()
+        await idx.get(pair, account)  # served the old index; a rebuild starts
+        await asyncio.gather(*idx._building.values())
+        assert told == [1]  # now a tab can fetch the new statuses
+        await idx.get(pair, account)
+        assert told == [1]
+
+    asyncio.run(run())
+
+
 def test_concurrent_first_requests_share_one_build(monkeypatch, tmp_path):
     idx = _indexes(monkeypatch, tmp_path, _cat(_e("a.txt")))
     calls = []

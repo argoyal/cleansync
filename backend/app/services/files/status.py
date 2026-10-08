@@ -10,7 +10,7 @@ import asyncio
 import logging
 import os
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -195,6 +195,10 @@ class StatusIndexes:
         self._cache: dict[int, tuple[float, int, PairIndex]] = {}
         self._gen: dict[int, int] = {}
         self._building: dict[int, asyncio.Task] = {}
+        self._served_stale: set[int] = set()
+        # Called with the pair when a rebuild finishes that a request had to answer around with
+        # the old statuses, so open tabs can ask again.
+        self.on_refreshed: Callable[[SyncPair], None] | None = None
 
     def invalidate(self, pair_id: int | None = None) -> None:
         """Mark cached statuses stale (one pair, or all). Safe from any thread."""
@@ -226,6 +230,13 @@ class StatusIndexes:
             self._cache[pid] = (self.clock(), gen, index)
         finally:
             self._building.pop(pid, None)
+        if pid in self._served_stale:
+            self._served_stale.discard(pid)
+            if self.on_refreshed is not None:
+                try:
+                    self.on_refreshed(pair)
+                except Exception:
+                    log.exception("telling open tabs about new statuses failed")
 
     async def get(self, pair: SyncPair, account: Account) -> tuple[PairIndex, Catalog | None]:
         """The pair's index and the Drive listing it should be shown with."""
@@ -242,6 +253,7 @@ class StatusIndexes:
             task.add_done_callback(_log_failure)
         stale = self._cache.get(pair.id)
         if stale is not None:
+            self._served_stale.add(pair.id)
             return stale[2], catalog
         await asyncio.shield(task)
         return self._cache[pair.id][2], catalog

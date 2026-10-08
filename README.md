@@ -4,9 +4,11 @@ Keep a folder on your own server and Google Drive in two-way sync, with a web pa
 
 DriveSync is a control panel around [rclone](https://rclone.org) `bisync`. rclone moves the files; DriveSync decides when, checks every plan before it runs, and asks you when something needs a human.
 
-> Status: early development (backend only; the web UI is coming next).
+> Status: early development. Backend and web UI are in; offload, Office conversion and the Recovery view come next.
 
 ## What it does
+- A web app that looks and works like Google Drive: browse, open files in a new tab (video can seek), download files and whole folders, upload files and folders of any size, new folders, rename, move, delete, blank Office files and new Google Docs/Sheets/Slides, each item marked synced, syncing, waiting or in conflict.
+- Deleted items first go to a Recovery folder on the server, then to Drive's trash at the next sync.
 - Connect one or more Google accounts. Each syncs into its own folder: `storage/<email>/`.
 - Two-way sync on a schedule (every 1–60 minutes), when local files change, or when you click Sync now.
 - **Before the first sync**, shows what is only local, only on Drive, and different on both, and waits for you to type a confirmation.
@@ -22,19 +24,7 @@ DriveSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 5. `docker compose -f compose.yml pull && docker compose -f compose.yml up -d`. Run the same two commands again to update to the newest `latest` image.
 6. Log in and change the password. If you left `ADMIN_PASSWORD` empty, the first password is in `app/data/secrets/initial-admin-password`.
 
-The web UI arrives in a later release. Until then, use the REST API. Log in once to get the session cookie and the CSRF token, then send both with every request that changes something:
-
-```sh
-curl -c jar.txt -H 'content-type: application/json' \
-  -d '{"username":"admin","password":"..."}' https://drivesync.example.com/api/auth/login
-# -> {"csrf_token": "...", "must_change_password": true, ...}
-curl -b jar.txt -c jar.txt -H 'content-type: application/json' -H 'X-CSRF-Token: <csrf_token>' \
-  -d '{"current_password":"...","new_password":"at least 12 characters"}' \
-  https://drivesync.example.com/api/auth/change-password   # returns a new csrf_token
-curl -b jar.txt https://drivesync.example.com/api/openapi.json   # the full API description
-```
-
-The interactive API reference is at `PUBLIC_URL/api/docs`; it is only served to a logged-in session.
+Open `PUBLIC_URL`, log in, choose your own password, and the setup wizard walks you through connecting Google, choosing the folders, checking the preview and starting the first sync. The REST API is described at `PUBLIC_URL/api/docs` (logged-in sessions only).
 
 ## Configuration
 | Variable | Required | Meaning |

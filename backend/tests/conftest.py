@@ -57,6 +57,7 @@ def settings(tmp_path: Path, fake_rclone, office_templates) -> Settings:
         rclone_binary=fake_rclone.binary,
         rclone_password_command=str(passcmd),
         office_templates_dir=office_templates,
+        frontend_dir=tmp_path / "no-frontend",  # a locally built web app must not change API tests
     )
 
 

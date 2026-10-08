@@ -192,12 +192,14 @@ class CatalogService:
         catalog = await asyncio.to_thread(build_and_save)
         self._last_ok[pair_id] = now
         self.last_error.pop(pair_id, None)
-        self.bus.publish("catalog", {"pair_id": pair_id, "account_id": account_id})
         for listener in self.listeners:
             try:
                 listener(pair_id)
             except Exception:
                 log.exception("catalog listener failed for pair %s", pair_id)
+        # Last: an open tab refetches the moment it hears this, so the listeners above
+        # (which drop the cached statuses) must already be done.
+        self.bus.publish("catalog", {"pair_id": pair_id, "account_id": account_id})
         return catalog
 
     async def _stat(self, target: str) -> tuple[RunResult, list[str]]:

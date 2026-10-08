@@ -145,6 +145,18 @@ async def test_listeners_and_events_fire_after_a_refresh(
     assert seen == [pair.id]
 
 
+async def test_cached_statuses_are_dropped_before_open_tabs_are_told(
+    catalog_service, fake_rclone, make_account, make_pair, monkeypatch
+):
+    """A tab that hears "catalog" refetches at once; it must not get the old statuses."""
+    pair = make_pair(make_account())
+    order = []
+    catalog_service.listeners.append(lambda _id: order.append("drop cached statuses"))
+    monkeypatch.setattr(catalog_service.bus, "publish", lambda kind, data: order.append(kind))
+    await catalog_service.refresh(pair.id)
+    assert order == ["drop cached statuses", "catalog"]
+
+
 def _job(db, pair, kind=JobKind.BISYNC, **counts):
     job = SyncJob(pair_id=pair.id, trigger="MANUAL", kind=kind, state=JobState.SUCCESS, **counts)
     db.add(job)

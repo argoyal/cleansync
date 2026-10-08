@@ -165,6 +165,9 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     )
     app.state.indexes = StatusIndexes(layout=layout, catalog=app.state.catalog)
     app.state.catalog.listeners.append(app.state.indexes.invalidate)
+    app.state.indexes.on_refreshed = lambda pair: app.state.bus.publish(
+        "files", {"account_id": pair.account_id}
+    )
     app.state.thumbs = Thumbnails(layout.thumbs_dir)
     app.state.drive_api = DriveApi(
         TokenProvider(settings=settings, rclone_env=app.state.rclone_env)

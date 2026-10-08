@@ -72,6 +72,11 @@ describe("first-run wizard", () => {
       "GET /api/remote-browse": ({ url }: { url: URL }) => (url.searchParams.get("path") ? [] : [{ name: "Work", path: "Work" }]),
       "GET /api/local-browse": [],
       "POST /api/sync-pairs": { ...PAIR, initialized: false, status: "NEW", id: 11 },
+      // The preview step loads this pair next. Without these answers it gets a 404 and sends the
+      // user straight back to the folders step, so the "preview" address only existed for an
+      // instant, and a slow machine could miss it.
+      "GET /api/sync-pairs/11": NEW_PAIR,
+      "GET /api/sync-pairs/11/preview": none,
     });
     renderApp(<SetupWizard />, { route: "/setup", path: "/setup" });
     await userEvent.click(await screen.findByRole("button", { name: "Work" }));
