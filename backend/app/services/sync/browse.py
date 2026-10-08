@@ -31,12 +31,13 @@ async def list_remote_dirs(
     if res.exit_code != 0:
         failure = classify_failure(res.exit_code, res.error_tail)
         raise BrowseError("; ".join(res.error_tail) or "could not list the folder", failure)
-    items = json.loads("\n".join(out) or "[]")
-    prefix = f"{clean}/" if clean else ""
-    return sorted(
-        ({"name": i["Name"], "path": prefix + i["Name"]} for i in items if i["IsDir"]),
-        key=lambda d: d["name"].lower(),
-    )
+    try:
+        items = json.loads("\n".join(out) or "[]")
+        prefix = f"{clean}/" if clean else ""
+        dirs = [{"name": i["Name"], "path": prefix + i["Name"]} for i in items if i["IsDir"]]
+    except (ValueError, KeyError, TypeError) as e:
+        raise BrowseError("unexpected answer from rclone", None) from e
+    return sorted(dirs, key=lambda d: d["name"].lower())
 
 
 def list_local_dirs(layout: Layout, account: Account, path: str) -> list[dict]:
@@ -49,7 +50,7 @@ def list_local_dirs(layout: Layout, account: Account, path: str) -> list[dict]:
         (
             {"name": p.name, "path": prefix + p.name}
             for p in base.iterdir()
-            if p.is_dir() and p.name not in _HIDDEN
+            if p.is_dir() and not p.is_symlink() and p.name not in _HIDDEN
         ),
         key=lambda d: d["name"].lower(),
     )

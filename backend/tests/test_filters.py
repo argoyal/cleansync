@@ -21,3 +21,17 @@ def test_write_reports_change_only_when_content_differs(tmp_path):
     assert write_filters(f, "a\n") is False
     assert write_filters(f, "b\n") is True
     assert f.read_text() == "b\n"
+
+
+def test_control_characters_rejected():
+    import pytest
+
+    for bad in ("a\nb", "a\rb", "a\x00b", "a\x7fb", "a\tb"):
+        with pytest.raises(ValueError):
+            render_filters([(bad, False)])
+
+
+def test_trailing_whitespace_uses_character_class():
+    assert escape_filter_path("name ") == "name[ ]"
+    assert escape_filter_path("a b  ") == "a b[ ][ ]"
+    assert escape_filter_path(" lead") == " lead"

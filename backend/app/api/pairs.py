@@ -10,6 +10,9 @@ from app.services.sync.pairs import PairError, create_pair, delete_pair, to_out,
 
 router = APIRouter(prefix="/api/sync-pairs")
 
+_ATTENTION = {"BLOCKED", "CONFLICTS", "NEEDS_RESYNC", "AUTH"}
+_ERRORS = {"ACCESS_CHECK", "FAILED"}
+
 
 def load_pair(db: Session, pair_id: int) -> tuple[SyncPair, Account]:
     pair = db.get(SyncPair, pair_id)
@@ -106,7 +109,12 @@ def resume(
 ):
     pair, acc = load_pair(db, pair_id)
     pair.paused = False
-    pair.status = PairStatus.HEALTHY if pair.initialized else PairStatus.NEW
+    if pair.attention_reason in _ATTENTION:
+        pair.status = PairStatus.ATTENTION
+    elif pair.attention_reason in _ERRORS:
+        pair.status = PairStatus.ERROR
+    else:
+        pair.status = PairStatus.HEALTHY if pair.initialized else PairStatus.NEW
     db.commit()
     _reload_schedule(request)
     return to_out(request.app.state.layout, acc, pair)

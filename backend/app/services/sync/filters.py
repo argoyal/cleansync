@@ -11,8 +11,18 @@ _SPECIAL = re.compile(r"([\\*?\[\]{}])")
 ALWAYS_EXCLUDED = ["- /.google-exports/**"]
 
 
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def escape_filter_path(rel: str) -> str:
-    return _SPECIAL.sub(r"\\\1", rel)
+    if _CONTROL.search(rel):
+        raise ValueError("path contains control characters")
+    esc = _SPECIAL.sub(r"\\\1", rel)
+    # rclone trims trailing whitespace from filter lines, and a backslash-escaped trailing
+    # space is trimmed too (checked against real rclone); a character class survives.
+    stripped = esc.rstrip()
+    tail = esc[len(stripped) :]
+    return stripped + "".join(f"[{c}]" for c in tail)
 
 
 def render_filters(excluded: list[tuple[str, bool]]) -> str:

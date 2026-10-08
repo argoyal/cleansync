@@ -46,3 +46,27 @@ def test_local_browse_stays_inside_account(auth_client, app, make_account):
     r = auth_client.get(f"/api/local-browse?account_id={acc.id}&path=")
     assert r.json() == [{"name": "A", "path": "A"}, {"name": "B", "path": "B"}]
     assert auth_client.get(f"/api/local-browse?account_id={acc.id}&path=../..").status_code == 422
+
+
+def test_remote_browse_bad_path_and_unknown_account(auth_client, make_account):
+    acc = make_account()
+    assert auth_client.get(f"/api/remote-browse?account_id={acc.id}&path=../x").status_code == 422
+    assert auth_client.get("/api/remote-browse?account_id=999&path=").status_code == 404
+    assert auth_client.get("/api/local-browse?account_id=999&path=").status_code == 404
+
+
+def test_remote_browse_malformed_output_is_502(auth_client, make_account, fake_rclone):
+    acc = make_account()
+    fake_rclone.on("lsjson", stdout=["not json"])
+    assert auth_client.get(f"/api/remote-browse?account_id={acc.id}&path=").status_code == 502
+    fake_rclone.on("lsjson", stdout=[json.dumps([{"Name": "x"}])])
+    assert auth_client.get(f"/api/remote-browse?account_id={acc.id}&path=").status_code == 502
+
+
+def test_local_browse_skips_symlinks(auth_client, app, make_account, tmp_path):
+    acc = make_account()
+    root = app.state.layout.storage / "alice@example.com"
+    (root / "Real").mkdir()
+    (root / "Link").symlink_to(tmp_path)
+    r = auth_client.get(f"/api/local-browse?account_id={acc.id}&path=")
+    assert r.json() == [{"name": "Real", "path": "Real"}]

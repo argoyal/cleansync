@@ -80,3 +80,61 @@ def test_pause_and_resume(auth_client, make_account):
     pid = _create(auth_client, acc.id).json()["id"]
     assert auth_client.post(f"/api/sync-pairs/{pid}/pause").json()["status"] == "PAUSED"
     assert auth_client.post(f"/api/sync-pairs/{pid}/resume").json()["status"] == "NEW"
+
+
+def test_overlap_is_case_and_unicode_insensitive(auth_client, make_account):
+    acc = make_account()
+    assert _create(auth_client, acc.id, local_subpath="Work", remote_path="Work").status_code == 201
+    r = _create(auth_client, acc.id, local_subpath="work", remote_path="Other")
+    assert r.status_code == 422 and "overlaps" in r.json()["detail"]
+    assert _create(auth_client, acc.id, local_subpath="Café", remote_path="C1").status_code == 201
+    assert _create(auth_client, acc.id, local_subpath="Café", remote_path="C2").status_code == 422
+
+
+def test_null_settings_are_kept(auth_client, make_account):
+    acc = make_account()
+    r = _create(auth_client, acc.id, local_subpath="A", remote_path="A", backup_retention_days=None)
+    assert r.status_code == 201 and r.json()["backup_retention_days"] is None
+    pid = _create(auth_client, acc.id, local_subpath="B", remote_path="B").json()["id"]
+    r = auth_client.put(f"/api/sync-pairs/{pid}", json={"schedule_interval_s": None})
+    assert r.json()["schedule_interval_s"] is None and r.json()["backup_retention_days"] == 30
+    r = auth_client.put(f"/api/sync-pairs/{pid}", json={"backup_retention_days": None})
+    assert r.json()["backup_retention_days"] is None and r.json()["schedule_interval_s"] is None
+    r = auth_client.put(f"/api/sync-pairs/{pid}", json={"name": "x"})
+    assert r.json()["backup_retention_days"] is None
+
+
+def test_minus_one_rejected(auth_client, make_account):
+    acc = make_account()
+    assert _create(auth_client, acc.id, schedule_interval_s=-1).status_code == 422
+    assert _create(auth_client, acc.id, backup_retention_days=-1).status_code == 422
+
+
+def test_resume_does_not_mask_problems(auth_client, db, make_account, make_pair):
+    acc = make_account()
+    cases = [
+        ("BLOCKED", "ATTENTION"),
+        ("AUTH", "ATTENTION"),
+        ("FAILED", "ERROR"),
+        ("ACCESS_CHECK", "ERROR"),
+        (None, "NEW"),
+    ]
+    for i, (reason, expected) in enumerate(cases):
+        pair = make_pair(
+            acc,
+            name=f"P{i}",
+            local_subpath=f"p{i}",
+            remote_path=f"p{i}",
+            attention_reason=reason,
+            last_error="boom" if reason else None,
+        )
+        assert auth_client.post(f"/api/sync-pairs/{pair.id}/pause").json()["status"] == "PAUSED"
+        paused = auth_client.get(f"/api/sync-pairs/{pair.id}").json()
+        assert paused["attention_reason"] == reason and paused["last_error"] == pair.last_error
+        assert auth_client.post(f"/api/sync-pairs/{pair.id}/resume").json()["status"] == expected
+
+
+def test_google_exports_folder_reserved(auth_client, make_account):
+    acc = make_account()
+    assert _create(auth_client, acc.id, local_subpath=".google-exports").status_code == 422
+    assert _create(auth_client, acc.id, local_subpath=".google-exports/x").status_code == 422

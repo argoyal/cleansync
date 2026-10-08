@@ -1,4 +1,5 @@
 import shutil
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from app.core.pathsafe import UnsafePath, normalize_rel, safe_join, validate_rem
 from app.models import Account, SyncPair
 from app.models.enums import PairStatus
 from app.paths import Layout
-from app.schemas.pairs import _UNSET, PairCreate, PairOut, PairUpdate
+from app.schemas.pairs import PairCreate, PairOut, PairUpdate
 from app.services.app_settings import get_setting
 from app.services.rclone.commands import remote_target
 from app.services.sync.filters import refresh_pair_filters
@@ -18,6 +19,10 @@ from app.services.sync.filters import refresh_pair_filters
 
 class PairError(ValueError):
     pass
+
+
+def _fold(s: str) -> str:
+    return unicodedata.normalize("NFC", s).casefold()
 
 
 def _overlaps(a: str, b: str) -> bool:
@@ -44,7 +49,7 @@ def _check_overlap(
     for other in db.scalars(select(SyncPair).where(SyncPair.account_id == account_id)):
         if other.id == exclude_id:
             continue
-        if _overlaps(local, other.local_subpath):
+        if _overlaps(_fold(local), _fold(other.local_subpath)):
             raise PairError(f"local folder overlaps the folder of pair '{other.name}'")
         if _overlaps(remote, other.remote_path):
             raise PairError(f"Google Drive folder overlaps the folder of pair '{other.name}'")
@@ -57,6 +62,8 @@ def create_pair(db: Session, layout: Layout, data: PairCreate) -> SyncPair:
     try:
         local = normalize_rel(data.local_subpath)
         remote = validate_remote_path(data.remote_path)
+        if local.split("/")[0] == ".google-exports":
+            raise PairError("that folder name is reserved")
         local_dir = safe_join(layout.account_dir(acc.email), local)
     except UnsafePath as e:
         raise PairError(str(e)) from e
@@ -70,7 +77,7 @@ def create_pair(db: Session, layout: Layout, data: PairCreate) -> SyncPair:
         direction=data.direction,
         schedule_interval_s=(
             get_setting(db, "default_interval_s")
-            if data.schedule_interval_s == _UNSET
+            if "schedule_interval_s" not in data.model_fields_set
             else data.schedule_interval_s
         ),
         max_deletions=(
@@ -85,24 +92,12 @@ def create_pair(db: Session, layout: Layout, data: PairCreate) -> SyncPair:
         ),
         backup_retention_days=(
             get_setting(db, "default_backup_retention_days")
-            if data.backup_retention_days == _UNSET
+            if "backup_retention_days" not in data.model_fields_set
             else data.backup_retention_days
         ),
         status=PairStatus.NEW,
     )
     db.add(pair)
-    db.flush()
-    # an explicit None (manual / never delete) would be replaced by the column default on INSERT
-    pair.schedule_interval_s = (
-        get_setting(db, "default_interval_s")
-        if data.schedule_interval_s == _UNSET
-        else data.schedule_interval_s
-    )
-    pair.backup_retention_days = (
-        get_setting(db, "default_backup_retention_days")
-        if data.backup_retention_days == _UNSET
-        else data.backup_retention_days
-    )
     db.commit()
     refresh_pair_filters(db, layout, pair)
     return pair
@@ -111,13 +106,13 @@ def create_pair(db: Session, layout: Layout, data: PairCreate) -> SyncPair:
 def update_pair(db: Session, pair: SyncPair, data: PairUpdate) -> SyncPair:
     if data.name is not None:
         pair.name = data.name
-    if data.schedule_interval_s != _UNSET:
+    if "schedule_interval_s" in data.model_fields_set:
         pair.schedule_interval_s = data.schedule_interval_s
     if data.max_deletions is not None:
         pair.max_deletions = data.max_deletions
     if data.backups_enabled is not None:
         pair.backups_enabled = data.backups_enabled
-    if data.backup_retention_days != _UNSET:
+    if "backup_retention_days" in data.model_fields_set:
         pair.backup_retention_days = data.backup_retention_days
     db.commit()
     return pair
