@@ -16,9 +16,25 @@ DriveSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 
 ## Quick start
 1. Create a Google OAuth client: [docs/google-oauth-setup.md](docs/google-oauth-setup.md).
-2. Copy `docker-compose.example.yml` to `docker-compose.yml` and `.env.example` to `.env`; fill in `.env`.
+2. Copy `docker-compose.example.yml` to `compose.yml` and `.env.example` to `.env`; fill in `.env`. (Don't copy over `docker-compose.yml`: that one builds DriveSync from source for development.)
 3. Make the data folder owned by user 1000: `sudo mkdir -p /srv/drivesync && sudo chown 1000:1000 /srv/drivesync`.
-4. `docker compose up -d`, open `PUBLIC_URL`, log in, change the password.
+4. While the image is private, log in to the registry once: `docker login ghcr.io` (a GitHub token with `read:packages`).
+5. `docker compose -f compose.yml pull && docker compose -f compose.yml up -d`. Run the same two commands again to update to the newest `latest` image.
+6. Log in and change the password. If you left `ADMIN_PASSWORD` empty, the first password is in `app/data/secrets/initial-admin-password`.
+
+The web UI arrives in a later release. Until then, use the REST API. Log in once to get the session cookie and the CSRF token, then send both with every request that changes something:
+
+```sh
+curl -c jar.txt -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"..."}' https://drivesync.example.com/api/auth/login
+# -> {"csrf_token": "...", "must_change_password": true, ...}
+curl -b jar.txt -c jar.txt -H 'content-type: application/json' -H 'X-CSRF-Token: <csrf_token>' \
+  -d '{"current_password":"...","new_password":"at least 12 characters"}' \
+  https://drivesync.example.com/api/auth/change-password   # returns a new csrf_token
+curl -b jar.txt https://drivesync.example.com/api/openapi.json   # the full API description
+```
+
+The interactive API reference is at `PUBLIC_URL/api/docs`; it is only served to a logged-in session.
 
 ## Configuration
 | Variable | Required | Meaning |
@@ -26,9 +42,9 @@ DriveSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 | `PUBLIC_URL` | yes | Address you open DriveSync at. https unless localhost/LAN. Google redirects back to `PUBLIC_URL/api/oauth/callback`. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | yes | Your own OAuth client. |
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | first start | Initial login. If no password is set, one is generated into `app/data/secrets/initial-admin-password`. |
-| `SESSION_SECRET`, `RCLONE_CONFIG_PASS` | no | Generated on first start if empty. `RCLONE_CONFIG_PASS` encrypts the saved Google logins. |
+| `RCLONE_CONFIG_PASS` | no | Encrypts the saved Google logins. Generated into `app/data/secrets/` on first start if empty. |
 | `FORWARDED_ALLOW_IPS` | behind a proxy | Address of your reverse proxy (for example the Docker network gateway). Only these addresses may say which client address a request came from. Default `127.0.0.1`. See [docs/security.md](docs/security.md). |
-| `TZ`, `LOG_LEVEL`, `APP_NAME` | no | Time zone, log level, name shown in the UI. |
+| `TZ`, `LOG_LEVEL`, `APP_NAME` | no | Container time zone (log timestamps; syncing always uses UTC), log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`), name shown in the UI. |
 
 ## Docs
 [Architecture](docs/architecture.md) · [Google OAuth setup](docs/google-oauth-setup.md) · [Security](docs/security.md) · [Backup and recovery](docs/backup-recovery.md) · [Troubleshooting](docs/troubleshooting.md) · [Known limitations](docs/limitations.md) · [Contributing](CONTRIBUTING.md)

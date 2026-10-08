@@ -1,6 +1,8 @@
 services:
   drivesync:
     image: ghcr.io/argoyal/drivesync:latest
+    # Check for a newer "latest" image every time the container is (re)created.
+    pull_policy: always
     container_name: drivesync
     user: "1000:1000"
     env_file: .env

@@ -8,7 +8,8 @@ Back up `app/data/`. It holds the database (including which paths are offloaded)
 ## Built-in safety copies
 - Every night DriveSync copies the database to `app/data/db-backups/drivesync-YYYY-MM-DD.db` (last 14 kept).
 - Local files replaced or deleted by a sync go to `app/data/backups/<email>/<pair>/<date>/` and are kept for the pair's retention (7/30/90 days or forever).
-- Before the first sync, local versions of files that differ from Drive go to `…/<date>/initial/`.
+- Before the first sync, local versions of files that differ from Drive go to `…/<date>/.drivesync-initial-<job_id>/` (and before a safe resync, to `…/<date>/.drivesync-resync-<job_id>/`).
+- When you resolve a conflict, the version you didn't keep goes to `…/<date>/conflicts/`.
 - Files deleted on Drive go to Drive's trash (kept 30 days by Google).
 
 ## Restore the database
