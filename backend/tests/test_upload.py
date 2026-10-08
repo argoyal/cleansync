@@ -303,6 +303,8 @@ def test_failed_replace_removes_the_placeholder(tmp_path, monkeypatch):
 
 def test_late_cancel_still_queues_the_sync(auth_client, env, stub_queue, monkeypatch):
 
+    import concurrent.futures
+
     from app.api import fileops
 
     acc, root, pair = env
@@ -313,7 +315,7 @@ def test_late_cancel_still_queues_the_sync(auth_client, env, stub_queue, monkeyp
         return result, error, True
 
     monkeypatch.setattr(fileops.moves, "finish_in_thread", cancelled_late)
-    with pytest.raises(BaseException):
+    with pytest.raises(concurrent.futures.CancelledError):
         _upload(auth_client, acc, "late.txt", b"x")
     assert (root / "late.txt").read_bytes() == b"x"
     assert stub_queue.requests == [(pair.id, "APP", "sync")]
