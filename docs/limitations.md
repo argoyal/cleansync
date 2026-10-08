@@ -16,3 +16,7 @@
 - Changing only the letter case of a folder name (for example `photos` to `Photos`) can fail on case-insensitive storage. If it does, nothing changes and you see an error.
 - A development build that was made without the Office template generator cannot create blank Word, Excel or PowerPoint files (the container image always includes them).
 - Google Docs, Sheets and Slides are recognised in the Drive listing by their Google file type or their missing size; this is still to be confirmed against a real Drive.
+
+## After an upgrade that changes the sync rules
+
+When a new version changes the list of files that never sync (for example, the version that started skipping `.drivesync-upload-*` upload copies), every two-way folder runs one automatic safe resync on its next sync. A safe resync merges both sides and never deletes. The catch: a file you deleted on one side, whose deletion had not synced yet, comes back on that side instead of being deleted on the other. Delete it again after the resync.

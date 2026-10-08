@@ -21,6 +21,7 @@ from app.services.files.scope import (
     UPLOAD_TEMP_PREFIX,
     Scope,
     is_hidden,
+    is_upload_temp_name,
     join_rel,
     resolves_to_hidden,
 )
@@ -173,7 +174,7 @@ def sweep_upload_leftovers(
     removed = 0
     for folder, _dirs, files in os.walk(storage, followlinks=False):
         for name in files:
-            if not name.casefold().startswith(UPLOAD_TEMP_PREFIX):
+            if not is_upload_temp_name(name):  # only copies the app itself named
                 continue
             path = Path(folder) / name
             try:

@@ -53,6 +53,7 @@ async def test_debouncer_coalesces_bursts():
         ("video.mp4.partial", True),
         ("sub/.drivesync-upload-0a1b", True),
         (".drivesync-upload-0a1b", True),
+        (".DriveSync-Upload-0a1b", False),  # same case rule as the rclone filter
         ("report.xlsx", False),
         ("a/b/c.txt", False),
     ],

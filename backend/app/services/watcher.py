@@ -30,7 +30,7 @@ def should_ignore(rel_path: str) -> bool:
         p.name in _IGNORED_NAMES
         or any(part in _IGNORED_DIRS for part in p.parts)
         or p.name.endswith(_IGNORED_SUFFIXES)
-        or p.name.casefold().startswith(_IGNORED_PREFIXES)
+        or p.name.startswith(_IGNORED_PREFIXES)  # case-sensitive, like the sync filter
     )
 
 

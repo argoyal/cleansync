@@ -5,6 +5,7 @@ A "pair path" is relative to a pair's own folder (what rclone and the catalog us
 """
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,13 +19,21 @@ from app.paths import Layout
 HIDDEN_NAMES = frozenset({"RCLONE_TEST", ".google-exports"})
 _HIDDEN_FOLDED = frozenset(n.casefold() for n in HIDDEN_NAMES)
 # Half-placed upload copies (see app.services.files.upload); never synced either.
+# Matched case-sensitively, the same way rclone's filter matches them, so the UI hides
+# exactly what never syncs.
 UPLOAD_TEMP_PREFIX = ".drivesync-upload-"
+_UPLOAD_TEMP_NAME = re.compile(re.escape(UPLOAD_TEMP_PREFIX) + r"[0-9a-f]{32}")
+
+
+def is_upload_temp_name(name: str) -> bool:
+    """Exactly the name the app gives its own upload copies (prefix + uuid4 hex)."""
+    return _UPLOAD_TEMP_NAME.fullmatch(name) is not None
 
 
 def is_hidden_name(name: str) -> bool:
-    """Case-insensitive: the disk may be case-insensitive (Windows, macOS)."""
-    folded = name.casefold()
-    return folded in _HIDDEN_FOLDED or folded.startswith(UPLOAD_TEMP_PREFIX)
+    """The fixed hidden names fold case (the disk may be case-insensitive: Windows, macOS);
+    the upload-copy prefix does not, to match the sync filter."""
+    return name.casefold() in _HIDDEN_FOLDED or name.startswith(UPLOAD_TEMP_PREFIX)
 
 
 def is_hidden(rel: str) -> bool:
