@@ -84,17 +84,24 @@ class Thumbnails:
         ).hexdigest()
         return self.dir / key[:2] / f"{key}.webp"
 
-    async def get(self, src: Path) -> Path:
+    def _lookup(self, src: Path) -> tuple[Path, str | None, bool]:
+        """(cache path, type, already made); disk work, so it runs in a worker thread."""
         st = src.stat()
         mime = guess_mime(src.name)
         if not can_thumb(mime, st.st_size):
             raise ThumbError("no preview for this kind of file")
         out = self.cache_path(src, st)
-        if out.exists():
-            try:
-                os.utime(out)  # recently used: kept longest when the cache is trimmed
-            except OSError:
-                pass
+        if not out.exists():
+            return out, mime, False
+        try:
+            os.utime(out)  # recently used: kept longest when the cache is trimmed
+        except OSError:
+            pass
+        return out, mime, True
+
+    async def get(self, src: Path) -> Path:
+        out, mime, cached = await asyncio.to_thread(self._lookup, src)
+        if cached:
             return out
         failed = self._failed.get(out)
         if failed and failed[0] > time.monotonic():
@@ -105,8 +112,8 @@ class Thumbnails:
         except TimeoutError:
             raise ThumbBusy("busy, try again") from None
         try:
-            if not out.exists():
-                out.parent.mkdir(parents=True, exist_ok=True)
+            if not await asyncio.to_thread(out.exists):
+                await asyncio.to_thread(out.parent.mkdir, parents=True, exist_ok=True)
                 try:
                     if mime == "application/pdf":
                         await self._pdf(src, out)

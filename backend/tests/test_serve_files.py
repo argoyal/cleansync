@@ -283,3 +283,45 @@ def test_zip_aborts_when_a_read_fails(tmp_path, monkeypatch, caplog):
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) == 1
     assert "b.txt" not in warnings[0] and str(tmp_path) not in warnings[0]
+
+
+def test_zip_stops_when_a_file_cannot_be_opened(tmp_path, monkeypatch):
+    import builtins
+
+    import pytest
+
+    folder = tmp_path / "W"
+    folder.mkdir()
+    (folder / "a.txt").write_text("a")
+    (folder / "locked.txt").write_text("b")
+    real_open = builtins.open
+
+    def fussy(path, *a, **kw):
+        if str(path).endswith("locked.txt"):
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr("app.services.files.zipstream.open", fussy, raising=False)
+    with pytest.raises(OSError):
+        list(zip_folder(folder, "W"))  # a zip silently missing a file looks complete
+
+
+def test_zip_stops_when_a_sub_folder_cannot_be_read(tmp_path, monkeypatch):
+    import os
+
+    import pytest
+
+    folder = tmp_path / "W"
+    (folder / "sub").mkdir(parents=True)
+    (folder / "sub" / "b.txt").write_text("b")
+    (folder / "a.txt").write_text("a")
+    real_scandir = os.scandir
+
+    def fussy(path):
+        if str(path).endswith("sub"):
+            raise PermissionError(13, "Permission denied")
+        return real_scandir(path)
+
+    monkeypatch.setattr("app.services.files.zipstream.os.scandir", fussy)
+    with pytest.raises(OSError):
+        list(zip_folder(folder, "W"))

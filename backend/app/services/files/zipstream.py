@@ -1,4 +1,8 @@
-"""A folder as a zip download, streamed: stored (no compression), never held in memory."""
+"""A folder as a zip download, streamed: stored (no compression), never held in memory.
+
+Anything that can't be read (a file, or a sub-folder) aborts the download: the browser then
+reports a failed download, rather than a zip that looks complete but is missing items.
+"""
 
 import logging
 import os
@@ -38,7 +42,8 @@ class _Sink:
 
 
 def _walk(folder: Path, arc_root: str) -> Iterator[tuple[Path, str]]:
-    """(path, name in the zip) for every file and empty folder; skips links and DriveSync files."""
+    """(path, name in the zip) for every file and empty folder; skips links and DriveSync files.
+    Raises OSError when a folder can't be read."""
     stack = [(folder, arc_root)]
     while stack:
         current, arc = stack.pop()
@@ -49,8 +54,8 @@ def _walk(folder: Path, arc_root: str) -> Iterator[tuple[Path, str]]:
                     key=lambda e: e.name,
                 )
         except OSError:
-            log.warning("skipped an unreadable folder in a zip download")
-            continue
+            log.warning("a folder could not be read while zipping; aborting the download")
+            raise
         if not entries:
             yield current, arc + "/"
         for e in reversed(entries):
@@ -73,8 +78,8 @@ def zip_folder(folder: Path, arc_root: str) -> Iterator[bytes]:
                 info = zipfile.ZipInfo.from_file(path, arc, strict_timestamps=False)
                 src = open(path, "rb")  # noqa: SIM115 - closed below
             except OSError:
-                log.warning("skipped an unreadable file in a zip download")
-                continue
+                log.warning("a file could not be opened while zipping; aborting the download")
+                raise
             big = info.file_size > ZIP64_ABOVE
             try:
                 with src, zf.open(info, "w", force_zip64=big) as dst:

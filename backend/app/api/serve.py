@@ -1,5 +1,7 @@
 """Open and download files from the browser: inline view with Range, download, folder zip."""
 
+import asyncio
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -97,6 +99,11 @@ def download_zip(
     )
 
 
+def _servable_file(root: Path, rel: str) -> Path | None:
+    target = safe_join(root, rel)
+    return target if target.is_file() and not resolves_to_hidden(root, target) else None
+
+
 @router.get("/api/thumbs/{account_id}/{path:path}")
 async def thumbnail(
     account_id: int,
@@ -107,11 +114,15 @@ async def thumbnail(
 ):
     scope = get_scope(request, db, account_id)
     rel = clean_path(path)
+    if not rel:
+        raise HTTPException(404, "file not found")
+    # Disk checks (resolving links too) run in a worker thread: a slow or sleeping disk must
+    # not stall the server.
     try:
-        target = safe_join(scope.root, rel)
+        target = await asyncio.to_thread(_servable_file, scope.root, rel)
     except UnsafePath as e:
         raise HTTPException(422, str(e)) from e
-    if not rel or not target.is_file() or resolves_to_hidden(scope.root, target):
+    if target is None:
         raise HTTPException(404, "file not found")
     try:
         out = await request.app.state.thumbs.get(target)

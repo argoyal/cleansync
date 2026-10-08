@@ -219,3 +219,55 @@ def test_thumb_refuses_symlink_into_hidden_folder(auth_client, app, make_account
     (root / "Photos" / "link.png").symlink_to(root / ".google-exports" / "secret.png")
     assert auth_client.get(f"/api/thumbs/{acc.id}/Photos/link.png").status_code == 404
     assert auth_client.get(f"/api/thumbs/{acc.id}/.GOOGLE-EXPORTS/secret.png").status_code == 404
+
+
+def _on_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
+@pytest.fixture
+def disk_calls_on_loop(monkeypatch, tmp_path):
+    """Records disk checks on files under tmp_path made on the event loop thread."""
+    import pathlib
+
+    seen: list[str] = []
+    real_stat, real_utime = pathlib.Path.stat, os.utime
+
+    def stat(self, *a, **kw):
+        if _on_loop() and str(self).startswith(str(tmp_path)):
+            seen.append(f"stat {self.name}")
+        return real_stat(self, *a, **kw)
+
+    def utime(path, *a, **kw):
+        if _on_loop() and str(path).startswith(str(tmp_path)):
+            seen.append(f"utime {os.path.basename(path)}")
+        return real_utime(path, *a, **kw)
+
+    monkeypatch.setattr(pathlib.Path, "stat", stat)
+    monkeypatch.setattr(t.os, "utime", utime)
+    return seen
+
+
+async def test_cached_preview_lookups_stay_off_the_event_loop(tmp_path, disk_calls_on_loop):
+    src = _png(tmp_path / "a.png")
+    th = Thumbnails(tmp_path / "thumbs")
+    disk_calls_on_loop.clear()  # the set-up above ran on the loop too
+    await th.get(src)
+    await th.get(src)  # the cached path: stat, exists and utime
+    assert disk_calls_on_loop == []
+
+
+def test_thumbnail_route_checks_the_disk_off_the_event_loop(
+    auth_client, app, make_account, disk_calls_on_loop, settings
+):
+    acc = make_account()
+    root = app.state.layout.account_dir(acc.email)
+    _png(root / "a.png")
+    assert str(root).startswith(str(settings.drivesync_root))
+    r = auth_client.get(f"/api/thumbs/{acc.id}/a.png")
+    assert r.status_code == 200, r.text
+    assert disk_calls_on_loop == []
