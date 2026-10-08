@@ -234,3 +234,87 @@ def test_client_disconnect_cleans_the_temp_file(auth_client, app, env):
         pass  # the test client re-raises it once the server has cleaned up
     assert not (root / "gone.bin").exists()
     assert list(app.state.layout.uploads_dir.iterdir()) == []
+
+
+def _no_links(monkeypatch):
+    def link(src, dst):
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(up.os, "link", link)
+
+
+def test_no_hard_links_never_overwrites_a_file_that_appears_late(tmp_path, monkeypatch):
+    folder = tmp_path / "f"
+    folder.mkdir()
+    tmp = tmp_path / "t.part"
+    tmp.write_text("new")
+    _no_links(monkeypatch)
+    real = up.free_name
+    calls = []
+
+    def racing(f, n):
+        name = real(f, n)
+        if not calls:  # someone else creates that name right after we picked it
+            calls.append(1)
+            (f / name).write_text("theirs")
+        return name
+
+    monkeypatch.setattr(up, "free_name", racing)
+    assert up.publish(tmp, folder, "a.txt") == "a (1).txt"
+    assert (folder / "a.txt").read_text() == "theirs"
+    assert (folder / "a (1).txt").read_text() == "new"
+
+
+def test_no_hard_links_and_another_disk_still_lands(tmp_path, monkeypatch):
+    folder = tmp_path / "f"
+    folder.mkdir()
+    tmp = tmp_path / "t.part"
+    tmp.write_text("new")
+    _no_links(monkeypatch)
+    real_replace = os.replace
+
+    def replace(src, dst):
+        if Path(src) == tmp:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(up.os, "replace", replace)
+    assert up.publish(tmp, folder, "a.txt") == "a.txt"
+    assert (folder / "a.txt").read_text() == "new"
+    assert [p.name for p in folder.iterdir()] == ["a.txt"]
+    assert not tmp.exists()
+
+
+def test_failed_replace_removes_the_placeholder(tmp_path, monkeypatch):
+    folder = tmp_path / "f"
+    folder.mkdir()
+    tmp = tmp_path / "t.part"
+    tmp.write_text("new")
+    _no_links(monkeypatch)
+
+    def replace(src, dst):
+        raise OSError(errno.EIO, "I/O error")
+
+    monkeypatch.setattr(up.os, "replace", replace)
+    with pytest.raises(OSError):
+        up.publish(tmp, folder, "a.txt")
+    assert list(folder.iterdir()) == []
+
+
+def test_late_cancel_still_queues_the_sync(auth_client, env, stub_queue, monkeypatch):
+    import asyncio
+
+    from app.api import fileops
+
+    acc, root, pair = env
+    real = fileops.moves.finish_in_thread
+
+    async def cancelled_late(fn, *args):
+        result, error, _ = await real(fn, *args)
+        return result, error, True
+
+    monkeypatch.setattr(fileops.moves, "finish_in_thread", cancelled_late)
+    with pytest.raises(BaseException):
+        _upload(auth_client, acc, "late.txt", b"x")
+    assert (root / "late.txt").read_bytes() == b"x"
+    assert stub_queue.requests == [(pair.id, "APP", "sync")]

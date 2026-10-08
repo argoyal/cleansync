@@ -91,6 +91,32 @@ def _copy_beside(tmp: Path, folder: Path) -> Path:
     return hidden
 
 
+def _place(source: Path, dest: Path) -> None:
+    """Put source at dest without ever replacing something already there.
+
+    Raises FileExistsError when dest is taken, and OSError(EXDEV) when source is on another
+    disk. Hard link first (atomic); without hard links (some Windows mounts) reserve the name
+    with an exclusive create, then replace only that empty placeholder."""
+    try:
+        os.link(source, dest)
+        return
+    except FileExistsError:
+        raise
+    except OSError as e:
+        if e.errno == errno.EXDEV:
+            raise
+    os.close(os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644))  # we own the name now
+    try:
+        os.replace(source, dest)
+    except BaseException:
+        try:
+            if dest.stat().st_size == 0:  # still our placeholder, not someone's real file
+                dest.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def publish(tmp: Path, folder: Path, name: str) -> str:
     """Move the finished upload into the folder under a free name; never overwrites."""
     hidden: Path | None = None
@@ -98,24 +124,16 @@ def publish(tmp: Path, folder: Path, name: str) -> str:
         for _ in range(1000):
             final = free_name(folder, name)
             dest = folder / final
-            source = hidden or tmp
             try:
-                os.link(source, dest)  # fails if dest appeared meanwhile, unlike a rename
+                _place(hidden or tmp, dest)
             except FileExistsError:
                 continue
             except OSError as e:
-                if e.errno == errno.EXDEV and hidden is None:
-                    # storage/ is on another disk than app/data: copy beside the target,
-                    # then link from there (same disk), still never replacing anything.
-                    hidden = _copy_beside(tmp, folder)
-                    continue
-                if e.errno == errno.EXDEV:
+                if e.errno != errno.EXDEV or hidden is not None:
                     raise
-                # A filesystem without hard links (some Windows mounts): rename instead.
-                if dest.exists():
-                    continue
-                os.replace(tmp, dest)
-                return final
+                # storage/ is on another disk than app/data: copy beside the target first.
+                hidden = _copy_beside(tmp, folder)
+                continue
             tmp.unlink(missing_ok=True)
             return final
         raise FileOpError("could not find a free name for the upload", 409)

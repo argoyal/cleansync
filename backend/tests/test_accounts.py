@@ -241,7 +241,6 @@ def test_reconnect_resumes_scheduling(auth_client, app, make_account, make_pair,
 
 
 def test_disconnect_and_needs_reauth_stop_scheduling(auth_client, app, make_account, make_pair):
-
     acc = make_account()
     p1 = make_pair(acc, initialized=True, schedule_interval_s=300)
     other = make_account("bob@example.com")
