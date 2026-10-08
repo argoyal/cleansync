@@ -1,0 +1,206 @@
+import json
+import secrets
+from collections.abc import Callable
+
+import httpx
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.config import Settings
+from app.core.clock import utcnow
+from app.models import Account
+from app.models.enums import AccountStatus
+from app.paths import Layout, email_dirname
+from app.services.accounts.oauth import (
+    OAuthError,
+    OAuthStates,
+    build_auth_url,
+    exchange_code,
+    fetch_about,
+    to_rclone_token,
+)
+from app.services.events.bus import EventBus, record_event
+from app.services.rclone.commands import (
+    RcloneEnv,
+    about_args,
+    config_create_args,
+    config_delete_args,
+)
+from app.services.rclone.errors import Failure, classify_failure
+from app.services.rclone.runner import RunResult, run_rclone
+from app.services.rclone.setup import ensure_config_encrypted
+
+
+class AccountService:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        layout: Layout,
+        session_factory: sessionmaker[Session],
+        bus: EventBus,
+        rclone_env: RcloneEnv,
+        http_factory: Callable[[], httpx.AsyncClient] = lambda: httpx.AsyncClient(timeout=30),
+        runner=run_rclone,
+        clock=utcnow,
+    ) -> None:
+        self.settings = settings
+        self.layout = layout
+        self.session_factory = session_factory
+        self.bus = bus
+        self.env = rclone_env
+        self.http_factory = http_factory
+        self.runner = runner
+        self.clock = clock
+        self.states = OAuthStates()
+
+    def _secrets(self, *extra: str) -> list[str]:
+        return [self.env.config_pass, self.settings.google_client_secret, *extra]
+
+    async def _rclone(self, args: list[str], *extra_secrets: str, on_stdout=None) -> RunResult:
+        return await self.runner(
+            args,
+            self.env.env(),
+            log_path=self.layout.logs_dir / "rclone-accounts.log",
+            on_stdout=on_stdout,
+            secrets=self._secrets(*extra_secrets),
+        )
+
+    def start_connect(self, reconnect_account_id: int | None = None) -> str:
+        if not self.settings.google_client_id or not self.settings.google_client_secret:
+            raise OAuthError(
+                "Google OAuth client is not configured: set GOOGLE_CLIENT_ID and "
+                "GOOGLE_CLIENT_SECRET (see docs/google-oauth-setup.md)."
+            )
+        state, challenge = self.states.new(reconnect_account_id)
+        return build_auth_url(
+            self.settings.google_client_id, self.settings.oauth_redirect_uri, state, challenge
+        )
+
+    def _new_remote_name(self, db: Session) -> str:
+        while True:
+            name = f"gd_{secrets.token_hex(3)}"
+            if db.scalar(select(Account).where(Account.remote_name == name)) is None:
+                return name
+
+    async def finish_connect(self, state: str, code: str) -> Account:
+        pending = self.states.pop(state)
+        if pending is None:
+            raise OAuthError("This sign-in link expired or was already used. Please try again.")
+        async with self.http_factory() as http:
+            tok = await exchange_code(
+                http,
+                client_id=self.settings.google_client_id,
+                client_secret=self.settings.google_client_secret,
+                redirect_uri=self.settings.oauth_redirect_uri,
+                code=code,
+                verifier=pending.verifier,
+            )
+            about = await fetch_about(http, tok["access_token"])
+        email = email_dirname(about["email"])
+        with self.session_factory() as db:
+            if pending.reconnect_account_id is not None:
+                acc = db.get(Account, pending.reconnect_account_id)
+                if acc is None:
+                    raise OAuthError("That account no longer exists.")
+                if acc.email != email:
+                    raise OAuthError(f"You signed in as {email}, but this account is {acc.email}.")
+            else:
+                acc = db.scalar(select(Account).where(Account.email == email))
+            name = acc.remote_name if acc else self._new_remote_name(db)
+            token_json = to_rclone_token(tok, self.clock())
+            if acc is not None:
+                await self._rclone(config_delete_args(self.env, name))
+            res = await self._rclone(
+                config_create_args(
+                    self.env,
+                    name,
+                    self.settings.google_client_id,
+                    self.settings.google_client_secret,
+                    token_json,
+                ),
+                tok["access_token"],
+                tok["refresh_token"],
+            )
+            if res.exit_code != 0:
+                raise OAuthError(
+                    "Could not save the Google login (rclone config create failed). See the logs."
+                )
+            await ensure_config_encrypted(self.env, self.runner)
+            if acc is None:
+                acc = Account(email=email, remote_name=name)
+                db.add(acc)
+            acc.status = AccountStatus.CONNECTED
+            acc.quota_total = about["quota_total"]
+            acc.quota_used = about["quota_used"]
+            acc.quota_trash = about["quota_trash"]
+            acc.connected_at = self.clock()
+            acc.last_checked_at = self.clock()
+            db.commit()
+            self.layout.account_dir(email).mkdir(parents=True, exist_ok=True)
+            record_event(
+                db,
+                self.bus,
+                kind="account_connected",
+                message=f"Connected Google account {email}",
+                account_id=acc.id,
+            )
+            self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
+            return acc
+
+    async def disconnect(self, account_id: int) -> Account:
+        with self.session_factory() as db:
+            acc = db.get(Account, account_id)
+            if acc is None:
+                raise LookupError("account not found")
+            await self._rclone(config_delete_args(self.env, acc.remote_name))
+            acc.status = AccountStatus.DISCONNECTED
+            db.commit()
+            record_event(
+                db,
+                self.bus,
+                kind="account_disconnected",
+                message=f"Disconnected {acc.email}. Local files were kept.",
+                account_id=acc.id,
+            )
+            self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
+            return acc
+
+    async def mark_needs_reauth(self, account_id: int, reason: str) -> None:
+        with self.session_factory() as db:
+            acc = db.get(Account, account_id)
+            if acc is None or acc.status == AccountStatus.NEEDS_REAUTH:
+                return
+            acc.status = AccountStatus.NEEDS_REAUTH
+            db.commit()
+            record_event(
+                db,
+                self.bus,
+                kind="account_needs_reauth",
+                level="warning",
+                message=f"Google login for {acc.email} needs attention: {reason}",
+                account_id=acc.id,
+            )
+            self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
+
+    async def refresh_quota(self, account_id: int) -> Account:
+        out: list[str] = []
+        with self.session_factory() as db:
+            acc = db.get(Account, account_id)
+            if acc is None:
+                raise LookupError("account not found")
+            remote = acc.remote_name
+        res = await self._rclone(about_args(self.env, remote), on_stdout=out.append)
+        failure = classify_failure(res.exit_code, res.error_tail)
+        if failure == Failure.AUTH:
+            await self.mark_needs_reauth(account_id, "Google says the login expired or was revoked")
+        with self.session_factory() as db:
+            acc = db.get(Account, account_id)
+            if failure is None:
+                data = json.loads("\n".join(out) or "{}")
+                acc.quota_total = data.get("total")
+                acc.quota_used = data.get("used")
+                acc.quota_trash = data.get("trashed")
+                acc.last_checked_at = self.clock()
+                db.commit()
+            return acc

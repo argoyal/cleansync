@@ -132,3 +132,33 @@ async def test_real_check_honours_filter_from_and_parses_combined(tmp_path):
     assert ("+", "new.txt") in parsed and ("-", "extra.txt") in parsed
     assert ("=", "keep.txt") in parsed
     assert not any(path.startswith("skip/") for _, path in parsed)
+
+
+from app.services.rclone.setup import ensure_config_encrypted
+
+
+async def test_real_config_gets_encrypted(tmp_path):
+    passcmd = tmp_path / "print-pass"
+    passcmd.write_text('#!/bin/sh\nprintf "%s" "$RCLONE_CONFIG_PASS"\n')
+    passcmd.chmod(0o755)
+    conf = tmp_path / "rclone.conf"
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=conf,
+        cache_dir=tmp_path / "cache",
+        config_pass="correct horse",
+        password_command=str(passcmd),
+    )
+    res = await run_rclone(
+        env.base() + ["config", "create", "t", "local", "--non-interactive"],
+        env.env(),
+        log_path=None,
+    )
+    assert res.exit_code == 0
+    await ensure_config_encrypted(env)
+    assert conf.read_text().startswith("# Encrypted rclone configuration File")
+    out: list[str] = []
+    res = await run_rclone(
+        env.base() + ["listremotes"], env.env(), log_path=None, on_stdout=out.append
+    )
+    assert res.exit_code == 0 and "t:" in out

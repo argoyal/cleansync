@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     session_secret: str = Field(default="", repr=False)
     rclone_config_pass: str = Field(default="", repr=False)
     rclone_binary: str = "rclone"
+    rclone_password_command: str = ""
     app_name: str = "DriveSync"
     log_level: str = "INFO"
     tz: str = "UTC"

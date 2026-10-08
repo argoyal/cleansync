@@ -17,6 +17,7 @@ _ENV_VARS = (
     "SESSION_SECRET",
     "RCLONE_CONFIG_PASS",
     "RCLONE_BINARY",
+    "RCLONE_PASSWORD_COMMAND",
     "APP_NAME",
     "LOG_LEVEL",
     "TZ",
@@ -30,7 +31,10 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
+def settings(tmp_path: Path, fake_rclone) -> Settings:
+    passcmd = tmp_path / "print-pass"
+    passcmd.write_text('#!/bin/sh\nprintf "%s" "$RCLONE_CONFIG_PASS"\n')
+    passcmd.chmod(0o755)
     return Settings(
         drivesync_root=tmp_path / "root",
         public_url="http://localhost:8080",
@@ -38,6 +42,8 @@ def settings(tmp_path: Path) -> Settings:
         admin_password="initial-pass-123",
         google_client_id="cid",
         google_client_secret="csecret",
+        rclone_binary=fake_rclone.binary,
+        rclone_password_command=str(passcmd),
     )
 
 
