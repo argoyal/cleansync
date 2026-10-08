@@ -1,4 +1,6 @@
 import asyncio
+import shutil
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -6,10 +8,18 @@ from sqlalchemy.orm import Session
 from app.auth.deps import AuthContext, get_db, require_user
 from app.core.pathsafe import UnsafePath, normalize_rel, safe_join
 from app.models import SyncPair
-from app.schemas.files import BrowseOut, PairBrief
+from app.schemas.files import (
+    BrowseOut,
+    DiskUsage,
+    DriveQuota,
+    FileItemOut,
+    PairBrief,
+    StorageOut,
+)
 from app.services.files.listing import PairView, list_folder
 from app.services.files.scope import Scope, is_hidden, load_scope, pair_for, pairs_inside
 from app.services.files.status import load_overlay
+from app.services.files.views import recent, search, starred
 
 router = APIRouter()
 
@@ -81,3 +91,77 @@ async def browse(
         else None
     )
     return BrowseOut(account_id=scope.account.id, path=rel, pair=brief, items=items)
+
+
+@router.get("/api/recent", response_model=list[FileItemOut])
+async def recent_files(
+    account_id: int,
+    request: Request,
+    limit: int = 50,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    scope = get_scope(request, db, account_id)
+    views = await pair_views(request, db, scope, scope.pairs)
+    return await asyncio.to_thread(recent, scope, views, max(1, min(limit, 200)))
+
+
+@router.get("/api/starred", response_model=list[FileItemOut])
+async def starred_files(
+    account_id: int,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    scope = get_scope(request, db, account_id)
+    views = await pair_views(request, db, scope, scope.pairs)
+    return await asyncio.to_thread(starred, scope, views)
+
+
+@router.get("/api/search", response_model=list[FileItemOut])
+async def search_files(
+    account_id: int,
+    q: str,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    query = q.strip()
+    if len(query) < 2:
+        raise HTTPException(422, "type at least 2 characters")
+    scope = get_scope(request, db, account_id)
+    views = await pair_views(request, db, scope, scope.pairs)
+    return await asyncio.to_thread(search, scope, views, query[:200])
+
+
+def _disk_usage(root: Path):
+    """Disk use of the volume holding the account folder (which may not exist yet)."""
+    probe = root
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    return shutil.disk_usage(probe)
+
+
+@router.get("/api/storage", response_model=StorageOut)
+async def storage(
+    account_id: int,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    scope = get_scope(request, db, account_id)
+    usage = await asyncio.to_thread(_disk_usage, scope.root)
+    views = await pair_views(request, db, scope, scope.pairs)
+    acc = scope.account
+    return StorageOut(
+        account_id=acc.id,
+        email=acc.email,
+        drive=DriveQuota(
+            total=acc.quota_total,
+            used=acc.quota_used,
+            trash=acc.quota_trash,
+            checked_at=acc.last_checked_at,
+        ),
+        disk=DiskUsage(total=usage.total, used=usage.used, free=usage.free),
+        synced_bytes=sum(v.index.total_bytes for v in views.values()) if views else None,
+    )

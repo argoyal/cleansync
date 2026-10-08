@@ -46,3 +46,24 @@ class BrowseOut(BaseModel):
     path: str
     pair: PairBrief | None
     items: list[FileItemOut]
+
+
+class DriveQuota(BaseModel):
+    total: int | None
+    used: int | None
+    trash: int | None
+    checked_at: UtcDatetime | None
+
+
+class DiskUsage(BaseModel):
+    total: int
+    used: int
+    free: int
+
+
+class StorageOut(BaseModel):
+    account_id: int
+    email: str
+    drive: DriveQuota
+    disk: DiskUsage
+    synced_bytes: int | None  # bytes on disk inside this account's sync pairs
