@@ -164,3 +164,17 @@ def sync_engine(layout, session_factory, settings, fake_rclone) -> SyncEngine:
     return SyncEngine(
         layout=layout, session_factory=session_factory, bus=bus, rclone_env=env, accounts=accounts
     )
+
+
+from app.services.catalog.service import CatalogService
+
+
+@pytest.fixture
+def catalog_service(sync_engine) -> CatalogService:
+    return CatalogService(
+        layout=sync_engine.layout,
+        session_factory=sync_engine.session_factory,
+        bus=sync_engine.bus,
+        rclone_env=sync_engine.env,
+        accounts=sync_engine.accounts,
+    )

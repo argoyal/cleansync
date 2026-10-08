@@ -119,10 +119,10 @@ def update_pair(db: Session, pair: SyncPair, data: PairUpdate) -> SyncPair:
     return pair
 
 
-def delete_pair(db: Session, layout: Layout, pair: SyncPair) -> None:
+def delete_pair(db: Session, layout: Layout, store: CatalogStore, pair: SyncPair) -> None:
     shutil.rmtree(layout.pair_workdir(pair.id), ignore_errors=True)
     layout.pair_filters(pair.id).unlink(missing_ok=True)
-    CatalogStore(layout.catalog_dir).delete(pair.id)
+    store.delete(pair.id)
     # First-sync previews: "<id>.json" and "<id>-*.txt" (not "<id>0.json" of another pair).
     for f in (
         layout.previews_dir / f"{pair.id}.json",

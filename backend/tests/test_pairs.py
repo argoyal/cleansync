@@ -1,3 +1,7 @@
+from app.core.clock import utcnow
+from app.services.catalog.model import Catalog
+
+
 def _create(auth_client, account_id, **kw):
     body = {"account_id": account_id, "name": "Docs"} | kw
     return auth_client.post("/api/sync-pairs", json=body)
@@ -70,8 +74,10 @@ def test_delete_pair_keeps_files(auth_client, app, make_account):
     pid = _create(auth_client, acc.id, local_subpath="Keep").json()["id"]
     f = app.state.layout.storage / "alice@example.com" / "Keep" / "a.txt"
     f.write_text("x")
+    app.state.catalog.store.save(Catalog.build(pid, utcnow(), "root", []))
     assert auth_client.delete(f"/api/sync-pairs/{pid}").status_code == 204
     assert f.exists()
+    assert app.state.catalog.load(pid) is None  # the one shared store was evicted
     assert auth_client.get(f"/api/sync-pairs/{pid}").status_code == 404
 
 

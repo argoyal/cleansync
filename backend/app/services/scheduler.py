@@ -26,12 +26,14 @@ class Scheduler:
         queue,
         accounts,
         layout: Layout,
+        catalog=None,
         clock=utcnow,
     ) -> None:
         self.session_factory = session_factory
         self.queue = queue
         self.accounts = accounts
         self.layout = layout
+        self.catalog = catalog
         self.clock = clock
         self.aps = AsyncIOScheduler(timezone="UTC")
 
@@ -56,6 +58,17 @@ class Scheduler:
             coalesce=True,
             misfire_grace_time=3600,
         )
+        if self.catalog is not None:
+            self.aps.add_job(
+                self.refresh_catalogs,
+                "interval",
+                minutes=10,
+                id="catalogs",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=600,
+            )
         self.reload()
 
     def shutdown(self) -> None:
@@ -115,6 +128,10 @@ class Scheduler:
                 await self.accounts.refresh_quota(account_id)
             except Exception:
                 log.exception("quota refresh failed for account %s", account_id)
+
+    async def refresh_catalogs(self) -> None:
+        # Each pair's listing is refreshed when it is more than an hour old.
+        await self.catalog.refresh_stale()
 
     def daily_maintenance(self) -> None:
         today = self.clock().date()

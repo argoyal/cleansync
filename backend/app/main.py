@@ -9,6 +9,7 @@ from app.api import (
     accounts,
     auth,
     browse,
+    catalog,
     conflicts,
     docs,
     events,
@@ -26,6 +27,8 @@ from app.database.migrate import run_migrations
 from app.paths import Layout
 from app.services.accounts.service import AccountService
 from app.services.app_settings import get_setting
+from app.services.catalog.service import CatalogService
+from app.services.catalog.store import CatalogStore
 from app.services.events.bus import EventBus
 from app.services.queue import SyncQueue, make_handler
 from app.services.rclone.setup import build_rclone_env, ensure_config_encrypted
@@ -54,6 +57,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        app.state.catalog.bind_loop(asyncio.get_running_loop())
         try:
             await ensure_config_encrypted(app.state.rclone_env, app.state.accounts.runner)
         except Exception as e:  # never stop the app over this; the next connect retries
@@ -87,6 +91,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             app.state.scheduler.shutdown()
             app.state.watcher.stop()
             await app.state.queue.stop()
+            await app.state.catalog.stop()
 
     app = FastAPI(
         lifespan=lifespan,
@@ -124,6 +129,15 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         accounts=app.state.accounts,
     )
     app.state.initial = InitialSync(app.state.engine)
+    app.state.catalog_store = CatalogStore(layout.catalog_dir)  # one instance: it holds the lock
+    app.state.catalog = CatalogService(
+        layout=layout,
+        session_factory=session_factory,
+        bus=app.state.bus,
+        rclone_env=app.state.rclone_env,
+        accounts=app.state.accounts,
+        store=app.state.catalog_store,
+    )
 
     def _on_change() -> None:
         app.state.scheduler.reload()
@@ -145,6 +159,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         queue=app.state.queue,
         accounts=app.state.accounts,
         layout=layout,
+        catalog=app.state.catalog,
     )
     # Reconnecting, disconnecting or losing a Google login changes which pairs can run.
     app.state.accounts.on_change = _on_change
@@ -156,6 +171,8 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     )
     # rclone's own writes during a job must not queue a follow-up sync once it ends.
     app.state.queue.add_finish_listener(app.state.watcher.job_finished)
+    # A run that changed files makes the Drive listing stale.
+    app.state.queue.add_finish_listener(app.state.catalog.on_job_finished)
     for router in (
         health.router,
         auth.router,
@@ -163,6 +180,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         accounts.router,
         pairs.router,
         browse.router,
+        catalog.router,
         jobs.router,
         conflicts.router,
         system.router,
