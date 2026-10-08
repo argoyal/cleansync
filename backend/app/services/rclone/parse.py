@@ -25,6 +25,18 @@ class LogLine:
     obj: str | None
     stats: dict | None
     raw: str
+    # Unmasked msg/object, set by the runner. msg/obj/raw are masked for logs and the UI;
+    # these keep real file names (e.g. "token=abc.txt") for counting and planned paths.
+    plain_msg: str | None = None
+    plain_obj: str | None = None
+
+    @property
+    def text(self) -> str:
+        return self.plain_msg if self.plain_msg is not None else self.msg
+
+    @property
+    def path_obj(self) -> str | None:
+        return self.plain_obj if self.plain_obj is not None else self.obj
 
 
 def parse_line(raw: str) -> LogLine:
@@ -90,11 +102,12 @@ class Counters:
         return self.deleted_local + self.deleted_remote
 
     def feed(self, line: LogLine) -> None:
-        r = _ROOTS.match(line.msg)
+        text = line.text
+        r = _ROOTS.match(text)
         if r:
             self._roots = (r.group(1), r.group(2))
             return
-        m = _QUEUE.match(line.msg)
+        m = _QUEUE.match(text)
         if m:
             side_label, action, path = m.group(1), m.group(2), self._rel(m.group(3))
             if action == "delete":
@@ -111,13 +124,13 @@ class Counters:
                 self.downloaded += 1
                 self.planned.append(("local", "copy", path))
             return
-        b = _BOTH.match(line.msg)
+        b = _BOTH.match(text)
         if b:
             self.conflict_paths.append(self._rel(b.group(1)))
 
 
 def count_dry_run_deletes(line: LogLine) -> bool:
-    return line.msg.startswith("Skipped delete as --dry-run is set")
+    return line.text.startswith("Skipped delete as --dry-run is set")
 
 
 def parse_check_combined(line: str) -> tuple[str, str] | None:

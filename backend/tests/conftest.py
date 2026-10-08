@@ -140,3 +140,26 @@ def auth_client(client, settings):
 @pytest.fixture
 def fake_rclone(tmp_path) -> FakeRclone:
     return FakeRclone(tmp_path / "fake-rclone")
+
+
+from app.services.accounts.service import AccountService
+from app.services.events.bus import EventBus
+from app.services.rclone.commands import RcloneEnv
+from app.services.sync.engine import SyncEngine
+
+
+@pytest.fixture
+def sync_engine(layout, session_factory, settings, fake_rclone) -> SyncEngine:
+    bus = EventBus()
+    env = RcloneEnv(
+        binary=fake_rclone.binary,
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="pw",
+    )
+    accounts = AccountService(
+        settings=settings, layout=layout, session_factory=session_factory, bus=bus, rclone_env=env
+    )
+    return SyncEngine(
+        layout=layout, session_factory=session_factory, bus=bus, rclone_env=env, accounts=accounts
+    )

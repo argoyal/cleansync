@@ -153,3 +153,26 @@ async def test_runner_masks_secrets_in_callback_and_tail(fake_rclone, tmp_path):
     assert "supersecretvalue" not in " ".join(res.error_tail)
     assert all("supersecretvalue" not in ln.msg + ln.raw for ln in seen)
     assert "supersecretvalue" not in (tmp_path / "y.log").read_text()
+
+
+async def test_runner_passes_unmasked_text_for_counting_but_masks_the_log(fake_rclone, tmp_path):
+    from app.services.rclone.parse import Counters
+
+    fake_rclone.on(
+        "bisync",
+        stderr=[jl("- Path2    Queue delete                        - {path2/}token=abc.txt")],
+    )
+    counters = Counters()
+    seen = []
+
+    def on_line(line):
+        seen.append(line)
+        counters.feed(line)
+
+    log = tmp_path / "job.log"
+    await run_rclone(
+        [fake_rclone.binary, "bisync"], fake_rclone.env(), log_path=log, on_line=on_line
+    )
+    assert counters.planned == [("remote", "delete", "token=abc.txt")]
+    assert "token=abc.txt" not in log.read_text()
+    assert "token=abc.txt" not in seen[0].msg

@@ -145,3 +145,20 @@ def test_config_errors_win_over_needs_resync():
         classify_failure(2, ["specified filters file does not exist: /x", resync]) == Failure.OTHER
     )
     assert classify_failure(2, ["unknown flag: --x", resync]) == Failure.OTHER
+
+
+def test_counters_prefer_unmasked_text():
+    from app.services.rclone.parse import LogLine
+
+    c = Counters()
+    c.feed(
+        LogLine(
+            level="info",
+            msg="- Path2    Queue delete    - {path2/}token=***",
+            obj=None,
+            stats=None,
+            raw="",
+            plain_msg="- Path2    Queue delete    - {path2/}token=abc.txt",
+        )
+    )
+    assert c.planned == [("remote", "delete", "token=abc.txt")]
