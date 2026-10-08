@@ -1,14 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, configure } from "@testing-library/react";
+import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { setCsrfToken } from "../api/client";
 import { FakeEventSource } from "./fakeEventSource";
-
-// Testing Library waits only 1 second by default; on a busy machine (full suite, CI) a screen that
-// needs a few renders after a click can take longer, so give every wait a generous ceiling.
-configure({ asyncUtilTimeout: 8000 });
 
 class MemoryStorage implements Storage {
   private data = new Map<string, string>();

@@ -183,6 +183,13 @@ def test_tabs_are_told_when_a_rebuild_finishes_after_serving_old_statuses(monkey
     asyncio.run(run())
 
 
+def test_forget_also_clears_the_served_stale_mark(monkeypatch, tmp_path):
+    idx = _indexes(monkeypatch, tmp_path, _cat(_e("a.txt")))
+    idx._served_stale.add(1)
+    idx.forget(1)
+    assert 1 not in idx._served_stale
+
+
 def test_concurrent_first_requests_share_one_build(monkeypatch, tmp_path):
     idx = _indexes(monkeypatch, tmp_path, _cat(_e("a.txt")))
     calls = []

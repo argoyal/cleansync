@@ -210,6 +210,7 @@ class StatusIndexes:
         """Drop everything about a pair that no longer exists."""
         self._gen.pop(pair_id, None)
         self._cache.pop(pair_id, None)
+        self._served_stale.discard(pair_id)
 
     def _fresh(self, pair_id: int, catalog_key: datetime | None) -> PairIndex | None:
         hit = self._cache.get(pair_id)
