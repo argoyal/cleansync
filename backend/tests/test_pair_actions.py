@@ -194,3 +194,16 @@ def test_refused_override_does_not_leave_the_flag_set(auth_client, make_account,
     assert auth_client.post(f"/api/sync-pairs/{p['id']}/override-once").status_code == 503
     db.expire_all()
     assert db.get(SyncPair, p["id"]).override_next is False
+
+
+@pytest.mark.parametrize("answer", ["already_queued", "dirty"])
+def test_override_once_is_dropped_unless_a_run_was_queued(
+    auth_client, make_account, queue, db, answer
+):
+    p = _pair(auth_client, make_account)
+    _set(db, p["id"], initialized=True, status="ATTENTION", attention_reason="BLOCKED")
+    queue.answer = answer
+    r = auth_client.post(f"/api/sync-pairs/{p['id']}/override-once")
+    assert r.status_code == 409
+    db.expire_all()
+    assert db.get(SyncPair, p["id"]).override_next is False

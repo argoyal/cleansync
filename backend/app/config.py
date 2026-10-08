@@ -16,6 +16,9 @@ def _is_local_host(host: str) -> bool:
     return ip.is_loopback or ip.is_private
 
 
+_APP_DIR = Path(__file__).resolve().parent
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
@@ -32,6 +35,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     # Container time zone (TZ), used for log timestamps only; syncing always works in UTC.
     tz: str = "UTC"
+    # The built web app (frontend/dist) and the blank Office files for "+ New".
+    frontend_dir: Path = _APP_DIR.parents[1] / "frontend" / "dist"
+    office_templates_dir: Path = _APP_DIR / "resources" / "office"
 
     @model_validator(mode="after")
     def _check_public_url(self) -> "Settings":

@@ -179,11 +179,19 @@ async def override_once(
     pair.override_next = True
     db.commit()
     try:
-        return _queue(request, pair_id, "MANUAL")
+        out = _queue(request, pair_id, "MANUAL")
     except HTTPException:
         pair.override_next = False  # nothing was queued: don't leave an approval lying around
         db.commit()
         raise
+    if out["result"] != "queued":
+        # "dirty" / "already_queued": the approval would wait for a later run nobody reviewed.
+        pair.override_next = False
+        db.commit()
+        raise HTTPException(
+            409, "a sync is already waiting for this pair; try again when it has run"
+        )
+    return out
 
 
 @router.post("/{pair_id}/preview", status_code=202)

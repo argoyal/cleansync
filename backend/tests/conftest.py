@@ -20,6 +20,8 @@ _ENV_VARS = (
     "APP_NAME",
     "LOG_LEVEL",
     "TZ",
+    "FRONTEND_DIR",
+    "OFFICE_TEMPLATES_DIR",
 )
 
 

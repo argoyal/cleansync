@@ -8,3 +8,4 @@
 - Local edits made while a sync is running are picked up by the next scheduled sync, because the file watcher ignores changes during a run.
 - On Windows-backed drives, names that differ only by letter case are treated as the same file, and change notifications may not arrive (the watcher shows "limited").
 - Characters that Windows does not allow in file names are still to be checked in end-to-end testing.
+- A two-way sync has no hard cap on the *number* of deletions between its dry run and its real run: bisync only offers a percentage brake (50%). Files deleted in the seconds between the check and the run are therefore not limited by the count you approved; they still go to Drive's trash, or to the local backup folder when backups are on.
