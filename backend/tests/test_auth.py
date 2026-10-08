@@ -54,23 +54,29 @@ def test_protected_routes_need_password_change_first(app, settings):
         resp = c.get("/api/test-protected")
         assert resp.status_code == 403
         assert resp.json()["detail"] == "password_change_required"
-        c.post("/api/auth/change-password",
-               json={"current_password": settings.admin_password, "new_password": NEW_PASSWORD})
+        c.post(
+            "/api/auth/change-password",
+            json={"current_password": settings.admin_password, "new_password": NEW_PASSWORD},
+        )
         assert c.get("/api/test-protected").status_code == 200
 
 
 def test_change_password_rules(client, settings):
     r = _login(client, settings.admin_password)
     client.headers["X-CSRF-Token"] = r.json()["csrf_token"]
-    short = client.post("/api/auth/change-password",
-                        json={"current_password": settings.admin_password, "new_password": "short"})
+    short = client.post(
+        "/api/auth/change-password",
+        json={"current_password": settings.admin_password, "new_password": "short"},
+    )
     assert short.status_code == 422
-    wrong = client.post("/api/auth/change-password",
-                        json={"current_password": "nope", "new_password": NEW_PASSWORD})
+    wrong = client.post(
+        "/api/auth/change-password", json={"current_password": "nope", "new_password": NEW_PASSWORD}
+    )
     assert wrong.status_code == 401
-    same = client.post("/api/auth/change-password",
-                       json={"current_password": settings.admin_password,
-                             "new_password": settings.admin_password})
+    same = client.post(
+        "/api/auth/change-password",
+        json={"current_password": settings.admin_password, "new_password": settings.admin_password},
+    )
     assert same.status_code == 422
 
 
@@ -79,8 +85,10 @@ def test_change_password_drops_other_sessions(app, settings, db):
         _login(b, settings.admin_password)
         r = _login(a, settings.admin_password)
         a.headers["X-CSRF-Token"] = r.json()["csrf_token"]
-        a.post("/api/auth/change-password",
-               json={"current_password": settings.admin_password, "new_password": NEW_PASSWORD})
+        a.post(
+            "/api/auth/change-password",
+            json={"current_password": settings.admin_password, "new_password": NEW_PASSWORD},
+        )
         assert a.get("/api/auth/me").status_code == 200
         assert b.get("/api/auth/me").status_code == 401
 

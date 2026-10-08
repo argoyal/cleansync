@@ -116,10 +116,14 @@ def client(app):
 
 @pytest.fixture
 def auth_client(client, settings):
-    r = client.post("/api/auth/login",
-                    json={"username": settings.admin_username, "password": settings.admin_password})
+    r = client.post(
+        "/api/auth/login",
+        json={"username": settings.admin_username, "password": settings.admin_password},
+    )
     client.headers["X-CSRF-Token"] = r.json()["csrf_token"]
-    r = client.post("/api/auth/change-password",
-                    json={"current_password": settings.admin_password, "new_password": NEW_PASSWORD})
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": settings.admin_password, "new_password": NEW_PASSWORD},
+    )
     assert r.status_code == 200, r.text
     return client

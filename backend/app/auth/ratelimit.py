@@ -3,8 +3,13 @@ from collections.abc import Callable
 
 
 class LoginLimiter:
-    def __init__(self, max_failures: int = 5, window_s: float = 900, lockout_s: float = 900,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        max_failures: int = 5,
+        window_s: float = 900,
+        lockout_s: float = 900,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.max_failures = max_failures
         self.window_s = window_s
         self.lockout_s = lockout_s

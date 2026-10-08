@@ -23,9 +23,16 @@ def test_set_and_read_back(db):
     assert get_all(db)["default_max_deletions"] == 25
 
 
-@pytest.mark.parametrize("bad", [{"nope": 1}, {"max_parallel_pairs": "two"},
-                                 {"default_interval_s": 42}, {"default_backup_retention_days": 3},
-                                 {"max_parallel_pairs": 0}])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"nope": 1},
+        {"max_parallel_pairs": "two"},
+        {"default_interval_s": 42},
+        {"default_backup_retention_days": 3},
+        {"max_parallel_pairs": 0},
+    ],
+)
 def test_invalid_values_rejected(db, bad):
     with pytest.raises(ValueError):
         set_settings(db, bad)

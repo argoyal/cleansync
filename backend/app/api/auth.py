@@ -12,13 +12,17 @@ router = APIRouter(prefix="/api/auth")
 
 
 def _me(ctx_user: User, csrf: str) -> MeOut:
-    return MeOut(username=ctx_user.username, must_change_password=ctx_user.must_change_password,
-                 csrf_token=csrf)
+    return MeOut(
+        username=ctx_user.username,
+        must_change_password=ctx_user.must_change_password,
+        csrf_token=csrf,
+    )
 
 
 @router.post("/login", response_model=MeOut)
-def login(body: LoginIn, request: Request, response: Response,
-          db: Session = Depends(get_db)) -> MeOut:
+def login(
+    body: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)
+) -> MeOut:
     limiter = request.app.state.login_limiter
     ip = request.client.host if request.client else "unknown"
     key = f"{ip}|{body.username.lower()}"
@@ -30,9 +34,14 @@ def login(body: LoginIn, request: Request, response: Response,
         raise HTTPException(401, "invalid_credentials")
     limiter.reset(key)
     session = create_session(db, user)
-    response.set_cookie(SESSION_COOKIE, session.id, httponly=True,
-                        secure=request.app.state.settings.cookie_secure,
-                        samesite="strict", path="/")
+    response.set_cookie(
+        SESSION_COOKIE,
+        session.id,
+        httponly=True,
+        secure=request.app.state.settings.cookie_secure,
+        samesite="strict",
+        path="/",
+    )
     return _me(user, session.csrf_token)
 
 
@@ -42,16 +51,20 @@ def me(ctx: AuthContext = Depends(current_session)) -> MeOut:
 
 
 @router.post("/logout")
-def logout(response: Response, ctx: AuthContext = Depends(current_session),
-           db: Session = Depends(get_db)) -> dict[str, bool]:
+def logout(
+    response: Response, ctx: AuthContext = Depends(current_session), db: Session = Depends(get_db)
+) -> dict[str, bool]:
     delete_session(db, ctx.session.id)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"ok": True}
 
 
 @router.post("/change-password", response_model=MeOut)
-def change_password(body: ChangePasswordIn, ctx: AuthContext = Depends(current_session),
-                    db: Session = Depends(get_db)) -> MeOut:
+def change_password(
+    body: ChangePasswordIn,
+    ctx: AuthContext = Depends(current_session),
+    db: Session = Depends(get_db),
+) -> MeOut:
     user = db.get(User, ctx.user.id)
     if not verify_password(user.password_hash, body.current_password):
         raise HTTPException(401, "current_password_wrong")

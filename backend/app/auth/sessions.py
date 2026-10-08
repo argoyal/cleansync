@@ -9,8 +9,12 @@ from app.models import User, UserSession
 
 
 def create_session(db: Session, user: User) -> UserSession:
-    s = UserSession(id=secrets.token_urlsafe(32), user_id=user.id,
-                    csrf_token=secrets.token_urlsafe(32), last_seen_at=utcnow())
+    s = UserSession(
+        id=secrets.token_urlsafe(32),
+        user_id=user.id,
+        csrf_token=secrets.token_urlsafe(32),
+        last_seen_at=utcnow(),
+    )
     db.add(s)
     db.commit()
     return s
@@ -35,6 +39,7 @@ def delete_session(db: Session, sid: str) -> None:
 
 
 def delete_other_sessions(db: Session, user_id: int, keep_sid: str) -> None:
-    db.execute(delete(UserSession).where(UserSession.user_id == user_id,
-                                         UserSession.id != keep_sid))
+    db.execute(
+        delete(UserSession).where(UserSession.user_id == user_id, UserSession.id != keep_sid)
+    )
     db.commit()

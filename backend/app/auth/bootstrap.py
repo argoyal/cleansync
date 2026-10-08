@@ -24,6 +24,11 @@ def ensure_admin(db: Session, settings: Settings, layout: Layout) -> None:
         with os.fdopen(fd, "w") as fh:
             fh.write(password)
         log.warning("ADMIN_PASSWORD not set; the initial admin password was written to %s", target)
-    db.add(User(username=settings.admin_username, password_hash=hash_password(password),
-                must_change_password=True))
+    db.add(
+        User(
+            username=settings.admin_username,
+            password_hash=hash_password(password),
+            must_change_password=True,
+        )
+    )
     db.commit()
