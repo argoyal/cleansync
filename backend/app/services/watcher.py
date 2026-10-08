@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 _IGNORED_NAMES = {"RCLONE_TEST"}
 _IGNORED_DIRS = {".google-exports"}
 _IGNORED_SUFFIXES = (".partial",)
+_AFTER_JOB_QUIET_S = 2.0  # rclone's late filesystem events after a job ends
 
 
 def should_ignore(rel_path: str) -> bool:
@@ -66,6 +67,8 @@ class _Handler(FileSystemEventHandler):
     def on_any_event(self, event: FileSystemEvent) -> None:
         if event.event_type in ("opened", "closed_no_write"):
             return
+        if event.is_directory and event.event_type == "modified":
+            return  # folder mtime changes carry no file content and bypass the ignore rules
         self.on_path(str(event.src_path))
         dest = getattr(event, "dest_path", "")
         if dest:
@@ -87,10 +90,16 @@ class LocalWatcher:
         self.debounce_s = debounce_s
         self.status = "off"
         self._roots: dict[str, int] = {}
+        self._watches: dict[str, object] = {}
+        self.events_ok = True  # set False when the startup self-test saw no events
+        self._failed = False
         self._observer = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._debouncer: Debouncer | None = None
         self._lock = threading.Lock()
+
+    def _update_status(self) -> None:
+        self.status = "active" if (self.events_ok and not self._failed) else "limited"
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         """Never raises: if watching cannot work, log it and report status 'limited'."""
@@ -102,19 +111,24 @@ class LocalWatcher:
         except Exception:
             log.exception("could not start the file watcher; relying on the schedule")
             self._observer = None
-            self.status = "limited"
+            self._failed = True
+            self._update_status()
             return
-        self.status = "active"
+        self._failed = False
         self.reload()
 
+    async def areload(self) -> None:
+        """Reload without blocking the event loop (it reads the database and the disk)."""
+        await asyncio.to_thread(self.reload)
+
     def reload(self) -> None:
+        """Make the watches match the database: add new roots, drop removed, keep the rest."""
         with self._lock:
             observer = self._observer
             if observer is None:
                 return
+            wanted: dict[str, int] = {}
             try:
-                observer.unschedule_all()
-                roots: dict[str, int] = {}
                 with self.session_factory() as db:
                     for pair in db.scalars(select(SyncPair)):
                         account = db.get(Account, pair.account_id)
@@ -122,14 +136,34 @@ class LocalWatcher:
                             continue
                         local = pair_local_dir(self.layout, account, pair)
                         if local.is_dir():
-                            roots[str(local)] = pair.id
-                self._roots = roots
-                for root in roots:
-                    observer.schedule(_Handler(self._from_thread), root, recursive=True)
+                            wanted[str(local)] = pair.id
             except Exception:
-                # e.g. inotify watch limit or permission errors: keep the app running
-                log.exception("could not watch some folders; relying on the schedule")
-                self.status = "limited"
+                log.exception("could not read pairs for the file watcher")
+                self._failed = True
+                self._update_status()
+                return
+            failed = False
+            for root in list(self._watches):
+                if root not in wanted:
+                    try:
+                        observer.unschedule(self._watches[root])
+                    except Exception:
+                        log.exception("could not stop watching %s", root)
+                    del self._watches[root]
+            for root in wanted:
+                if root in self._watches:
+                    continue
+                try:
+                    self._watches[root] = observer.schedule(
+                        _Handler(self._from_thread), root, recursive=True
+                    )
+                except Exception:
+                    # e.g. inotify watch limit or permission errors: the schedule still covers it
+                    log.exception("could not watch %s; relying on the schedule", root)
+                    failed = True
+            self._roots = {r: wanted[r] for r in self._watches}
+            self._failed = failed
+            self._update_status()
 
     def _match(self, path: str) -> tuple[int, str] | None:
         best = None
@@ -152,23 +186,27 @@ class LocalWatcher:
 
     def _fire(self, pair_id: int) -> None:
         if self.queue.is_running(pair_id):
-            return  # rclone itself is writing; the running job already covers these changes
+            # rclone itself is writing; an edit made during a run is picked up by the
+            # next scheduled sync
+            return
         finished = self.queue.finished_at(pair_id)
-        if finished is not None and time.monotonic() - finished < self.debounce_s + 1:
+        if finished is not None and time.monotonic() - finished < _AFTER_JOB_QUIET_S:
             return  # tail of events from the job that just ended
         self.queue.request(pair_id, "WATCHER")
 
     def stop(self) -> None:
-        if self._debouncer:
-            self._debouncer.cancel_all()
         with self._lock:
             observer, self._observer = self._observer, None
+            self._watches.clear()
+            self._roots = {}
         if observer is not None:
             try:
                 observer.stop()
                 observer.join(timeout=5)
             except Exception:
                 log.exception("error while stopping the file watcher")
+        if self._debouncer:
+            self._debouncer.cancel_all()
 
 
 async def self_test(directory: Path, timeout_s: float = 3.0) -> bool:

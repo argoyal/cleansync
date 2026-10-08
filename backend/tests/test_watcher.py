@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import pytest
 
@@ -9,6 +10,7 @@ class StubQueue:
     def __init__(self, running=()):
         self.requests = []
         self.running = set(running)
+        self.finished = None
 
     def request(self, pair_id, trigger, action="sync"):
         self.requests.append((pair_id, trigger))
@@ -18,7 +20,7 @@ class StubQueue:
         return pair_id in self.running
 
     def finished_at(self, pair_id):
-        return None
+        return self.finished
 
 
 async def test_debouncer_coalesces_bursts():
@@ -102,6 +104,94 @@ async def test_observer_failure_sets_limited_not_raise(
     monkeypatch.setattr("app.services.watcher.Observer.schedule", boom)
     w.start(asyncio.get_running_loop())
     try:
+        assert w.status == "limited"
+    finally:
+        w.stop()
+
+
+async def test_events_right_after_a_job_are_ignored_but_later_ones_queue(
+    session_factory, layout, make_account, make_pair
+):
+    acc = make_account()
+    pair = make_pair(acc, initialized=True)
+    q = StubQueue()
+    w = LocalWatcher(session_factory=session_factory, layout=layout, queue=q)
+    q.finished = time.monotonic() - 0.5
+    w._fire(pair.id)
+    assert q.requests == []
+    q.finished = time.monotonic() - 2.5
+    w._fire(pair.id)
+    assert q.requests == [(pair.id, "WATCHER")]
+
+
+async def test_ignored_files_and_dir_events_do_not_queue_but_real_file_does(
+    session_factory, layout, make_account, make_pair
+):
+    acc = make_account()
+    pair = make_pair(acc, initialized=True)
+    q = StubQueue()
+    w = await _watch(session_factory, layout, q)
+    try:
+        root = layout.account_dir(acc.email)
+        (root / "RCLONE_TEST").write_text("x")
+        (root / "movie.mp4.partial").write_text("x")
+        await asyncio.sleep(4.0)
+        assert q.requests == []
+        (root / "real.txt").write_text("x")
+        await asyncio.sleep(4.0)
+        assert q.requests == [(pair.id, "WATCHER")]
+    finally:
+        w.stop()
+
+
+async def test_reload_with_unchanged_pairs_keeps_watches(
+    session_factory, layout, make_account, make_pair, monkeypatch
+):
+    acc = make_account()
+    make_pair(acc, initialized=True)
+    w = await _watch(session_factory, layout, StubQueue())
+    try:
+        calls = []
+        monkeypatch.setattr(w._observer, "schedule", lambda *a, **k: calls.append("s"))
+        monkeypatch.setattr(w._observer, "unschedule", lambda *a, **k: calls.append("u"))
+        monkeypatch.setattr(w._observer, "unschedule_all", lambda *a, **k: calls.append("ua"))
+        w.reload()
+        assert calls == []
+        assert w.status == "active"
+    finally:
+        w.stop()
+
+
+async def test_one_failing_root_is_isolated_and_status_recovers(
+    session_factory, layout, make_account, make_pair, monkeypatch
+):
+    acc1 = make_account()
+    acc2 = make_account(email="bob@example.com")
+    p1 = make_pair(acc1, initialized=True)
+    p2 = make_pair(acc2, initialized=True)
+    bad = str(layout.account_dir(acc1.email))
+    w = LocalWatcher(session_factory=session_factory, layout=layout, queue=StubQueue())
+    from app.services import watcher as mod
+
+    orig = mod.Observer.schedule
+    state = {"fail": True}
+
+    def flaky(self, handler, path, **kw):
+        if state["fail"] and path == bad:
+            raise OSError("watch limit")
+        return orig(self, handler, path, **kw)
+
+    monkeypatch.setattr(mod.Observer, "schedule", flaky)
+    w.start(asyncio.get_running_loop())
+    try:
+        assert w.status == "limited"
+        assert set(w._roots.values()) == {p2.id}
+        state["fail"] = False
+        w.reload()
+        assert w.status == "active"
+        assert set(w._roots.values()) == {p1.id, p2.id}
+        w.events_ok = False
+        w.reload()
         assert w.status == "limited"
     finally:
         w.stop()

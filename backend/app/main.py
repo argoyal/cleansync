@@ -52,9 +52,9 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             app.state.scheduler.start()
             try:
                 active = await self_test(layout.storage)
+                app.state.watcher.events_ok = active
                 app.state.watcher.start(asyncio.get_running_loop())
                 if not active:
-                    app.state.watcher.status = "limited"
                     logger.warning(
                         "file change notifications do not work for %s; local changes will "
                         "be picked up by the schedule instead",
@@ -103,11 +103,17 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         accounts=app.state.accounts,
     )
     app.state.initial = InitialSync(app.state.engine)
+
+    def _on_change() -> None:
+        app.state.scheduler.reload()
+        # the watcher reads the database and disk: keep that off the event loop
+        asyncio.get_running_loop().run_in_executor(None, app.state.watcher.reload)
+
     app.state.queue = SyncQueue(
         make_handler(
             app.state.engine,
             app.state.initial,
-            on_change=lambda: (app.state.scheduler.reload(), app.state.watcher.reload()),
+            on_change=_on_change,
         ),
         max_parallel=max_parallel,
     )

@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from app.services.queue import SyncQueue, make_handler
 
@@ -130,3 +131,17 @@ async def test_disabled_queue_refuses_everything():
     assert q.request(1, "INITIAL", action="preview") == "disabled"
     await q.wait_idle()
     assert calls == []
+
+
+async def test_finished_at_is_recorded_after_a_job():
+    async def handler(pair_id, action, trigger):
+        return None
+
+    q = SyncQueue(handler)
+    assert q.finished_at(1) is None
+    before = time.monotonic()
+    q.request(1, "MANUAL")
+    await q.wait_idle()
+    finished = q.finished_at(1)
+    assert finished is not None and before <= finished <= time.monotonic()
+    assert q.finished_at(2) is None
