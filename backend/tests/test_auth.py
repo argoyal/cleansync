@@ -112,3 +112,87 @@ def test_generated_admin_password_when_env_missing(tmp_path):
     assert pw_file.exists()
     with TestClient(app) as c:
         assert _login(c, pw_file.read_text().strip()).status_code == 200
+
+
+def test_unknown_username_also_locks_out(client):
+    for _ in range(5):
+        r = client.post("/api/auth/login", json={"username": "ghost", "password": "x" * 12})
+        assert r.status_code == 401
+    r = client.post("/api/auth/login", json={"username": "ghost", "password": "x" * 12})
+    assert r.status_code == 429
+
+
+def test_oversized_inputs_rejected(client, settings):
+    big = "x" * 1025
+    assert (
+        client.post("/api/auth/login", json={"username": "a" * 65, "password": "p"}).status_code
+        == 422
+    )
+    assert (
+        client.post("/api/auth/login", json={"username": "admin", "password": big}).status_code
+        == 422
+    )
+    r = _login(client, settings.admin_password)
+    client.headers["X-CSRF-Token"] = r.json()["csrf_token"]
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": settings.admin_password, "new_password": big},
+    )
+    assert r.status_code == 422
+    r = client.post(
+        "/api/auth/change-password", json={"current_password": big, "new_password": NEW_PASSWORD}
+    )
+    assert r.status_code == 422
+
+
+def test_wrong_csrf_token_is_rejected(client, settings):
+    _login(client, settings.admin_password)
+    client.headers["X-CSRF-Token"] = "not-the-token"
+    assert client.post("/api/auth/logout").status_code == 403
+
+
+def test_change_password_wrong_current_is_rate_limited(client, settings):
+    r = _login(client, settings.admin_password)
+    client.headers["X-CSRF-Token"] = r.json()["csrf_token"]
+    body = {"current_password": "nope", "new_password": NEW_PASSWORD}
+    for _ in range(5):
+        assert client.post("/api/auth/change-password", json=body).status_code == 401
+    good = {"current_password": settings.admin_password, "new_password": NEW_PASSWORD}
+    assert client.post("/api/auth/change-password", json=good).status_code == 429
+
+
+def test_change_password_rotates_session(client, settings, db):
+    r = _login(client, settings.admin_password)
+    old_sid = client.cookies.get("ds_session")
+    old_csrf = r.json()["csrf_token"]
+    client.headers["X-CSRF-Token"] = old_csrf
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": settings.admin_password, "new_password": NEW_PASSWORD},
+    )
+    assert r.status_code == 200
+    assert "ds_session=" in r.headers["set-cookie"]
+    assert "HttpOnly" in r.headers["set-cookie"]
+    assert r.json()["csrf_token"] != old_csrf
+    new_sid = client.cookies.get("ds_session")
+    assert new_sid != old_sid
+    assert [s.id for s in db.scalars(select(UserSession))] == [new_sid]
+    with TestClient(client.app) as other:
+        other.cookies.set("ds_session", old_sid)
+        assert other.get("/api/auth/me").status_code == 401
+
+
+def test_initial_password_file_removed_after_change(tmp_path):
+    s = Settings(drivesync_root=tmp_path / "r", admin_password="")
+    app = create_app(s)
+    pw_file = app.state.layout.secrets_dir / "initial-admin-password"
+    initial = pw_file.read_text().strip()
+    with TestClient(app) as c:
+        r = _login(c, initial)
+        c.headers["X-CSRF-Token"] = r.json()["csrf_token"]
+        r = c.post(
+            "/api/auth/change-password",
+            json={"current_password": initial, "new_password": NEW_PASSWORD},
+        )
+        assert r.status_code == 200
+    assert not pw_file.exists()

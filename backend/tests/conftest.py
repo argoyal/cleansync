@@ -126,4 +126,5 @@ def auth_client(client, settings):
         json={"current_password": settings.admin_password, "new_password": NEW_PASSWORD},
     )
     assert r.status_code == 200, r.text
+    client.headers["X-CSRF-Token"] = r.json()["csrf_token"]
     return client

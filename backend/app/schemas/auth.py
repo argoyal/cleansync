@@ -1,9 +1,9 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LoginIn(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=64)
+    password: str = Field(max_length=1024)
 
 
 class MeOut(BaseModel):
@@ -13,5 +13,5 @@ class MeOut(BaseModel):
 
 
 class ChangePasswordIn(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(max_length=1024)
+    new_password: str = Field(max_length=1024)

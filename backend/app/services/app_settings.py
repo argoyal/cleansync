@@ -17,9 +17,21 @@ INTERVAL_CHOICES = {60, 300, 900, 1800, 3600, None}
 RETENTION_CHOICES = {7, 30, 90, None}
 
 
+MAX_VALUES = {
+    "session_idle_hours": 720,
+    "watcher_debounce_s": 300,
+    "max_parallel_pairs": 8,
+    "default_max_deletions": 1_000_000,
+    "log_retention_days": 3650,
+}
+
+
 def _validate(key: str, value: object) -> None:
     if key not in DEFAULTS:
         raise ValueError(f"unknown setting {key!r}")
+    if key in ("default_interval_s", "default_backup_retention_days"):
+        if value is not None and type(value) is not int:
+            raise ValueError(f"{key} must be an integer or null")
     if key == "default_interval_s":
         if value not in INTERVAL_CHOICES:
             raise ValueError("interval must be one of 60, 300, 900, 1800, 3600 or null")
@@ -35,6 +47,8 @@ def _validate(key: str, value: object) -> None:
         raise ValueError(f"{key} must be at least 1")
     if key == "default_max_deletions" and value < 0:  # type: ignore[operator]
         raise ValueError("default_max_deletions cannot be negative")
+    if key in MAX_VALUES and value > MAX_VALUES[key]:  # type: ignore[operator]
+        raise ValueError(f"{key} must be at most {MAX_VALUES[key]}")
 
 
 def get_setting(db: Session, key: str) -> object:
