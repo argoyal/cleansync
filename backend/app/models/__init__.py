@@ -4,5 +4,15 @@ from app.models.base import Base
 from app.models.events import Event
 from app.models.sync import Conflict, PlannedChange, SyncJob, SyncPair
 
-__all__ = ["Account", "Base", "Conflict", "Event", "PlannedChange", "SettingRow", "SyncJob",
-           "SyncPair", "User", "UserSession"]
+__all__ = [
+    "Account",
+    "Base",
+    "Conflict",
+    "Event",
+    "PlannedChange",
+    "SettingRow",
+    "SyncJob",
+    "SyncPair",
+    "User",
+    "UserSession",
+]

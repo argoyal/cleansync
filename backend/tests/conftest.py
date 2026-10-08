@@ -82,6 +82,7 @@ def make_account(db: Session, layout: Layout) -> Callable[..., Account]:
         db.commit()
         layout.account_dir(email).mkdir(parents=True, exist_ok=True)
         return acc
+
     return _make
 
 
@@ -93,4 +94,5 @@ def make_pair(db: Session) -> Callable[..., SyncPair]:
         db.add(pair)
         db.commit()
         return pair
+
     return _make

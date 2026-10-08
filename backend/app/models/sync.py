@@ -31,8 +31,9 @@ class SyncPair(Base):
     fail_count: Mapped[int] = mapped_column(Integer, default=0)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
-                                                 onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -41,7 +42,9 @@ class SyncPair(Base):
 class SyncJob(Base):
     __tablename__ = "sync_jobs"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    pair_id: Mapped[int] = mapped_column(ForeignKey("sync_pairs.id", ondelete="CASCADE"), index=True)
+    pair_id: Mapped[int] = mapped_column(
+        ForeignKey("sync_pairs.id", ondelete="CASCADE"), index=True
+    )
     trigger: Mapped[str] = mapped_column(String(16))
     kind: Mapped[str] = mapped_column(String(16))
     state: Mapped[str] = mapped_column(String(16), default=JobState.QUEUED)
@@ -74,7 +77,9 @@ class PlannedChange(Base):
 class Conflict(Base):
     __tablename__ = "conflicts"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    pair_id: Mapped[int] = mapped_column(ForeignKey("sync_pairs.id", ondelete="CASCADE"), index=True)
+    pair_id: Mapped[int] = mapped_column(
+        ForeignKey("sync_pairs.id", ondelete="CASCADE"), index=True
+    )
     path: Mapped[str] = mapped_column(Text)
     local_variant: Mapped[str] = mapped_column(Text)
     remote_variant: Mapped[str] = mapped_column(Text)
