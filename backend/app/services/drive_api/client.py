@@ -6,7 +6,15 @@ from dataclasses import dataclass
 import httpx
 
 from app.services.catalog.model import valid_id
-from app.services.drive_api.tokens import DriveApiError, DriveAuthError, TokenProvider
+from app.services.drive_api.tokens import (
+    DriveApiError,
+    DriveAuthError,
+    DriveForbiddenError,
+    DriveNotFoundError,
+    TokenProvider,
+    json_or_none,
+    post_or_none,
+)
 
 FILES_URL = "https://www.googleapis.com/drive/v3/files"
 NATIVE_MIME = {
@@ -49,34 +57,31 @@ class DriveApi:
         resp: httpx.Response | None = None
         for attempt in (1, 2):
             token = await self.tokens.access_token(remote_name)
-            try:
-                async with self.http_factory() as http:
-                    resp = await http.post(
-                        FILES_URL,
-                        params={"fields": "id,name,mimeType"},
-                        json=body,
-                        headers={"Authorization": f"Bearer {token}"},
-                    )
-            except httpx.HTTPError:
-                # The exception text can echo the request; keep it out of messages.
-                raise DriveApiError("could not reach Google Drive") from None
-            if resp.status_code == 401 and attempt == 1:
+            resp = await post_or_none(
+                self.http_factory,
+                FILES_URL,
+                params={"fields": "id,name,mimeType"},
+                json=body,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if resp is not None and resp.status_code == 401 and attempt == 1:
                 self.tokens.forget(remote_name)  # expired early; try once with a new one
                 continue
             break
-        assert resp is not None
+        if resp is None:
+            raise DriveApiError("could not reach Google Drive")
         if resp.status_code == 401:
             raise DriveAuthError("Google says the login expired or was revoked")
+        if resp.status_code == 404:
+            raise DriveNotFoundError("this folder no longer exists on Google Drive")
+        if resp.status_code == 403:
+            raise DriveForbiddenError("no permission to add files to this Google Drive folder")
         if resp.status_code >= 400:
             raise DriveApiError(
                 f"Google Drive refused to create the file (HTTP {resp.status_code})"
             )
-        try:
-            data = resp.json()
-            file_id = valid_id(data.get("id"))
-            shown = str(data.get("name", name))
-        except (ValueError, AttributeError):
-            file_id, shown = None, name
+        data = json_or_none(resp)
+        file_id = valid_id(data.get("id")) if isinstance(data, dict) else None
         if file_id is None:
             raise DriveApiError("Google Drive gave an unexpected answer")
-        return CreatedFile(id=file_id, name=shown, mime=NATIVE_MIME[kind])
+        return CreatedFile(id=file_id, name=str(data.get("name", name)), mime=NATIVE_MIME[kind])

@@ -163,6 +163,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     app.state.drive_api = DriveApi(
         TokenProvider(settings=settings, rclone_env=app.state.rclone_env)
     )
+    app.state.accounts.on_login_changed = app.state.drive_api.tokens.forget
     app.state.queue = SyncQueue(
         make_handler(
             app.state.engine,

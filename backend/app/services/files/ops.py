@@ -279,6 +279,7 @@ def new_office_file(
     # and never over something already there.
     hidden = _copy_beside(template, folder)
     try:
+        os.utime(hidden)  # a new file: modified now, not when the template was made
         for _ in range(1000):
             final = free_name(folder, base)
             try:

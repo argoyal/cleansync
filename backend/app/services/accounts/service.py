@@ -51,6 +51,7 @@ class AccountService:
         runner=run_rclone,
         clock=utcnow,
         on_change: Callable[[], None] | None = None,
+        on_login_changed: Callable[[str], None] | None = None,
     ) -> None:
         self.settings = settings
         self.layout = layout
@@ -63,6 +64,12 @@ class AccountService:
         self.states = OAuthStates()
         # Called after an account's status changes, so the scheduler and watcher follow it.
         self.on_change = on_change
+        # Called with the remote name whenever its saved login is replaced, removed or flagged.
+        self.on_login_changed = on_login_changed
+
+    def _login_changed(self, remote_name: str) -> None:
+        if self.on_login_changed is not None:
+            self.on_login_changed(remote_name)
 
     def _changed(self) -> None:
         if self.on_change is None:
@@ -164,6 +171,7 @@ class AccountService:
             if acc is None:
                 acc = Account(email=email, remote_name=name)
                 db.add(acc)
+            self._login_changed(name)
             acc.status = AccountStatus.CONNECTED
             acc.quota_total = about["quota_total"]
             acc.quota_used = about["quota_used"]
@@ -191,6 +199,7 @@ class AccountService:
             res = await self._rclone(config_delete_args(self.env, acc.remote_name))
             if res.exit_code != 0:
                 raise AccountError("Could not remove the saved Google login; see the logs.")
+            self._login_changed(acc.remote_name)
             acc.status = AccountStatus.DISCONNECTED
             db.commit()
             record_event(
@@ -207,7 +216,10 @@ class AccountService:
     async def mark_needs_reauth(self, account_id: int, reason: str) -> None:
         with self.session_factory() as db:
             acc = db.get(Account, account_id)
-            if acc is None or acc.status == AccountStatus.NEEDS_REAUTH:
+            if acc is None:
+                return
+            self._login_changed(acc.remote_name)
+            if acc.status == AccountStatus.NEEDS_REAUTH:
                 return
             acc.status = AccountStatus.NEEDS_REAUTH
             db.commit()

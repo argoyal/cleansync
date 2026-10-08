@@ -29,7 +29,12 @@ from app.schemas.files import (
 )
 from app.services.catalog.model import EXPORT_EXT, CatalogEntry, google_url
 from app.services.drive_api.client import DEFAULT_NAMES
-from app.services.drive_api.tokens import DriveApiError, DriveAuthError
+from app.services.drive_api.tokens import (
+    DriveApiError,
+    DriveAuthError,
+    DriveForbiddenError,
+    DriveNotFoundError,
+)
 from app.services.files import moves, ops
 from app.services.files.names import validate_name
 from app.services.files.scope import Scope, join_rel, pair_for, to_pair_rel
@@ -305,10 +310,19 @@ async def new_file(
     except DriveAuthError as e:
         await state.accounts.mark_needs_reauth(scope.account.id, str(e))
         raise HTTPException(409, "This Google account needs to be reconnected.") from e
+    except DriveNotFoundError as e:
+        state.catalog.request_refresh(pair.id)
+        raise HTTPException(
+            409, "This folder no longer exists on Google Drive; refreshing the list."
+        ) from e
+    except DriveForbiddenError as e:
+        raise HTTPException(
+            409, "You don't have permission to add files to this Google Drive folder."
+        ) from e
     except DriveApiError as e:
         raise HTTPException(502, str(e)) from e
     entry = CatalogEntry(
-        path=join_rel(prel, created.name + EXPORT_EXT[body.kind]),
+        path=join_rel(prel, name + EXPORT_EXT[body.kind]),
         is_dir=False,
         size=0,
         mtime=utcnow(),

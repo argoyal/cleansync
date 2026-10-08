@@ -122,7 +122,7 @@ def test_drive_error_is_a_502(auth_client, env, fake_rclone):
     acc, _, _ = env
     _dump(fake_rclone, acc)
     respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": ACCESS}))
-    respx.post(FILES_URL).mock(return_value=httpx.Response(403, json={"error": {}}))
+    respx.post(FILES_URL).mock(return_value=httpx.Response(500, json={"error": {}}))
     assert _new(auth_client, acc, "document").status_code == 502
 
 
@@ -191,3 +191,152 @@ def test_new_office_file_is_its_own_copy(auth_client, env, app):
     tpl = app.state.settings.office_templates_dir / "blank.docx"
     assert (root / rel).stat().st_ino != tpl.stat().st_ino
     assert not [p for p in (root / "Work").iterdir() if p.name.startswith(".drivesync-upload")]
+
+
+@respx.mock
+def test_missing_drive_folder_asks_for_a_refresh(auth_client, app, env, fake_rclone):
+    acc, _, pair = env
+    _dump(fake_rclone, acc)
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": ACCESS}))
+    respx.post(FILES_URL).mock(return_value=httpx.Response(404, json={"error": {}}))
+    asked: list[int] = []
+    app.state.catalog.request_refresh = asked.append
+    r = _new(auth_client, acc, "document")
+    assert r.status_code == 409 and "no longer exists on Google Drive" in r.json()["detail"]
+    assert asked == [pair.id]
+
+
+@respx.mock
+def test_forbidden_drive_folder_is_explained(auth_client, env, fake_rclone):
+    acc, _, _ = env
+    _dump(fake_rclone, acc)
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": ACCESS}))
+    respx.post(FILES_URL).mock(return_value=httpx.Response(403, json={"error": {}}))
+    r = _new(auth_client, acc, "document")
+    assert r.status_code == 409 and "permission" in r.json()["detail"]
+
+
+@respx.mock
+def test_catalog_path_uses_the_requested_name_not_googles(auth_client, app, env, fake_rclone):
+    acc, _, pair = env
+    _dump(fake_rclone, acc)
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": ACCESS}))
+    respx.post(FILES_URL).mock(
+        return_value=httpx.Response(200, json={"id": "N1", "name": "../evil", "mimeType": "x"})
+    )
+    assert _new(auth_client, acc, "document", name="Plan").status_code == 200
+    assert list(app.state.catalog.load(pair.id).natives) == ["Work/Plan.docx"]
+
+
+def test_new_office_file_has_a_fresh_mtime(auth_client, env, app):
+    import os
+    import time
+
+    acc, root, _ = env
+    tpl = app.state.settings.office_templates_dir / "blank.docx"
+    before = tpl.stat()
+    os.utime(tpl, (1_000_000_000, 1_000_000_000))
+    try:
+        rel = _new(auth_client, acc, "docx").json()["path"]
+    finally:
+        os.utime(tpl, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert abs((root / rel).stat().st_mtime - time.time()) < 60
+
+
+def _assert_clean(exc: BaseException):
+    assert exc.__context__ is None and exc.__cause__ is None
+    for secret in (REFRESH, ACCESS, "csecret"):
+        assert secret not in str(exc) and secret not in repr(exc)
+
+
+async def test_unreadable_dump_error_carries_no_context(app, env, fake_rclone):
+    from app.services.drive_api.tokens import DriveApiError
+
+    acc, _, _ = env
+    fake_rclone.on("config", match=["dump"], stdout=["{not json " + REFRESH])
+    with pytest.raises(DriveApiError) as e:
+        await app.state.drive_api.tokens.access_token(acc.remote_name)
+    _assert_clean(e.value)
+
+
+@respx.mock
+async def test_network_error_at_google_carries_no_context(app, env, fake_rclone):
+    from app.services.drive_api.tokens import DriveApiError
+
+    acc, _, _ = env
+    _dump(fake_rclone, acc)
+    respx.post(TOKEN_URL).mock(side_effect=httpx.ConnectError("boom " + REFRESH))
+    with pytest.raises(DriveApiError) as e:
+        await app.state.drive_api.tokens.access_token(acc.remote_name)
+    _assert_clean(e.value)
+
+
+@respx.mock
+async def test_revoked_grant_error_carries_no_context(app, env, fake_rclone):
+    from app.services.drive_api.tokens import DriveAuthError
+
+    acc, _, _ = env
+    _dump(fake_rclone, acc)
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(400, json={"error": "invalid_grant"}))
+    with pytest.raises(DriveAuthError) as e:
+        await app.state.drive_api.tokens.access_token(acc.remote_name)
+    _assert_clean(e.value)
+
+
+async def test_create_native_network_error_carries_no_context(app, env):
+    from app.services.drive_api.tokens import DriveApiError
+
+    acc, _, _ = env
+    api = app.state.drive_api
+    api.tokens._cache[acc.remote_name] = (ACCESS, 1e12)
+    with respx.mock:
+        respx.post(FILES_URL).mock(side_effect=httpx.ConnectError("x"))
+        with pytest.raises(DriveApiError) as e:
+            await api.create_native(acc.remote_name, "document", "N", "WORK1")
+    _assert_clean(e.value)
+
+
+async def test_slow_rclone_dump_times_out(app, env, fake_rclone):
+    from app.services.drive_api.tokens import DriveApiError
+
+    acc, _, _ = env
+    tokens = app.state.drive_api.tokens
+    tokens.dump_timeout = 0.5
+    fake_rclone.on("config", match=["dump"], sleep=10)
+    with pytest.raises(DriveApiError, match="too long"):
+        await tokens.access_token(acc.remote_name)
+
+
+async def test_tokens_are_locked_per_remote(app):
+    import asyncio
+
+    tokens = app.state.drive_api.tokens
+    started: list[str] = []
+
+    async def fake_refresh(remote):
+        started.append(remote)
+        await asyncio.sleep(0.2)
+        return "r"
+
+    async def fake_exchange(refresh):
+        return "tok", 3600.0
+
+    tokens._refresh_token, tokens._exchange = fake_refresh, fake_exchange
+    t0 = asyncio.get_running_loop().time()
+    await asyncio.gather(tokens.access_token("a"), tokens.access_token("b"))
+    assert asyncio.get_running_loop().time() - t0 < 0.35  # not one after the other
+    assert sorted(started) == ["a", "b"]
+
+
+async def test_cached_token_is_forgotten_when_the_login_changes(app, env):
+    acc, _, _ = env
+    tokens = app.state.drive_api.tokens
+    tokens._cache[acc.remote_name] = (ACCESS, 1e12)
+    await app.state.accounts.mark_needs_reauth(acc.id, "test")
+    assert acc.remote_name not in tokens._cache
+    tokens._cache[acc.remote_name] = (ACCESS, 1e12)
+    await app.state.accounts.mark_needs_reauth(acc.id, "again")  # already flagged
+    assert acc.remote_name not in tokens._cache
+    tokens._cache[acc.remote_name] = (ACCESS, 1e12)
+    await app.state.accounts.disconnect(acc.id)
+    assert acc.remote_name not in tokens._cache

@@ -14,7 +14,6 @@ def make(out: Path) -> None:
     from docx import Document
     from openpyxl import Workbook
     from pptx import Presentation
-    from pptx.util import Emu
 
     out.mkdir(parents=True, exist_ok=True)
 
@@ -28,7 +27,6 @@ def make(out: Path) -> None:
     wb.save(out / "blank.xlsx")
 
     prs = Presentation()
-    prs.slide_width, prs.slide_height = Emu(12192000), Emu(6858000)  # 16:9
     prs.core_properties.author = prs.core_properties.title = ""
     prs.slides.add_slide(prs.slide_layouts[6])  # one empty slide
     prs.save(out / "blank.pptx")
