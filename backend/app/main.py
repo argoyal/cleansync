@@ -13,6 +13,7 @@ from app.api import (
     conflicts,
     docs,
     events,
+    files,
     health,
     jobs,
     pairs,
@@ -30,6 +31,7 @@ from app.services.app_settings import get_setting
 from app.services.catalog.service import CatalogService
 from app.services.catalog.store import CatalogStore
 from app.services.events.bus import EventBus
+from app.services.files.status import StatusIndexes
 from app.services.queue import SyncQueue, make_handler
 from app.services.rclone.setup import build_rclone_env, ensure_config_encrypted
 from app.services.scheduler import Scheduler
@@ -144,6 +146,10 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         # the watcher reads the database and disk: keep that off the event loop
         asyncio.get_running_loop().run_in_executor(None, app.state.watcher.reload)
 
+    app.state.indexes = StatusIndexes(
+        layout=layout, session_factory=session_factory, catalog=app.state.catalog
+    )
+    app.state.catalog.listeners.append(app.state.indexes.invalidate)
     app.state.queue = SyncQueue(
         make_handler(
             app.state.engine,
@@ -173,6 +179,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     app.state.queue.add_finish_listener(app.state.watcher.job_finished)
     # A run that changed files makes the Drive listing stale.
     app.state.queue.add_finish_listener(app.state.catalog.on_job_finished)
+    app.state.queue.add_finish_listener(app.state.indexes.invalidate)  # downloads change the disk
     for router in (
         health.router,
         auth.router,
@@ -181,6 +188,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         pairs.router,
         browse.router,
         catalog.router,
+        files.router,
         jobs.router,
         conflicts.router,
         system.router,

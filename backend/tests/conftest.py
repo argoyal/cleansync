@@ -178,3 +178,48 @@ def catalog_service(sync_engine) -> CatalogService:
         rclone_env=sync_engine.env,
         accounts=sync_engine.accounts,
     )
+
+
+class StubQueue:
+    """Stands in for SyncQueue in API tests: records requests, never runs anything."""
+
+    def __init__(self):
+        self.requests: list[tuple[int, str, str]] = []
+        self.answer = "queued"
+        self.running: set[int] = set()
+        self.disabled_reason: str | None = None
+
+    def request(self, pair_id, trigger, action="sync"):
+        self.requests.append((pair_id, trigger, action))
+        return self.answer
+
+    def is_running(self, pair_id):
+        return pair_id in self.running
+
+    def is_busy(self, pair_id):
+        return pair_id in self.running
+
+    def add_finish_listener(self, listener):
+        pass
+
+    async def stop(self):
+        pass
+
+
+@pytest.fixture
+def stub_queue(app) -> StubQueue:
+    q = StubQueue()
+    app.state.queue = q
+    return q
+
+
+@pytest.fixture
+def save_catalog(app):
+    """Write a pair's Drive listing as if rclone had just listed it."""
+    from app.core.clock import utcnow
+    from app.services.catalog.model import Catalog, CatalogEntry
+
+    def _save(pair_id: int, entries: list[CatalogEntry], root_id: str | None = "root"):
+        app.state.catalog.store.save(Catalog.build(pair_id, utcnow(), root_id, entries))
+
+    return _save
