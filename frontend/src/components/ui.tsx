@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 
+import { useDismiss } from "../hooks/useDismiss";
 import { Icon, type IconName } from "./Icon";
 
 type Tone = "primary" | "plain" | "danger" | "quiet";
@@ -128,24 +129,32 @@ export function Menu({
       y: Math.max(8, Math.min(y, window.innerHeight - r.height - 8)),
     });
   }, [x, y]);
+  // Focus goes back to whatever had it before the menu opened (the ⋮ button or the tile).
+  const opener = useRef<HTMLElement | null>(null);
+  if (opener.current === null && typeof document !== "undefined") opener.current = document.activeElement as HTMLElement | null;
+  useDismiss(ref, onClose, true, opener as React.RefObject<HTMLElement>);
   useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
     ref.current?.querySelector<HTMLElement>("[role=menuitem]:not([disabled])")?.focus();
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
+  }, []);
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const keys = ["ArrowDown", "ArrowUp", "Home", "End"];
+    if (!keys.includes(e.key)) return;
+    const els = Array.from(ref.current?.querySelectorAll<HTMLElement>(":scope > [role=menuitem]:not([disabled])") ?? []);
+    if (els.length === 0) return;
+    e.preventDefault();
+    const at = els.indexOf(document.activeElement as HTMLElement);
+    let next = 0;
+    if (e.key === "ArrowDown") next = (at + 1) % els.length;
+    else if (e.key === "ArrowUp") next = (at - 1 + els.length) % els.length;
+    else if (e.key === "End") next = els.length - 1;
+    els[next].focus();
+  };
   return (
     <div
       ref={ref}
       role="menu"
       aria-label={label}
+      onKeyDown={onKeyDown}
       style={{ left: pos.x, top: pos.y }}
       className="fixed z-50 min-w-[220px] rounded-menu border border-line bg-surface py-1.5 shadow-float"
     >
