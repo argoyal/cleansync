@@ -112,7 +112,7 @@ NEW_PASSWORD = "a-much-better-passphrase"
 
 @pytest.fixture
 def app(settings):
-    return create_app(settings)
+    return create_app(settings, start_background=False)
 
 
 @pytest.fixture
