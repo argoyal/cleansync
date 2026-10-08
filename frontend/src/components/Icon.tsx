@@ -15,6 +15,7 @@ import CloudDoneSvg from "@material-symbols/svg-400/rounded/cloud_done.svg?react
 import CloudOffSvg from "@material-symbols/svg-400/rounded/cloud_off.svg?react";
 import CloudSyncSvg from "@material-symbols/svg-400/rounded/cloud_sync.svg?react";
 import CompareArrowsSvg from "@material-symbols/svg-400/rounded/compare_arrows.svg?react";
+import ContentCopySvg from "@material-symbols/svg-400/rounded/content_copy.svg?react";
 import CreateNewFolderSvg from "@material-symbols/svg-400/rounded/create_new_folder.svg?react";
 import DeleteSvg from "@material-symbols/svg-400/rounded/delete.svg?react";
 import DownloadSvg from "@material-symbols/svg-400/rounded/download.svg?react";
@@ -72,6 +73,7 @@ const ICONS = {
   cloud_off: CloudOffSvg,
   cloud_sync: CloudSyncSvg,
   compare_arrows: CompareArrowsSvg,
+  content_copy: ContentCopySvg,
   create_new_folder: CreateNewFolderSvg,
   delete: DeleteSvg,
   download: DownloadSvg,
