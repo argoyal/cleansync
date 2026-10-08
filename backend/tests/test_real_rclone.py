@@ -246,6 +246,7 @@ async def test_real_first_sync_merges_without_deleting_and_backs_up():
     from app.services.sync.initial import InitialSync
 
     root = Path(tempfile.mkdtemp(prefix="r"))
+    eng = None
     try:
         layout = Layout(root)
         layout.ensure()
@@ -284,6 +285,9 @@ async def test_real_first_sync_merges_without_deleting_and_backs_up():
         (local / "differ.txt").write_text("local version")
         (drive / "differ.txt").write_text("drive version, longer")
         os.utime(drive / "differ.txt", (1, 1))  # drive copy is older, local wins
+        (local / "drivenew.txt").write_text("old local")
+        (drive / "drivenew.txt").write_text("drive newer, longer")
+        os.utime(local / "drivenew.txt", (1, 1))  # local copy is older, Drive wins
 
         engine = SyncEngine(
             layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=None
@@ -292,8 +296,8 @@ async def test_real_first_sync_merges_without_deleting_and_backs_up():
         await initial.preview(pair_id)
         p = initial.load_preview(pair_id)
         assert p is not None, "preview failed"
-        assert (p["same"], p["only_local"], p["only_remote"], p["different"]) == (1, 1, 1, 1)
-        assert p["samples"]["different"] == ["differ.txt"]
+        assert (p["same"], p["only_local"], p["only_remote"], p["different"]) == (1, 1, 1, 2)
+        assert sorted(p["samples"]["different"]) == ["differ.txt", "drivenew.txt"]
 
         initial.check_phrase(CONFIRM_PHRASE)
         await initial.run_initial(pair_id)
@@ -304,11 +308,15 @@ async def test_real_first_sync_merges_without_deleting_and_backs_up():
             assert (side / "only-local.txt").read_text() == "L"
             assert (side / "only-drive.txt").read_text() == "D"
             assert (side / "same.txt").read_text() == "same"
-            assert (side / "differ.txt").exists()
-        backups = list((layout.backups_dir / "alice@example.com" / str(pair_id)).rglob("*.txt"))
-        assert [b.name for b in backups] == ["differ.txt"]
-        assert "/initial/" in backups[0].as_posix()
-        assert backups[0].read_text() == "local version"
-        eng.dispose()
+            assert (side / "differ.txt").read_text() == "local version"
+            assert (side / "drivenew.txt").read_text() == "drive newer, longer"
+        backups = {
+            b.name: b.read_text()
+            for b in (layout.backups_dir / "alice@example.com" / str(pair_id)).rglob("*.txt")
+        }
+        assert backups == {"differ.txt": "local version", "drivenew.txt": "old local"}
+        assert not initial.load_preview(pair_id)
     finally:
+        if eng is not None:
+            eng.dispose()
         shutil.rmtree(root, ignore_errors=True)

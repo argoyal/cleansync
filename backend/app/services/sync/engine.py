@@ -212,9 +212,13 @@ class SyncEngine:
             if refresh_pair_filters(db, self.layout, pair):
                 pair.needs_resync = True
                 db.commit()
-            if pair.needs_resync and self.initial is not None:
-                return await self.initial.safe_resync(pair_id, trigger)
             bidirectional = pair.direction == Direction.BIDIRECTIONAL
+            if pair.needs_resync and not bidirectional:
+                # One-way pairs never resync; their cycle is already gated by the dry run.
+                pair.needs_resync = False
+                db.commit()
+            elif pair.needs_resync and self.initial is not None:
+                return await self.initial.safe_resync(pair_id, trigger)
             try:
                 return await self._cycle(db, pair, account, trigger, bidirectional=bidirectional)
             except Exception as e:

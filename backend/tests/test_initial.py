@@ -83,7 +83,7 @@ async def test_initial_backs_up_markers_and_resyncs(
         p.relative_to(backup_root).as_posix() for p in backup_root.rglob("*") if p.is_file()
     )
     assert len(copies) == 2
-    assert all("/initial/" in c for c in copies)
+    assert all("/.drivesync-initial-" in c for c in copies)
     assert (root / "RCLONE_TEST").exists()
     calls = fake_rclone.calls()
     touch = [c for c in calls if c[4] == "touch"][0]
@@ -140,3 +140,142 @@ async def test_safe_resync_stops_when_check_fails(
     fake_rclone.on("check", exit=3, stderr=[jl("directory not found", level="error")])
     await initial.safe_resync(pair.id, "MANUAL")
     assert not [c for c in fake_rclone.calls() if c[4] == "bisync"]
+
+
+def _backups(layout, acc, pair):
+    root = layout.backups_dir / acc.email / str(pair.id)
+    return (
+        {p.relative_to(root).as_posix().split("/", 1)[1]: p for p in root.rglob("*") if p.is_file()}
+        if root.exists()
+        else {}
+    )
+
+
+async def test_initial_uses_a_fresh_check_not_the_stale_preview(
+    initial, make_account, make_pair, fake_rclone, layout
+):
+    acc = make_account()
+    pair = make_pair(acc)
+    root = layout.account_dir(acc.email)
+    (root / "late.txt").write_text("changed after preview")
+    fake_rclone.on("check", stdout=["= a"], exit=0)
+    await initial.preview(pair.id)
+    fake_rclone.plan_file.write_text("{}")
+    fake_rclone.on("check", stdout=["* late.txt"], exit=1)
+    await initial.run_initial(pair.id)
+    copies = _backups(layout, acc, pair)
+    assert [k.split("/", 1)[1] for k in copies] == ["late.txt"]
+    assert initial.load_preview(pair.id) is None
+    assert not (layout.previews_dir / f"{pair.id}-different.txt").exists()
+
+
+async def test_backup_folders_are_unique_per_job(
+    initial, make_account, make_pair, fake_rclone, layout
+):
+    acc = make_account()
+    pair = make_pair(acc, initialized=True)
+    (layout.account_dir(acc.email) / "x.txt").write_text("v1")
+    fake_rclone.on("check", stdout=["* x.txt"], exit=1)
+    await initial.safe_resync(pair.id, "MANUAL")
+    (layout.account_dir(acc.email) / "x.txt").write_text("v2")
+    await initial.safe_resync(pair.id, "MANUAL")
+    texts = sorted(p.read_text() for p in _backups(layout, acc, pair).values())
+    assert texts == ["v1", "v2"]
+
+
+async def test_backup_failure_fails_job_and_skips_resync(
+    initial, make_account, make_pair, fake_rclone, layout, db, monkeypatch
+):
+    acc = make_account()
+    pair = make_pair(acc, initialized=True)
+    (layout.account_dir(acc.email) / "x.txt").write_text("v1")
+    fake_rclone.on("check", stdout=["* x.txt"], exit=1)
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(InitialSync, "_copy_files", staticmethod(boom))
+    job_id = await initial.safe_resync(pair.id, "MANUAL")
+    job = db.get(SyncJob, job_id)
+    db.refresh(job)
+    assert job.state == "FAILED" and "disk full" in job.error_message
+    assert not [c for c in fake_rclone.calls() if c[4] in ("bisync", "touch")]
+
+
+async def test_error_paths_are_backed_up_but_resync_is_refused(
+    initial, make_account, make_pair, fake_rclone, layout, db
+):
+    acc = make_account()
+    pair = make_pair(acc, initialized=True)
+    (layout.account_dir(acc.email) / "bad.txt").write_text("v")
+    fake_rclone.on("check", stdout=["! bad.txt", "! other.txt"], exit=1)
+    job_id = await initial.safe_resync(pair.id, "MANUAL")
+    job = db.get(SyncJob, job_id)
+    db.refresh(job)
+    assert job.state == "FAILED"
+    assert job.error_message == "rclone could not compare 2 files; nothing was changed"
+    db.refresh(pair)
+    assert pair.status == "ATTENTION"
+    assert not [c for c in fake_rclone.calls() if c[4] == "bisync"]
+
+
+async def test_error_paths_are_in_the_backup_list(initial, make_account, make_pair, fake_rclone):
+    acc = make_account()
+    pair = make_pair(acc)
+    fake_rclone.on("check", stdout=["! bad.txt", "* d.txt"], exit=1)
+    await initial.preview(pair.id)
+    f = initial._different_file(pair.id)
+    assert f.read_text().splitlines() == ["bad.txt", "d.txt"]
+
+
+async def test_case_clash_local_only_file_is_backed_up(
+    initial, make_account, make_pair, fake_rclone, layout
+):
+    acc = make_account()
+    pair = make_pair(acc, initialized=True)
+    (layout.account_dir(acc.email) / "Report.TXT").write_text("local")
+    (layout.account_dir(acc.email) / "plain.txt").write_text("p")
+    fake_rclone.on("check", stdout=["+ Report.TXT", "- report.txt", "+ plain.txt"], exit=1)
+    await initial.safe_resync(pair.id, "MANUAL")
+    assert [k.split("/", 1)[1] for k in _backups(layout, acc, pair)] == ["Report.TXT"]
+
+
+async def test_one_way_pair_is_not_resynced(
+    initial, sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc = make_account()
+    pair = make_pair(acc, direction="REMOTE_TO_LOCAL", initialized=True, needs_resync=True)
+    with pytest.raises(ValueError):
+        await initial.safe_resync(pair.id, "MANUAL")
+    fake_rclone.on("sync", stderr=[], exit=0)
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    assert not [c for c in fake_rclone.calls() if c[4] == "bisync"]
+    db.refresh(pair)
+    assert pair.needs_resync is False
+
+
+async def test_initial_for_one_way_pair_marks_initialized_without_bisync(
+    initial, make_account, make_pair, fake_rclone, db
+):
+    acc = make_account()
+    pair = make_pair(acc, direction="LOCAL_TO_REMOTE")
+    fake_rclone.on("check", stdout=["= a"], exit=0)
+    await initial.preview(pair.id)
+    await initial.run_initial(pair.id)
+    assert not [c for c in fake_rclone.calls() if c[4] in ("bisync", "touch")]
+    db.refresh(pair)
+    assert pair.initialized is True and pair.status == "HEALTHY"
+
+
+async def test_failed_initial_does_not_back_off_and_says_rerun_preview(
+    initial, make_account, make_pair, fake_rclone, db
+):
+    acc = make_account()
+    pair = make_pair(acc)
+    fake_rclone.on("check", stdout=["= a"], exit=0)
+    fake_rclone.on("bisync", exit=2, stderr=[jl("boom", level="error")])
+    await initial.preview(pair.id)
+    await initial.run_initial(pair.id)
+    db.refresh(pair)
+    assert pair.fail_count == 0 and pair.next_retry_at is None
+    assert "preview" in pair.last_error

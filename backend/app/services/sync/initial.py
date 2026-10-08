@@ -1,3 +1,4 @@
+import asyncio
 import json
 import shutil
 from pathlib import Path
@@ -6,10 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.core.pathsafe import UnsafePath, safe_join
 from app.models import Account, SyncPair
-from app.models.enums import JobKind, JobState, PairStatus
+from app.models.enums import AttentionReason, Direction, JobKind, JobState, PairStatus
 from app.services.events.bus import record_event
 from app.services.rclone.commands import bisync_args, check_args, remote_target, touch_args
-from app.services.rclone.errors import classify_failure
+from app.services.rclone.errors import Failure, classify_failure
 from app.services.rclone.parse import parse_check_combined
 from app.services.sync.engine import SyncEngine
 from app.services.sync.filters import refresh_pair_filters
@@ -52,6 +53,8 @@ class InitialSync:
             k: [] for k in ("only_local", "only_remote", "different", "errors")
         }
         different_out.parent.mkdir(parents=True, exist_ok=True)
+        only_local_all: list[str] = []
+        only_remote_folded: set[str] = set()
         with open(different_out, "w", encoding="utf-8") as diff_fh:
 
             def on_stdout(line: str) -> None:
@@ -62,8 +65,12 @@ class InitialSync:
                 counts[key] += 1
                 if key in samples and len(samples[key]) < _SAMPLE:
                     samples[key].append(parsed[1])
-                if key == "different":
+                if key in ("different", "errors"):
                     diff_fh.write(parsed[1] + "\n")
+                elif key == "only_local":
+                    only_local_all.append(parsed[1])
+                elif key == "only_remote":
+                    only_remote_folded.add(parsed[1].casefold())
 
             res = await e.runner(
                 check_args(
@@ -77,6 +84,11 @@ class InitialSync:
                 on_stdout=on_stdout,
                 secrets=[e.env.config_pass],
             )
+            # A local-only file whose name differs from a Drive-only file only by case can be
+            # overwritten when the two sides are merged on a case-insensitive side.
+            for rel in only_local_all:
+                if rel.casefold() in only_remote_folded:
+                    diff_fh.write(rel + "\n")
         if res.exit_code not in (0, 1):
             e.finish_job(db, job, JobState.FAILED, res)
             failure = classify_failure(res.exit_code, res.error_tail)
@@ -116,22 +128,10 @@ class InitialSync:
             return job_id
 
     # ---- resync -----------------------------------------------------------------------------
-    def _backup_different(
-        self, account: Account, pair: SyncPair, different_file: Path, label: str
-    ) -> int:
-        e = self.engine
-        local_dir = pair_local_dir(e.layout, account, pair)
-        dest_root = (
-            e.layout.backups_dir
-            / account.email
-            / str(pair.id)
-            / e.clock().date().isoformat()
-            / label
-        )
+    @staticmethod
+    def _copy_files(local_dir: Path, dest_root: Path, rels: list[str]) -> int:
         copied = 0
-        if not different_file.exists():
-            return 0
-        for rel in different_file.read_text(encoding="utf-8").splitlines():
+        for rel in rels:
             try:
                 src = safe_join(local_dir, rel)
                 dst = safe_join(dest_root, rel)
@@ -143,18 +143,76 @@ class InitialSync:
                 copied += 1
         return copied
 
+    async def _backup(
+        self, account: Account, pair: SyncPair, list_file: Path, label: str, job_id: int
+    ) -> int:
+        e = self.engine
+        dest_root = (
+            e.layout.backups_dir
+            / account.email
+            / str(pair.id)
+            / e.clock().date().isoformat()
+            / f".drivesync-{label}-{job_id}"
+        )
+        rels = list_file.read_text(encoding="utf-8").splitlines() if list_file.exists() else []
+        local_dir = pair_local_dir(e.layout, account, pair)
+        return await asyncio.to_thread(self._copy_files, local_dir, dest_root, rels)
+
+    def _fail_pair(
+        self, db: Session, job, pair: SyncPair, account: Account, message: str, reason: str
+    ) -> int:
+        e = self.engine
+        e.finish_job(db, job, JobState.FAILED, error=message)
+        pair.last_error = message
+        pair.last_error_at = e.clock()
+        e.set_status(db, pair, PairStatus.ATTENTION, reason)
+        record_event(
+            db,
+            e.bus,
+            kind="sync_failed",
+            level="error",
+            pair_id=pair.id,
+            account_id=account.id,
+            message=f"{pair.name}: {message}",
+        )
+        return job.id
+
     async def _resync(
         self,
         db: Session,
         pair: SyncPair,
         account: Account,
         trigger: str,
-        different_file: Path,
+        result: dict,
+        list_file: Path,
         label: str,
     ) -> int:
         e = self.engine
-        copied = self._backup_different(account, pair, different_file, label)
+        if pair.direction != Direction.BIDIRECTIONAL:
+            raise ValueError("A safe resync only applies to two-way pairs.")
         job = e.start_job(db, pair, JobKind.RESYNC, trigger)
+        if result["errors"] > 0:
+            return self._fail_pair(
+                db,
+                job,
+                pair,
+                account,
+                f"rclone could not compare {result['errors']} files; nothing was changed",
+                AttentionReason.FAILED,
+            )
+        try:
+            copied = await self._backup(account, pair, list_file, label, job.id)
+        except Exception as exc:
+            return self._fail_pair(
+                db,
+                job,
+                pair,
+                account,
+                f"Could not save backups of local files, so nothing was changed: {exc}",
+                AttentionReason.FAILED,
+            )
+        with open(job.log_path, "a", encoding="utf-8") as fh:
+            fh.write(f"DriveSync: saved {copied} local files to backups before the {label}\n")
         e.set_status(db, pair, PairStatus.RUNNING)
         local_dir = pair_local_dir(e.layout, account, pair)
         local_dir.mkdir(parents=True, exist_ok=True)
@@ -172,6 +230,14 @@ class InitialSync:
         if failure is not None:
             e.finish_job(db, job, JobState.FAILED, res)
             await e.handle_failure(db, pair, account, failure, res)
+            if label == "initial" and failure in (Failure.TRANSIENT, Failure.OTHER):
+                pair.fail_count = 0
+                pair.next_retry_at = None
+                pair.last_error = (
+                    f"{pair.last_error}. The first sync did not finish; run the preview "
+                    "again before retrying."
+                )
+                db.commit()
             return job.id
         e.finish_job(db, job, JobState.SUCCESS, res)
         pair.initialized = True
@@ -201,10 +267,30 @@ class InitialSync:
         with e.session_factory() as db:
             pair = db.get(SyncPair, pair_id)
             account = db.get(Account, pair.account_id)
+            fresh = e.layout.previews_dir / f"{pair_id}-initial-different.txt"
             try:
-                return await self._resync(
-                    db, pair, account, "INITIAL", self._different_file(pair_id), "initial"
-                )
+                # The stored preview only proves the user reviewed it; what could be
+                # overwritten is decided by a check made right now.
+                job_id, result = await self._check(db, pair, account, "INITIAL", fresh)
+                if result is None:
+                    return job_id
+                if pair.direction != Direction.BIDIRECTIONAL:
+                    # One-way pairs never run a resync; their first real run goes through the
+                    # dry-run deletion gate.
+                    pair.initialized = True
+                    pair.needs_resync = False
+                    pair.last_error = None
+                    e.set_status(db, pair, PairStatus.HEALTHY)
+                else:
+                    job_id = await self._resync(
+                        db, pair, account, "INITIAL", result, fresh, "initial"
+                    )
+                    db.refresh(pair)
+                if pair.initialized:
+                    for f in (self._preview_file(pair_id), self._different_file(pair_id)):
+                        f.unlink(missing_ok=True)
+                    fresh.unlink(missing_ok=True)
+                return job_id
             except Exception as exc:
                 e._mark_crashed(db, pair, account, exc)
                 raise
@@ -214,12 +300,14 @@ class InitialSync:
         with e.session_factory() as db:
             pair = db.get(SyncPair, pair_id)
             account = db.get(Account, pair.account_id)
+            if pair.direction != Direction.BIDIRECTIONAL:
+                raise ValueError("A safe resync only applies to two-way pairs.")
             diff = e.layout.previews_dir / f"{pair_id}-resync-different.txt"
             try:
                 job_id, result = await self._check(db, pair, account, trigger, diff)
                 if result is None:
                     return job_id
-                return await self._resync(db, pair, account, trigger, diff, "resync")
+                return await self._resync(db, pair, account, trigger, result, diff, "resync")
             except Exception as exc:
                 e._mark_crashed(db, pair, account, exc)
                 raise
