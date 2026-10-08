@@ -288,13 +288,15 @@ def config_create_args(
 
 def config_create_alias_args(env: RcloneEnv, name: str, folder: Path) -> list[str]:
     """A remote that is just a local folder: used by the dev/test 'pretend Google account'."""
+    # A newline in a config value could add keys to the remote's section.
+    folder_text = _secret("folder", _local(folder))
     return env.base() + [
         "config",
         "create",
         _remote_name(name),
         "alias",
         "remote",
-        _local(folder),
+        folder_text,
         "--non-interactive",
         NO_PROMPT_FLAG,
     ]

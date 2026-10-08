@@ -2,6 +2,7 @@ import json
 import logging
 import secrets
 from collections.abc import Callable
+from pathlib import Path
 
 import httpx
 from sqlalchemy import select
@@ -24,6 +25,7 @@ from app.services.events.bus import EventBus, record_event
 from app.services.rclone.commands import (
     RcloneEnv,
     about_args,
+    config_create_alias_args,
     config_create_args,
     config_delete_args,
 )
@@ -185,6 +187,55 @@ class AccountService:
                 self.bus,
                 kind="account_connected",
                 message=f"Connected Google account {email}",
+                account_id=acc.id,
+            )
+            self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
+            self._changed()
+            return acc
+
+    async def add_local_account(self, email: str, folder: Path) -> Account:
+        """Dev/CI only: a pretend Google account whose Drive is a local folder (alias remote).
+
+        Refused unless DRIVESYNC_ALLOW_LOCAL_ACCOUNTS is on. `folder` must come from the
+        operator's command line or app-owned paths, never from a web request.
+        """
+        if not self.settings.allow_local_accounts:
+            raise AccountError(
+                "Local pretend accounts are for development only. "
+                "Set DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 to allow one."
+            )
+        email = email_dirname(email)
+        folder = folder.resolve()
+        with self.session_factory() as db:
+            if db.scalar(select(Account).where(Account.email == email)) is not None:
+                raise AccountError(f"{email} is already connected")
+            name = f"local_{secrets.token_hex(3)}"
+            while db.scalar(select(Account).where(Account.remote_name == name)) is not None:
+                name = f"local_{secrets.token_hex(3)}"
+            folder.mkdir(parents=True, exist_ok=True)
+            res = await self._rclone(config_create_alias_args(self.env, name, folder))
+            if res.exit_code != 0:
+                raise AccountError("rclone could not save the remote: " + "; ".join(res.error_tail))
+            await ensure_config_encrypted(self.env, self.runner)
+            acc = Account(
+                email=email,
+                remote_name=name,
+                status=AccountStatus.CONNECTED,
+                connected_at=self.clock(),
+                last_checked_at=self.clock(),
+            )
+            db.add(acc)
+            self._login_changed(name)
+            db.commit()
+            self.layout.account_dir(email).mkdir(parents=True, exist_ok=True)
+            logger.warning(
+                "added PRETEND local account %s (folder %s); development only", email, folder
+            )
+            record_event(
+                db,
+                self.bus,
+                kind="account_connected",
+                message=f"Added pretend local account {email}",
                 account_id=acc.id,
             )
             self.bus.publish("account", {"account_id": acc.id, "status": acc.status})

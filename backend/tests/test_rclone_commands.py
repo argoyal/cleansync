@@ -469,3 +469,9 @@ def test_moveto_carries_trash_flag_and_needs_remote_targets():
             c.moveto_args(ENV, bad, "gd_1:x")
         with pytest.raises(c.UnsafeArgument):
             c.moveto_args(ENV, "gd_1:x", bad)
+
+
+@pytest.mark.parametrize("bad", ["/srv/a\nroot = x", "/srv/a\rb", "/srv/a\x00b", "/srv/a\tb"])
+def test_config_create_alias_rejects_control_characters_in_the_folder(bad):
+    with pytest.raises(UnsafeArgument):
+        c.config_create_alias_args(ENV, "local_1", Path(bad))

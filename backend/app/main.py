@@ -19,6 +19,7 @@ from app.api import (
     jobs,
     pairs,
     serve,
+    setup,
     system,
 )
 from app.auth.bootstrap import ensure_admin
@@ -112,6 +113,11 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         openapi_url=None,
     )
     app.state.settings = settings
+    if settings.allow_local_accounts:
+        logger.warning(
+            "DRIVESYNC_ALLOW_LOCAL_ACCOUNTS is on: pretend local accounts can be added. "
+            "This is for development and CI only; do not use it in production."
+        )
     app.state.layout = layout
     app.state.engine_db = engine
     app.state.session_factory = session_factory
@@ -205,6 +211,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         files.router,
         fileops.router,
         serve.router,
+        setup.router,
         jobs.router,
         conflicts.router,
         system.router,

@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     rclone_binary: str = "rclone"
     rclone_password_command: str = ""
     app_name: str = "DriveSync"
+    # Development and CI only: lets the seed tool add a "pretend Google account" backed by a
+    # local folder. Leave it off in production.
+    drivesync_allow_local_accounts: bool = False
     log_level: str = "INFO"
     # Container time zone (TZ), used for log timestamps only; syncing always works in UTC.
     tz: str = "UTC"
@@ -48,6 +51,14 @@ class Settings(BaseSettings):
         if parsed.scheme == "http" and not _is_local_host(parsed.hostname):
             raise ValueError("PUBLIC_URL must use https unless it is localhost or a LAN address")
         return self
+
+    @property
+    def allow_local_accounts(self) -> bool:
+        return self.drivesync_allow_local_accounts
+
+    @allow_local_accounts.setter
+    def allow_local_accounts(self, value: bool) -> None:
+        self.drivesync_allow_local_accounts = value
 
     @property
     def _scheme(self) -> str:
