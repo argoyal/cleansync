@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -20,6 +21,7 @@ from app.services.scheduler import Scheduler
 from app.services.sync.engine import SyncEngine
 from app.services.sync.initial import InitialSync
 from app.services.sync.recovery import recover_interrupted
+from app.services.watcher import LocalWatcher, self_test
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +50,24 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 for pair_id in recover_interrupted(db):
                     app.state.queue.request(pair_id, "RECOVERY")
             app.state.scheduler.start()
+            try:
+                active = await self_test(layout.storage)
+                app.state.watcher.start(asyncio.get_running_loop())
+                if not active:
+                    app.state.watcher.status = "limited"
+                    logger.warning(
+                        "file change notifications do not work for %s; local changes will "
+                        "be picked up by the schedule instead",
+                        layout.storage,
+                    )
+            except Exception:
+                logger.exception("file watcher setup failed; relying on the schedule")
+                app.state.watcher.status = "limited"
         try:
             yield
         finally:
             app.state.scheduler.shutdown()
+            app.state.watcher.stop()
             await app.state.queue.stop()
 
     app = FastAPI(
@@ -68,6 +84,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     with session_factory() as db:
         ensure_admin(db, settings, layout)
         max_parallel = int(get_setting(db, "max_parallel_pairs"))  # type: ignore[arg-type]
+        debounce = int(get_setting(db, "watcher_debounce_s"))  # type: ignore[arg-type]
     app.state.login_limiter = LoginLimiter()
     app.state.bus = EventBus()
     app.state.rclone_env = build_rclone_env(settings, layout)
@@ -88,7 +105,9 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     app.state.initial = InitialSync(app.state.engine)
     app.state.queue = SyncQueue(
         make_handler(
-            app.state.engine, app.state.initial, on_change=lambda: app.state.scheduler.reload()
+            app.state.engine,
+            app.state.initial,
+            on_change=lambda: (app.state.scheduler.reload(), app.state.watcher.reload()),
         ),
         max_parallel=max_parallel,
     )
@@ -99,6 +118,12 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         queue=app.state.queue,
         accounts=app.state.accounts,
         layout=layout,
+    )
+    app.state.watcher = LocalWatcher(
+        session_factory=session_factory,
+        layout=layout,
+        queue=app.state.queue,
+        debounce_s=debounce,
     )
     for router in (
         health.router,

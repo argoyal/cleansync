@@ -122,9 +122,10 @@ def resume(
 
 
 def _reload_schedule(request: Request) -> None:
-    scheduler = getattr(request.app.state, "scheduler", None)
-    if scheduler is not None:
-        scheduler.reload()
+    for name in ("scheduler", "watcher"):
+        svc = getattr(request.app.state, name, None)
+        if svc is not None:
+            svc.reload()
 
 
 # Routes that queue work are async: SyncQueue must be called on the event loop thread.

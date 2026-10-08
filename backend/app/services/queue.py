@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 
 log = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ class SyncQueue:
         self._pending: dict[int, tuple[str, str]] = {}
         self._running: set[int] = set()
         self._dirty: dict[int, str] = {}
+        self._finished: dict[int, float] = {}
         self._tasks: set[asyncio.Task] = set()
         # Set when syncing must stop entirely (e.g. the database failed its integrity check).
         self.disabled_reason: str | None = None
@@ -44,6 +46,9 @@ class SyncQueue:
     def is_running(self, pair_id: int) -> bool:
         return pair_id in self._running
 
+    def finished_at(self, pair_id: int) -> float | None:
+        return self._finished.get(pair_id)
+
     async def _run(self, pair_id: int) -> None:
         async with self._sem:
             action, trigger = self._pending.pop(pair_id)
@@ -54,6 +59,7 @@ class SyncQueue:
                 # The engine already marked the job FAILED and the pair ERROR; keep going.
                 log.exception("job for pair %s (%s) failed unexpectedly", pair_id, action)
             finally:
+                self._finished[pair_id] = time.monotonic()
                 self._running.discard(pair_id)
                 again = self._dirty.pop(pair_id, None)
                 if again is not None:
