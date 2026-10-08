@@ -89,16 +89,32 @@ class CatalogEntry:
 
     @classmethod
     def from_json(cls, d: dict) -> "CatalogEntry":
+        if not valid_path(d["path"]):
+            raise ValueError("bad path in the saved listing")
         return cls(
             path=d["path"],
             is_dir=bool(d["dir"]),
             size=int(d["size"]),
             mtime=datetime.fromisoformat(d["mtime"]) if d.get("mtime") else None,
-            id=d.get("id"),
+            id=valid_id(d.get("id")),
             mime=d.get("mime"),
             starred=bool(d.get("starred")),
             native=d.get("native"),
         )
+
+
+def valid_path(path: object) -> bool:
+    return (
+        isinstance(path, str)
+        and bool(path)
+        and not path.startswith("/")
+        and "\x00" not in path
+        and ".." not in path.split("/")
+    )
+
+
+def valid_id(obj: object) -> str | None:
+    return obj if isinstance(obj, str) and _ID.match(obj) else None
 
 
 def native_kind(item: dict) -> str | None:
@@ -124,7 +140,7 @@ def _mtime(value: object) -> datetime | None:
 def parse_item(item: dict) -> CatalogEntry | None:
     """One line of `rclone lsjson` output, or None when it has no usable path."""
     path = item.get("Path")
-    if not isinstance(path, str) or not path or path.startswith("/") or "\x00" in path:
+    if not valid_path(path):
         return None
     meta = item.get("Metadata") if isinstance(item.get("Metadata"), dict) else {}
     raw_id = item.get("ID")
@@ -135,7 +151,7 @@ def parse_item(item: dict) -> CatalogEntry | None:
         is_dir=bool(item.get("IsDir")),
         size=size if isinstance(size, int) and size >= 0 else 0,
         mtime=_mtime(item.get("ModTime")),
-        id=raw_id if isinstance(raw_id, str) and _ID.match(raw_id) else None,
+        id=valid_id(raw_id),
         mime=mime if isinstance(mime, str) else None,
         starred=str(meta.get("starred", "")).lower() in _TRUE,
         native=native_kind(item),

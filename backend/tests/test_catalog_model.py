@@ -132,3 +132,67 @@ def test_deleting_a_pair_removes_its_catalog(auth_client, make_account, app):
     f.write_text("{}")
     assert auth_client.delete(f"/api/sync-pairs/{pair['id']}").status_code == 204
     assert not f.exists()
+
+
+def test_store_serializes_upsert_and_save(tmp_path):
+    import threading
+
+    store = CatalogStore(tmp_path)
+    store.save(_catalog())
+    newer = Catalog.build(
+        1, datetime(2026, 10, 9, tzinfo=UTC), "root", [CatalogEntry("Fresh.txt", False, 1, None)]
+    )
+    doc = CatalogEntry("Work/New.docx", False, 0, None, id="N1", native="document")
+    # upsert after save: both survive
+    store.save(newer)
+    store.upsert(1, doc)
+    cat = store.load(1)
+    assert "Fresh.txt" in cat.files and "Work/New.docx" in cat.natives
+    # save after upsert: the refresh wins (it is the newer full listing), file stays valid
+    store.upsert(1, CatalogEntry("Later.docx", False, 0, None, id="L1", native="document"))
+    store.save(newer)
+    assert store.load(1).files.keys() == {"Fresh.txt"}
+    # concurrent: never a torn file, and every outcome is one of the serial orders
+    for _ in range(20):
+        t1 = threading.Thread(target=store.save, args=(newer,))
+        t2 = threading.Thread(target=store.upsert, args=(1, doc))
+        t1.start(), t2.start(), t1.join(), t2.join()
+        cat = store.load(1)
+        assert "Fresh.txt" in cat.files
+
+
+def test_store_logs_a_corrupt_file_once(tmp_path, caplog):
+    store = CatalogStore(tmp_path)
+    (tmp_path / "1.json").write_text("[" * 100000)  # RecursionError in json
+    with caplog.at_level("WARNING"):
+        assert store.load(1) is None
+        assert store.load(1) is None
+    assert len([r for r in caplog.records if "unreadable" in r.message]) == 1
+
+
+def test_stored_listing_is_revalidated(tmp_path):
+    from app.services.catalog.model import valid_id
+
+    assert valid_id("../x") is None and valid_id("ok_1-A") == "ok_1-A"
+    assert parse_item({"Path": "a/../b", "IsDir": False}) is None
+    base = {"pair_id": 1, "refreshed_at": "2026-10-08T00:00:00+00:00", "root_id": None}
+    ok = {"path": "a.txt", "dir": False, "size": 1, "mtime": None, "id": "../bad"}
+    cat = Catalog.from_json({**base, "entries": [ok]})
+    assert cat.files["a.txt"].id is None
+    for bad in ("/etc/passwd", "a/../../b", "x\x00y", ""):
+        try:
+            Catalog.from_json({**base, "entries": [{**ok, "path": bad}]})
+        except ValueError:
+            continue
+        raise AssertionError(bad)
+    store = CatalogStore(tmp_path)
+    (tmp_path / "1.json").write_text(json.dumps({**base, "entries": [{**ok, "path": "../x"}]}))
+    assert store.load(1) is None
+
+
+def test_delete_pair_evicts_through_the_store(tmp_path):
+    store = CatalogStore(tmp_path)
+    store.save(_catalog())
+    assert store.load(1) is not None
+    store.delete(1)
+    assert store.load(1) is None and not (tmp_path / "1.json").exists()
