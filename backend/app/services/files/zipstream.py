@@ -10,6 +10,7 @@ from app.services.files.scope import is_hidden_name
 
 log = logging.getLogger(__name__)
 CHUNK = 1024 * 1024
+ZIP64_ABOVE = 2 * 1024**3  # a file this big may grow past 4 GiB while we read it
 
 
 class _Sink:
@@ -74,9 +75,14 @@ def zip_folder(folder: Path, arc_root: str) -> Iterator[bytes]:
             except OSError:
                 log.warning("skipped an unreadable file in a zip download")
                 continue
-            with src, zf.open(info, "w") as dst:
-                while chunk := src.read(CHUNK):
-                    dst.write(chunk)
-                    yield sink.take()
+            big = info.file_size > ZIP64_ABOVE
+            try:
+                with src, zf.open(info, "w", force_zip64=big) as dst:
+                    while chunk := src.read(CHUNK):
+                        dst.write(chunk)
+                        yield sink.take()
+            except OSError:
+                log.warning("a file could not be read while zipping; the zip stops here")
+                break
             yield sink.take()
     yield sink.take()

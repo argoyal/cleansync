@@ -187,3 +187,96 @@ def test_zip_skips_hidden_names_in_any_case(tmp_path):
     (folder / "ok.txt").write_bytes(b"ok")
     names = zipfile.ZipFile(io.BytesIO(b"".join(zip_folder(folder, "W")))).namelist()
     assert names == ["W/ok.txt"]
+
+
+def test_media_is_inline_without_the_sandbox_so_seeking_keeps_the_cookie(auth_client, acc_root):
+    acc, root = acc_root
+    _put(root, "clip.mp4", b"x" * 100)
+    _put(root, "song.mp3", b"x" * 100)
+    for name in ("clip.mp4", "song.mp3"):
+        r = auth_client.get(f"/files/{acc.id}/{name}")
+        assert r.headers["content-security-policy"] == "frame-ancestors 'none'"
+        assert r.headers["content-disposition"].startswith("inline;")
+        assert r.headers["x-content-type-options"] == "nosniff"
+
+
+def test_policy_for_media_svg_and_html():
+    assert serve_policy("video/mp4") == ("video/mp4", True)
+    assert serve_policy("audio/mpeg") == ("audio/mpeg", True)
+    assert serve_policy("image/svg+xml") == ("image/svg+xml", True)
+    assert serve_policy("text/html") == ("text/plain; charset=utf-8", True)
+
+
+def test_svg_is_sandboxed(auth_client, acc_root):
+    acc, root = acc_root
+    _put(root, "i.svg", b"<svg onload='alert(1)'/>")
+    r = auth_client.get(f"/files/{acc.id}/i.svg")
+    assert r.headers["content-security-policy"].startswith("sandbox;")
+
+
+def test_symlink_into_a_hidden_folder_is_refused(auth_client, acc_root):
+    acc, root = acc_root
+    _put(root, ".google-exports/x", b"secret")
+    (root / "innocent.txt").symlink_to(root / ".google-exports" / "x")
+    (root / "dir").symlink_to(root / ".google-exports")
+    assert auth_client.get(f"/files/{acc.id}/innocent.txt").status_code == 404
+    assert auth_client.get(f"/files/{acc.id}/dir/x").status_code == 404
+    assert (
+        auth_client.get("/api/files/zip", params={"account_id": acc.id, "path": "dir"}).status_code
+        == 404
+    )
+
+
+def test_content_disposition_cannot_be_used_to_inject_headers():
+    from app.api.serve import content_disposition
+
+    cd = content_disposition("attachment", 'a"b\nc\r.txt')
+    assert "\n" not in cd and "\r" not in cd
+    assert 'filename="a_b_c_.txt"' in cd
+    assert "a%22b%0Ac%0D.txt" in cd
+
+
+def test_unsatisfiable_range_is_416(auth_client, acc_root):
+    acc, root = acc_root
+    _put(root, "clip.mp4", b"x" * 100)
+    r = auth_client.get(f"/files/{acc.id}/clip.mp4", headers={"Range": "bytes=500-600"})
+    assert r.status_code == 416
+
+
+def test_zip_marks_non_ascii_names_as_utf8(tmp_path):
+    folder = tmp_path / "Résumé"
+    folder.mkdir()
+    (folder / "é.txt").write_bytes(b"x")
+    zf = zipfile.ZipFile(io.BytesIO(b"".join(zip_folder(folder, "Résumé"))))
+    assert all(i.flag_bits & 0x800 for i in zf.infolist())
+
+
+def test_zip_stops_cleanly_when_a_read_fails(tmp_path, monkeypatch):
+    folder = tmp_path / "W"
+    folder.mkdir()
+    (folder / "a.txt").write_bytes(b"A")
+    (folder / "b.txt").write_bytes(b"B")
+    import builtins
+
+    real_open = builtins.open
+
+    class Bad:
+        def __init__(self, f):
+            self.f = f
+
+        def read(self, n):
+            raise OSError("disk went away")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.f.close()
+
+    def fake_open(path, mode="r", *a, **k):
+        f = real_open(path, mode, *a, **k)
+        return Bad(f) if str(path).endswith("b.txt") else f
+
+    monkeypatch.setattr("app.services.files.zipstream.open", fake_open, raising=False)
+    data = b"".join(zip_folder(folder, "W"))  # must not raise
+    assert zipfile.ZipFile(io.BytesIO(data)).read("W/a.txt") == b"A"

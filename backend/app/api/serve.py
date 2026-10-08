@@ -1,5 +1,7 @@
 """Open and download files from the browser: inline view with Range, download, folder zip."""
 
+import os
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -10,6 +12,7 @@ from app.api.files import clean_path, get_scope
 from app.auth.deps import AuthContext, get_db, require_user
 from app.core.pathsafe import UnsafePath, safe_join
 from app.services.files.mimes import guess_mime, serve_policy
+from app.services.files.scope import is_hidden
 from app.services.files.zipstream import zip_folder
 
 router = APIRouter()
@@ -22,6 +25,24 @@ FILE_CSP = (
     "style-src 'unsafe-inline'; frame-ancestors 'none'"
 )
 PDF_CSP = "frame-ancestors 'none'"
+# Video and audio cannot run script. A sandboxed page has an opaque origin and may drop the
+# session cookie on Range requests, which would break seeking, so media gets the light policy.
+NO_SANDBOX_TYPES = ("application/pdf",)
+
+
+def _csp_for(served: str) -> str:
+    if served in NO_SANDBOX_TYPES or served.startswith(("video/", "audio/")):
+        return PDF_CSP
+    return FILE_CSP
+
+
+def _resolves_to_hidden(root: Path, target: Path) -> bool:
+    """True when a symlink inside the account leads into a hidden name."""
+    try:
+        rel = os.path.relpath(target.resolve(), root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return True
+    return is_hidden(rel.replace(os.sep, "/"))
 
 
 def content_disposition(kind: str, filename: str) -> str:
@@ -46,12 +67,12 @@ def serve_file(
         target = safe_join(scope.root, rel)
     except UnsafePath as e:
         raise HTTPException(422, str(e)) from e
-    if not rel or not target.is_file():
+    if not rel or not target.is_file() or _resolves_to_hidden(scope.root, target):
         raise HTTPException(404, "file not found")
     served, inline_ok = serve_policy(guess_mime(target.name))
     kind = "inline" if inline_ok and not download else "attachment"
     headers = {
-        "Content-Security-Policy": PDF_CSP if served == "application/pdf" else FILE_CSP,
+        "Content-Security-Policy": _csp_for(served),
         "Cache-Control": "private, no-cache",
         "Content-Disposition": content_disposition(kind, target.name),
     }
@@ -73,7 +94,7 @@ def download_zip(
         folder = safe_join(scope.root, rel)
     except UnsafePath as e:
         raise HTTPException(422, str(e)) from e
-    if not folder.is_dir():
+    if not folder.is_dir() or _resolves_to_hidden(scope.root, folder):
         raise HTTPException(404, "folder not found")
     name = folder.name if rel else scope.account.email
     return StreamingResponse(
