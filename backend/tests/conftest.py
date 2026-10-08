@@ -229,6 +229,9 @@ class StubQueue:
 def stub_queue(app) -> StubQueue:
     q = StubQueue()
     app.state.queue = q
+    # API tests check the follow-up sync right away; tests/test_file_changes.py covers the
+    # debounce that real runs use.
+    app.state.file_changes.sync_delay_s = 0
     return q
 
 

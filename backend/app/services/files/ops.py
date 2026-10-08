@@ -12,6 +12,7 @@ from pathlib import Path
 
 from app.core.pathsafe import safe_join
 from app.models import SyncPair
+from app.models.enums import Direction
 from app.paths import Layout
 from app.services.files.names import free_name, validate_name
 from app.services.files.scope import (
@@ -51,7 +52,7 @@ class PartialError(FileOpError):
     """A multi-item action stopped part-way: some items were done, one failed."""
 
     def __init__(
-        self, cause: Exception, *, done: list[str], failed: str, not_done: list[str]
+        self, cause: Exception, *, done: list[str], failed: list[str], not_done: list[str]
     ) -> None:
         super().__init__(str(cause), getattr(cause, "status", 500))
         self.cause = cause
@@ -68,6 +69,20 @@ CROSS_PAIR_MSG = (
     "Items can't be moved straight from one sync pair to another: Google Drive would see a "
     "delete in one and a new upload in the other. Move them on Google Drive instead."
 )
+
+ONE_WAY_MSG = (
+    "This folder only receives changes from Google Drive; files added or changed here would "
+    "be removed by the next sync."
+)
+
+
+def refuse_one_way(scope: Scope, rels: list[str]) -> None:
+    """A Drive-to-here pair is mirrored with a one-way sync that removes local extras and undoes
+    local edits, so nothing may be added, changed or removed inside it from the UI."""
+    for rel in rels:
+        pair = pair_for(scope.pairs, rel)
+        if pair is not None and pair.direction == Direction.REMOTE_TO_LOCAL:
+            raise FileOpError(ONE_WAY_MSG, 409)
 
 
 def prune_selection(rels: list[str]) -> list[str]:
@@ -107,6 +122,7 @@ def _folder(scope: Scope, rel: str) -> Path:
 
 
 def make_folder(scope: Scope, parent: str, name: str) -> str:
+    refuse_one_way(scope, [parent])
     _folder(scope, parent)
     rel = join_rel(parent, validate_name(name))
     try:
@@ -153,6 +169,7 @@ def _step(scope: Scope, src_rel: str, dst_rel: str) -> MoveStep:
 
 
 def plan_rename(scope: Scope, rel: str, new_name: str) -> MoveStep:
+    refuse_one_way(scope, [rel])
     if touches_pair_root(scope.pairs, rel):
         raise FileOpError(PAIR_FOLDER_MSG)
     src = _existing(scope, rel)
@@ -163,6 +180,7 @@ def plan_rename(scope: Scope, rel: str, new_name: str) -> MoveStep:
 
 
 def plan_move(scope: Scope, rels: list[str], to: str) -> list[MoveStep]:
+    refuse_one_way(scope, [*rels, to])
     _folder(scope, to)
     plan: list[MoveStep] = []
     names: set[str] = set()
@@ -221,6 +239,7 @@ def delete_to_recovery(layout: Layout, scope: Scope, rels: list[str], when: date
 
     With several items, a failure part-way raises PartialError naming what was done.
     """
+    refuse_one_way(scope, rels)
     sources = []
     for rel in prune_selection(rels):
         if touches_pair_root(scope.pairs, rel):
@@ -243,7 +262,7 @@ def delete_to_recovery(layout: Layout, scope: Scope, rels: list[str], when: date
             raise PartialError(
                 e,
                 done=[r for r, _ in sources[:n]],
-                failed=rel,
+                failed=[rel],
                 not_done=[r for r, _ in sources[n + 1 :]],
             ) from e
         kept.append(str(dest.relative_to(layout.backups_dir)))
@@ -268,6 +287,7 @@ def new_office_file(
     """Copy a generated blank Office file into the folder; the next sync uploads it."""
     from app.services.files.upload import _copy_beside, _place  # upload imports this module
 
+    refuse_one_way(scope, [folder_rel])
     template = templates / f"blank.{kind}"
     if not template.is_file():
         raise FileOpError("the blank Office files are missing from this installation", 500)

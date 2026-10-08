@@ -1,4 +1,5 @@
 import os
+from datetime import UTC, datetime
 
 import pytest
 
@@ -25,10 +26,14 @@ def refreshes(app, monkeypatch):
     return asked
 
 
+T = 1_700_000_000  # every test file's modified time, matching its Drive entry below
+
+
 def _put(root, rel, data=b"x"):
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(data)
+    os.utime(p, (T, T))
     return p
 
 
@@ -36,8 +41,9 @@ def _post(client, action, **body):
     return client.post(f"/api/files/{action}", json=body)
 
 
-def _entry(path, is_dir=False):
-    return CatalogEntry(path=path, size=0 if is_dir else 1, mtime=None, is_dir=is_dir)
+def _entry(path, is_dir=False, id=None):
+    mtime = datetime.fromtimestamp(T, UTC)
+    return CatalogEntry(path=path, size=0 if is_dir else 1, mtime=mtime, is_dir=is_dir, id=id)
 
 
 def _moves(fake_rclone):
@@ -53,7 +59,11 @@ def test_new_folder_queues_a_sync(auth_client, env, stub_queue):
     acc, root, pair = env
     r = _post(auth_client, "mkdir", account_id=acc.id, path="Drive", name="Plans 2026")
     assert r.status_code == 200, r.text
-    assert r.json() == {"paths": ["Drive/Plans 2026"], "syncs": {str(pair.id): "queued"}}
+    assert r.json() == {
+        "paths": ["Drive/Plans 2026"],
+        "syncs": {str(pair.id): "queued"},
+        "drive": [],
+    }
     assert (root / "Drive" / "Plans 2026").is_dir()
     assert stub_queue.requests == [(pair.id, "APP", "sync")]
     assert (
@@ -108,7 +118,11 @@ def test_rename_on_drive_moves_both_sides(
     _stat_missing(fake_rclone)
     r = _post(auth_client, "rename", account_id=acc.id, path="Drive/Old", new_name="New")
     assert r.status_code == 200, r.text
-    assert r.json() == {"paths": ["Drive/New"], "syncs": {str(pair.id): "queued"}}
+    assert r.json() == {
+        "paths": ["Drive/New"],
+        "syncs": {str(pair.id): "queued"},
+        "drive": ["Drive/New"],
+    }
     assert (root / "Drive/New/x.txt").exists() and not (root / "Drive/Old").exists()
     [args] = _moves(fake_rclone)
     i = args.index("moveto")
@@ -314,7 +328,7 @@ def test_move_out_of_a_pair_is_local_and_syncs_the_pair(
     save_catalog(pair.id, [_entry("a.txt")])
     r = _post(auth_client, "move", account_id=acc.id, paths=["Drive/a.txt"], to="Loose")
     assert r.status_code == 200, r.text
-    assert r.json() == {"paths": ["Loose/a.txt"], "syncs": {str(pair.id): "queued"}}
+    assert r.json() == {"paths": ["Loose/a.txt"], "syncs": {str(pair.id): "queued"}, "drive": []}
     assert _moves(fake_rclone) == []
 
 
@@ -514,7 +528,7 @@ def test_partial_delete_says_what_was_done(auth_client, env, stub_queue, monkeyp
     r = _post(auth_client, "delete", account_id=acc.id, paths=paths)
     assert r.status_code == 403
     detail = r.json()["detail"]
-    assert detail["done"] == ["Drive/a.txt"] and detail["failed"] == "Drive/b.txt"
+    assert detail["done"] == ["Drive/a.txt"] and detail["failed"] == ["Drive/b.txt"]
     assert detail["not_done"] == ["Drive/c.txt"] and "not allowed" in detail["message"]
     assert not (root / "Drive/a.txt").exists() and (root / "Drive/c.txt").exists()
     assert stub_queue.requests == [(pair.id, "APP", "sync")]  # a.txt is gone: sync anyway
@@ -534,7 +548,7 @@ def test_partial_move_says_what_was_done(auth_client, env, fake_rclone, save_cat
     detail = r.json()["detail"]
     assert (detail["done"], detail["failed"], detail["not_done"]) == (
         ["Drive/a.txt"],
-        "Drive/b.txt",
+        ["Drive/b.txt"],
         ["Drive/c.txt"],
     )
     assert (root / "Drive/Dest/a.txt").exists() and (root / "Drive/b.txt").exists()
@@ -797,3 +811,147 @@ async def test_cancel_in_the_same_tick_as_thread_completion_still_counts(monkeyp
     monkeypatch.setattr(moves.asyncio, "shield", cancel_after_done)
     result, error, cancelled = await moves.finish_in_thread(lambda: "ok")
     assert (result, error, cancelled) == ("ok", None, True)
+
+
+ONE_WAY_MSG = (
+    "This folder only receives changes from Google Drive; files added or changed here would "
+    "be removed by the next sync."
+)
+
+
+@pytest.fixture
+def one_way(auth_client, app, make_account, make_pair, stub_queue):
+    acc = make_account()
+    root = app.state.layout.account_dir(acc.email)
+    down = make_pair(
+        acc, name="Down", local_subpath="Down", direction="REMOTE_TO_LOCAL", initialized=True
+    )
+    up = make_pair(
+        acc, name="Up", local_subpath="Up", direction="LOCAL_TO_REMOTE", initialized=True
+    )
+    for rel in ("Down/sub/a.txt", "Up/b.txt", "Loose/c.txt"):
+        _put(root, rel)
+    return acc, root, down, up
+
+
+def test_remote_to_local_folders_refuse_every_local_change(auth_client, one_way, stub_queue):
+    acc, root, _, _ = one_way
+    before = sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+    attempts = [
+        _post(auth_client, "mkdir", account_id=acc.id, path="Down", name="New"),
+        _post(auth_client, "rename", account_id=acc.id, path="Down/sub/a.txt", new_name="b.txt"),
+        _post(auth_client, "move", account_id=acc.id, paths=["Down/sub/a.txt"], to="Loose"),
+        _post(auth_client, "move", account_id=acc.id, paths=["Loose/c.txt"], to="Down/sub"),
+        _post(auth_client, "delete", account_id=acc.id, paths=["Down/sub/a.txt"]),
+        _post(auth_client, "new", account_id=acc.id, path="Down", kind="docx"),
+        auth_client.post(
+            "/api/files/upload",
+            params={"account_id": acc.id, "path": "Down/sub", "name": "up.txt"},
+            content=b"x",
+        ),
+        auth_client.post(  # a folder upload from above that lands inside the pair
+            "/api/files/upload",
+            params={"account_id": acc.id, "path": "", "name": "Down/new/up.txt"},
+            content=b"x",
+        ),
+    ]
+    for r in attempts:
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"] == ONE_WAY_MSG
+    assert sorted(str(p.relative_to(root)) for p in root.rglob("*")) == before
+    assert stub_queue.requests == []
+
+
+def test_local_to_remote_folders_take_adds_and_deletes(auth_client, one_way):
+    acc, root, _, up = one_way
+    r = _post(auth_client, "mkdir", account_id=acc.id, path="Up", name="New")
+    assert r.status_code == 200, r.text
+    r = _post(auth_client, "delete", account_id=acc.id, paths=["Up/b.txt"])
+    assert r.status_code == 200, r.text
+
+
+def test_browse_tells_the_folder_direction(auth_client, one_way):
+    acc, _, down, _ = one_way
+    r = auth_client.get("/api/browse", params={"account_id": acc.id, "path": "Down"})
+    assert r.json()["pair"]["direction"] == "REMOTE_TO_LOCAL"
+
+
+PENDING_MSG = "This has changes waiting to sync. Sync now, then try again."
+
+
+@pytest.mark.parametrize("pending", ["upload", "download", "conflict"])
+def test_drive_move_is_refused_while_changes_wait_to_sync(
+    auth_client, app, env, fake_rclone, save_catalog, db, pending
+):
+    from app.models import Conflict
+
+    acc, root, pair = env
+    _put(root, "Drive/Old/x.txt")
+    entries = [_entry("Old", is_dir=True), _entry("Old/x.txt")]
+    if pending == "upload":
+        _put(root, "Drive/Old/x.txt", b"edited here")
+    elif pending == "download":
+        entries.append(_entry("Old/only-on-drive.txt"))
+    else:
+        db.add(Conflict(pair_id=pair.id, path="Old/x.txt", local_variant="", remote_variant=""))
+        db.commit()
+    save_catalog(pair.id, entries)
+    _stat_missing(fake_rclone)
+    r = _post(auth_client, "rename", account_id=acc.id, path="Drive/Old", new_name="New")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == PENDING_MSG
+    assert (root / "Drive/Old/x.txt").exists() and _moves(fake_rclone) == []
+    r = _post(auth_client, "move", account_id=acc.id, paths=["Drive/Old/x.txt"], to="Drive")
+    assert r.status_code == (409 if pending != "download" else 200), r.text
+
+
+def test_answer_says_which_items_moved_on_drive_too(auth_client, env, fake_rclone, save_catalog):
+    acc, root, pair = env
+    _put(root, "Drive/on.txt")
+    _put(root, "Drive/off.txt")
+    (root / "Drive/Dest").mkdir()
+    save_catalog(pair.id, [_entry("on.txt"), _entry("Dest", is_dir=True)])
+    _stat_missing(fake_rclone)
+    r = _post(auth_client, "rename", account_id=acc.id, path="Drive/on.txt", new_name="on2.txt")
+    assert r.json()["drive"] == ["Drive/on2.txt"]
+    paths = ["Drive/on2.txt", "Drive/off.txt"]
+    r = _post(auth_client, "move", account_id=acc.id, paths=paths, to="Drive/Dest")
+    assert r.status_code == 200, r.text
+    # on2.txt: the cached listing already has its new name; off.txt isn't on Drive yet.
+    assert r.json()["drive"] == ["Drive/Dest/on2.txt"]
+
+
+def _catalog_paths(app, pair):
+    cat = app.state.catalog.store.load(pair.id)
+    return sorted([*cat.files, *cat.natives])
+
+
+def test_done_actions_update_the_cached_listing(
+    auth_client, app, env, fake_rclone, save_catalog, refreshes
+):
+    acc, root, pair = env
+    for rel in ("Drive/Old/x.txt", "Drive/gone.txt", "Drive/out.txt"):
+        _put(root, rel)
+    save_catalog(
+        pair.id,
+        [
+            _entry("Old", is_dir=True, id="F1"),
+            _entry("Old/x.txt", id="X1"),
+            CatalogEntry(path="Old/Plan.docx", is_dir=False, size=0, mtime=None, native="document"),
+            _entry("gone.txt"),
+            _entry("out.txt"),
+        ],
+    )
+    _stat_missing(fake_rclone)
+    assert (
+        _post(auth_client, "delete", account_id=acc.id, paths=["Drive/gone.txt"]).status_code == 200
+    )
+    r = _post(auth_client, "rename", account_id=acc.id, path="Drive/Old", new_name="New")
+    assert r.status_code == 200, r.text
+    (root / "Loose").mkdir()
+    r = _post(auth_client, "move", account_id=acc.id, paths=["Drive/out.txt"], to="Loose")
+    assert r.status_code == 200, r.text
+    assert _catalog_paths(app, pair) == ["New", "New/Plan.docx", "New/x.txt"]
+    assert app.state.catalog.store.load(pair.id).files["New/x.txt"].id == "X1"
+    listed = auth_client.get("/api/browse", params={"account_id": acc.id, "path": "Drive"}).json()
+    assert {i["name"]: i["status"] for i in listed["items"]} == {"New": "synced"}

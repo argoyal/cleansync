@@ -20,7 +20,8 @@ from app.models.enums import AccountStatus
 from app.paths import Layout
 from app.services.files import ops
 from app.services.files.ops import FileOpError, MoveStep, PartialError, UndoFailed
-from app.services.files.scope import Scope, join_rel, pair_for
+from app.services.files.scope import Scope, join_rel, pair_for, to_pair_rel
+from app.services.files.status import has_pending_changes
 from app.services.rclone.commands import RcloneEnv, lsjson_args, moveto_args, remote_target
 from app.services.rclone.errors import Failure, classify_failure
 from app.services.rclone.runner import RunResult, run_rclone
@@ -31,6 +32,7 @@ BUSY_MSG = "this sync pair is busy; try again when the current job finishes"
 DISABLED_MSG = "database integrity check failed; restore a backup (see docs/backup-recovery.md)"
 AUTH_REASON = "Google says the login expired or was revoked"
 DRIVE_TIMEOUT_S = 120.0
+PENDING_MSG = "This has changes waiting to sync. Sync now, then try again."
 
 
 def _drive_error(res: RunResult, what: str) -> str:
@@ -110,6 +112,7 @@ class _Planned:
     step: MoveStep
     src_target: str | None = None  # set when the item is moved on Drive too
     dst_target: str | None = None
+    done: bool = False
 
 
 @dataclass
@@ -124,6 +127,29 @@ class MovePlan:
     @property
     def touched(self) -> list[str]:
         return [r for p in self.items for r in (p.step.src, p.step.dst)]
+
+    @property
+    def moved_on_drive(self) -> list[str]:
+        """Account paths of the finished items that were moved on Google Drive too."""
+        return [p.step.dst for p in self.items if p.done and p.src_target]
+
+    def listing_changes(self) -> dict[int, tuple[list[str], list[tuple[str, str]]]]:
+        """Per pair, what the cached Drive listing should now say about the finished items:
+        pair paths that left the pair, and (old, new) paths of items moved on Drive too."""
+        out: dict[int, tuple[list[str], list[tuple[str, str]]]] = {}
+        for p in self.items:
+            if not p.done:
+                continue
+            if p.src_target and p.step.pair is not None:
+                out.setdefault(p.step.pair.id, ([], []))[1].append(
+                    (p.step.src_prel, p.step.dst_prel)
+                )
+                continue
+            src_pair = pair_for(self.scope.pairs, p.step.src)
+            if src_pair is not None and p.step.pair is None:
+                # Moved out of the pair: the next sync removes it from Drive.
+                out.setdefault(src_pair.id, ([], []))[0].append(to_pair_rel(src_pair, p.step.src))
+        return out
 
 
 def touched_pairs(scope: Scope, rels: Iterable[str]) -> list[int]:
@@ -161,9 +187,18 @@ def _target(account: Account, pair: SyncPair, prel: str) -> str:
 
 
 async def prepare_moves(
-    scope: Scope, steps: list[MoveStep], *, queue, catalog, drive: DriveMover
+    scope: Scope,
+    steps: list[MoveStep],
+    *,
+    queue,
+    catalog,
+    drive: DriveMover,
+    conflicts: dict[int, set[str]] | None = None,
 ) -> MovePlan:
-    """Decide which items move on Drive too, and check everything before anything moves."""
+    """Decide which items move on Drive too, and check everything before anything moves.
+
+    An item with changes still waiting to sync (or an open conflict) is not moved on Drive:
+    the sync would then compare the moved copies against an old state of the other side."""
     plan = MovePlan(scope, [_Planned(s) for s in steps])
     check_pairs(queue, touched_pairs(scope, plan.touched))
     account = scope.account
@@ -195,6 +230,15 @@ async def prepare_moves(
                 "This item is on Google Drive, and the Google login needs to be reconnected "
                 "before it can be moved."
             )
+        pending = await asyncio.to_thread(
+            has_pending_changes,
+            safe_join(scope.root, item.step.src),
+            src_prel,
+            listing,
+            (conflicts or {}).get(pair.id, set()),
+        )
+        if pending:
+            raise FileOpError(PENDING_MSG)
         dst_target = _target(account, pair, dst_prel)
         case_only = dst_prel.casefold() == src_prel.casefold()
         if not case_only and (
@@ -301,8 +345,9 @@ async def run_moves(plan: MovePlan, *, queue, drive: DriveMover) -> list[str]:
                 raise PartialError(
                     e,
                     done=[i.step.src for i in plan.items[:n]],
-                    failed=item.step.src,
+                    failed=[item.step.src],
                     not_done=[i.step.src for i in plan.items[n + 1 :]],
                 ) from e
+            item.done = True
             moved.append(item.step.dst)
     return moved

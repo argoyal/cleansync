@@ -141,6 +141,32 @@ def build_index(pair_id: int, local_dir: Path, catalog: Catalog | None) -> PairI
     return PairIndex(pair_id, key, local, status, dir_worst, total)
 
 
+def has_pending_changes(
+    item: Path, prel: str, catalog: Catalog | None, conflicts: set[str] = frozenset()
+) -> bool:
+    """Whether anything at or under one pair path waits to sync: an upload, a download or an
+    open conflict. Walks the disk now (not the cached index), so it is never out of date."""
+
+    def under(rel: str) -> bool:
+        return rel == prel or rel.startswith(prel + "/")
+
+    if any(under(c) for c in conflicts):
+        return True
+    if catalog is None or prel not in catalog.files:
+        # Nothing to compare with: the listing is older than this item (Drive confirmed it
+        # has it), so its statuses are unknown rather than pending.
+        return False
+    st = item.lstat()
+    is_dir = item.is_dir() and not item.is_symlink()
+    local = {prel: LocalEntry(0 if is_dir else st.st_size, st.st_mtime, is_dir)}
+    if is_dir:
+        local.update({f"{prel}/{rel}": e for rel, e in _walk(item).items()})
+    files = catalog.files
+    if any(compare(lf, files.get(rel)) != "synced" for rel, lf in local.items()):
+        return True
+    return any(under(rel) and rel not in local and not is_hidden(rel) for rel in files)
+
+
 @dataclass
 class Overlay:
     """Live facts laid over a cached index: open conflicts and a running sync."""

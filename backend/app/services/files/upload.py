@@ -16,7 +16,7 @@ from pathlib import Path
 from app.core.pathsafe import safe_join
 from app.paths import Layout
 from app.services.files.names import free_name, validate_name
-from app.services.files.ops import FileOpError
+from app.services.files.ops import FileOpError, refuse_one_way
 from app.services.files.scope import (
     UPLOAD_TEMP_PREFIX,
     Scope,
@@ -39,6 +39,7 @@ def plan_target(
     if len(parts) > MAX_DEPTH:
         raise FileOpError("that folder is nested too deeply", 422)
     parts = [validate_name(p) for p in parts]
+    refuse_one_way(scope, [join_rel(folder_rel, "/".join(parts))])
     if is_hidden(folder_rel):
         raise FileOpError("folder not found", 404)
     folder = safe_join(scope.root, folder_rel)

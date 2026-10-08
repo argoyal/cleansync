@@ -86,6 +86,7 @@ async def browse(
             status=pair.status,
             initialized=pair.initialized,
             local_subpath=pair.local_subpath,
+            direction=pair.direction,
         )
         if pair
         else None

@@ -36,6 +36,7 @@ from app.services.catalog.store import CatalogStore
 from app.services.drive_api.client import DriveApi
 from app.services.drive_api.tokens import TokenProvider
 from app.services.events.bus import EventBus
+from app.services.files.changes import FileChanges
 from app.services.files.moves import DriveMover
 from app.services.files.status import StatusIndexes
 from app.services.files.thumbs import Thumbnails
@@ -113,6 +114,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         finally:
             app.state.scheduler.shutdown()
             app.state.watcher.stop()
+            app.state.file_changes.stop()
             await app.state.queue.stop()
             await app.state.catalog.stop()
 
@@ -177,9 +179,14 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     )
     app.state.indexes = StatusIndexes(layout=layout, catalog=app.state.catalog)
     app.state.catalog.listeners.append(app.state.indexes.invalidate)
-    app.state.indexes.on_refreshed = lambda pair: app.state.bus.publish(
-        "files", {"account_id": pair.account_id}
+    # Follow-ups of file actions: one "files" event per burst, one sync after it.
+    app.state.file_changes = FileChanges(
+        bus=app.state.bus,
+        get_queue=lambda: app.state.queue,
+        indexes=app.state.indexes,
+        sync_delay_s=debounce,
     )
+    app.state.indexes.on_refreshed = lambda pair: app.state.file_changes.notify(pair.account_id)
     app.state.thumbs = Thumbnails(layout.thumbs_dir)
     app.state.drive_api = DriveApi(
         TokenProvider(settings=settings, rclone_env=app.state.rclone_env)

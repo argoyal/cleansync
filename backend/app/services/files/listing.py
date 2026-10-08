@@ -126,15 +126,16 @@ def list_folder(scope: Scope, rel: str, views: dict[int, PairView]) -> list[File
                 entry = view.catalog.files.get(prel) if view.catalog else None
                 if entry is not None and entry.is_dir != is_dir:
                     entry = None  # a folder and a file sharing a name are different items
-                if is_dir or prel in view.index.local:
+                if prel in view.index.local:
                     status = view.status(prel, is_dir)
                 else:  # appeared after the cached index was built: judge it now
+                    size = 0 if is_dir else st.st_size
                     fresh = (
                         "unknown"
                         if view.catalog is None
-                        else compare(LocalEntry(st.st_size, st.st_mtime, False), entry)
+                        else compare(LocalEntry(size, st.st_mtime, is_dir), entry)
                     )
-                    status = view.overlay.apply(prel, fresh, False)
+                    status = view.overlay.apply(prel, fresh, is_dir)
             items.append(
                 make_item(
                     path=path,

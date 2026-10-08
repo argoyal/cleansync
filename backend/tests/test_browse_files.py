@@ -226,3 +226,23 @@ def test_fresh_file_with_a_different_size_is_not_synced(
     _write(root, "n.txt")  # 3 bytes, same mtime, appears after the index
     items, _ = _browse(auth_client, acc)
     assert items["n.txt"]["status"] == "upload"
+
+
+def test_items_added_after_the_cached_index_are_judged_on_the_spot(
+    auth_client, setup, make_pair, save_catalog
+):
+    acc, root = setup
+    pair = make_pair(acc, initialized=True)
+    _write(root, "Work/a.txt")
+    save_catalog(
+        pair.id,
+        [CatalogEntry("Work", True, 0, NOW, id="W1"), CatalogEntry("Work/a.txt", False, 3, NOW)],
+    )
+    items, _ = _browse(auth_client, acc)  # builds and caches the index
+    assert items["Work"]["status"] == "synced"
+    # A folder upload adds a new folder without dropping the cached index.
+    _write(root, "Trip/day 1.jpg")
+    (root / "Empty").mkdir()
+    items, _ = _browse(auth_client, acc)
+    assert items["Trip"]["status"] == "upload" and items["Empty"]["status"] == "upload"
+    assert items["Work"]["status"] == "synced"

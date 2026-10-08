@@ -41,6 +41,7 @@ class PairBrief(BaseModel):
     status: str
     initialized: bool
     local_subpath: str
+    direction: str  # BIDIRECTIONAL | REMOTE_TO_LOCAL | LOCAL_TO_REMOTE
 
 
 class BrowseOut(BaseModel):
@@ -98,6 +99,8 @@ class OpOut(BaseModel):
     paths: list[str]
     # pair id -> what happened to the follow-up sync ("queued", "dirty", "not_initialized", ...)
     syncs: dict[int, str]
+    # Account paths (new names) of items that were renamed or moved on Google Drive too.
+    drive: list[str] = []
 
 
 class UploadOut(BaseModel):

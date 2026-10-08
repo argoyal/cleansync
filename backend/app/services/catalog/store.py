@@ -3,6 +3,8 @@ import logging
 import os
 import secrets
 import threading
+from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 
 from app.services.catalog.model import Catalog, CatalogEntry
@@ -79,6 +81,37 @@ class CatalogStore:
                 if e.path != entry.path or bool(e.native) != bool(entry.native)
             ]
             entries.append(entry)
+            self._save(Catalog.build(pair_id, current.refreshed_at, current.root_id, entries))
+
+    def apply_local_changes(
+        self,
+        pair_id: int,
+        removed: Iterable[str] = (),
+        moved: Iterable[tuple[str, str]] = (),
+    ) -> None:
+        """After a delete, rename or move from the UI: drop the removed pair paths (and what is
+        under them) and give moved items their new paths, so the browser shows no ghost
+        "waiting to download" items before the next full listing."""
+        gone, renames = list(removed), list(moved)
+        if not gone and not renames:
+            return
+
+        def under(path: str, base: str) -> bool:
+            return path == base or path.startswith(base + "/")
+
+        with self._lock:  # load -> modify -> save must not interleave with a refresh save
+            current = self.load(pair_id)
+            if current is None:
+                return
+            entries = []
+            for e in (*current.files.values(), *current.natives.values()):
+                if any(under(e.path, r) for r in gone):
+                    continue
+                for src, dst in renames:
+                    if under(e.path, src):
+                        e = replace(e, path=dst + e.path[len(src) :])
+                        break
+                entries.append(e)
             self._save(Catalog.build(pair_id, current.refreshed_at, current.root_id, entries))
 
     def delete(self, pair_id: int) -> None:
