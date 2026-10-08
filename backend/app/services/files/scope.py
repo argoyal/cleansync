@@ -4,6 +4,7 @@ Paths from the UI are "account paths": relative to storage/<email>/, '/'-separat
 A "pair path" is relative to a pair's own folder (what rclone and the catalog use).
 """
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,15 @@ def is_hidden_name(name: str) -> bool:
 
 def is_hidden(rel: str) -> bool:
     return any(is_hidden_name(part) for part in rel.split("/"))
+
+
+def resolves_to_hidden(root: Path, target: Path) -> bool:
+    """True when a symlink inside the account leads into a hidden name (or can't be resolved)."""
+    try:
+        rel = os.path.relpath(target.resolve(), root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return True
+    return is_hidden(rel.replace(os.sep, "/"))
 
 
 def join_rel(base: str, name: str) -> str:

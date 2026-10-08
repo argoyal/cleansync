@@ -456,3 +456,16 @@ def test_config_create_alias_args():
 def test_config_create_alias_args_guards(call):
     with pytest.raises(UnsafeArgument):
         call()
+
+
+def test_moveto_carries_trash_flag_and_needs_remote_targets():
+    args = c.moveto_args(ENV, "gd_1:Docs/Old", "gd_1:Docs/New")
+    assert args[5:8] == ["moveto", "gd_1:Docs/Old", "gd_1:Docs/New"]
+    assert args[5] in c.DELETE_CAPABLE
+    assert c.TRASH_FLAG in args
+    assert args[-1] == NO_PROMPT and args.count(NO_PROMPT) == 1
+    for bad in ("/local/path", "-rf", "Docs/Old"):
+        with pytest.raises(c.UnsafeArgument):
+            c.moveto_args(ENV, bad, "gd_1:x")
+        with pytest.raises(c.UnsafeArgument):
+            c.moveto_args(ENV, "gd_1:x", bad)

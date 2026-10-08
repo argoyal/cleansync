@@ -163,3 +163,38 @@ async def test_finish_listeners_hear_about_every_finished_job():
 
 def test_app_wires_the_watcher_to_finished_jobs(app):
     assert app.state.watcher.job_finished in app.state.queue._finish_listeners
+
+
+async def test_hold_keeps_jobs_from_starting_and_reruns_them_after():
+    runs = []
+
+    async def handler(pair_id, action, trigger):
+        runs.append((pair_id, action, trigger))
+
+    q = SyncQueue(handler)
+    with q.hold(1):
+        assert q.is_busy(1) and q.is_running(1)
+        assert q.request(1, "WATCHER") == "dirty"
+        assert q.request(1, "MANUAL", "resync") == "busy"
+        await asyncio.sleep(0.01)
+        assert runs == []
+    assert not q.is_running(1)
+    await q.wait_idle()
+    assert runs == [(1, "sync", "WATCHER")]
+
+
+async def test_hold_refuses_a_busy_pair():
+    import pytest
+
+    gate = asyncio.Event()
+
+    async def handler(pair_id, action, trigger):
+        await gate.wait()
+
+    q = SyncQueue(handler)
+    q.request(1, "MANUAL")
+    with pytest.raises(RuntimeError):
+        with q.hold(1):
+            pass
+    gate.set()
+    await q.wait_idle()

@@ -13,6 +13,7 @@ from app.api import (
     conflicts,
     docs,
     events,
+    fileops,
     files,
     health,
     jobs,
@@ -32,6 +33,7 @@ from app.services.app_settings import get_setting
 from app.services.catalog.service import CatalogService
 from app.services.catalog.store import CatalogStore
 from app.services.events.bus import EventBus
+from app.services.files.moves import DriveMover
 from app.services.files.status import StatusIndexes
 from app.services.files.thumbs import Thumbnails
 from app.services.queue import SyncQueue, make_handler
@@ -148,6 +150,9 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         # the watcher reads the database and disk: keep that off the event loop
         asyncio.get_running_loop().run_in_executor(None, app.state.watcher.reload)
 
+    app.state.drive_mover = DriveMover(
+        layout=layout, env=app.state.rclone_env, accounts=app.state.accounts
+    )
     app.state.indexes = StatusIndexes(layout=layout, catalog=app.state.catalog)
     app.state.catalog.listeners.append(app.state.indexes.invalidate)
     app.state.thumbs = Thumbnails(layout.thumbs_dir)
@@ -190,6 +195,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         browse.router,
         catalog.router,
         files.router,
+        fileops.router,
         serve.router,
         jobs.router,
         conflicts.router,

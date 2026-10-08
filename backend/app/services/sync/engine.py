@@ -41,7 +41,8 @@ _WAITING_FOR_USER = {
     AttentionReason.ACCESS_CHECK,
     AttentionReason.NEEDS_RESYNC,
 }
-_AUTOMATIC_TRIGGERS = {Trigger.SCHEDULE, Trigger.WATCHER, Trigger.RECOVERY}
+# File actions in the UI count as automatic: like a local edit, they wait for the user's review.
+_AUTOMATIC_TRIGGERS = {Trigger.SCHEDULE, Trigger.WATCHER, Trigger.RECOVERY, Trigger.APP}
 
 
 def backoff(fail_count: int) -> timedelta:

@@ -605,3 +605,137 @@ async def test_real_config_dump_reads_an_encrypted_config(tmp_path):
     res = await run_rclone(c.config_dump_args(env), env.env(), log_path=None, on_stdout=out.append)
     assert res.exit_code == 0, res.error_tail
     assert _json.loads("\n".join(out))["local_1"]["type"] == "alias"
+
+
+async def test_real_rename_on_both_sides_leaves_the_next_sync_nothing_to_do(tmp_path):
+    """A folder renamed through DriveSync moves on Drive and on disk; bisync then sees the same
+    change on both sides: nothing to copy, nothing to delete, no conflicts."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, Conflict, SyncJob, SyncPair
+    from app.paths import Layout
+    from app.services.catalog.service import CatalogService
+    from app.services.events.bus import EventBus
+    from app.services.files import ops
+    from app.services.files.moves import DriveMover, prepare_moves, run_moves
+    from app.services.files.scope import load_scope
+    from app.services.queue import SyncQueue
+    from app.services.sync.engine import SyncEngine
+    from app.services.sync.filters import refresh_pair_filters
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            raise AssertionError("no login problem expected")
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text("[gd_alice]\ntype = local\n")  # stands in for Google Drive
+    remote_dir = tmp_path / "drive"
+    bus = EventBus()
+    engine = SyncEngine(
+        layout=layout, session_factory=sf, bus=bus, rclone_env=env, accounts=_Accounts()
+    )
+    catalog = CatalogService(
+        layout=layout, session_factory=sf, bus=bus, rclone_env=env, accounts=_Accounts()
+    )
+    drive = DriveMover(layout=layout, env=env, accounts=_Accounts())
+
+    async def never(*a):
+        raise AssertionError("the queue must not run anything here")
+
+    queue = SyncQueue(never)
+    try:
+        with sf() as db:
+            acc = Account(email="alice@example.com", remote_name="gd_alice")
+            db.add(acc)
+            db.commit()
+            pair = SyncPair(
+                account_id=acc.id,
+                name="Docs",
+                local_subpath="",
+                remote_path=str(remote_dir),
+                initialized=True,
+                status="HEALTHY",
+                max_deletions=10,
+            )
+            db.add(pair)
+            db.commit()
+            refresh_pair_filters(db, layout, pair)
+            local_dir = layout.account_dir(acc.email)
+            for d in (local_dir, remote_dir):
+                (d / "Old" / "sub").mkdir(parents=True, exist_ok=True)
+                (d / "RCLONE_TEST").write_text("x")
+                (d / "Old" / "a.txt").write_text("alpha")
+                (d / "Old" / "sub" / "b.txt").write_text("beta")
+                for i in range(6):
+                    (d / f"f{i}.txt").write_text("x")
+            seed = await run_rclone(
+                c.bisync_args(env, engine.bisync_target(acc, pair), dry_run=False, resync=True),
+                env.env(),
+                log_path=None,
+            )
+            assert seed.exit_code == 0, seed.error_tail
+            pair_id = pair.id
+        listing = await catalog.refresh(pair_id)
+        assert listing is not None and "Old/sub/b.txt" in listing.files
+
+        with sf() as db:
+            scope = load_scope(db, layout, acc.id)
+        step = ops.plan_rename(scope, "Old", "New")
+        plan = await prepare_moves(scope, [step], queue=queue, catalog=catalog, drive=drive)
+        assert plan.drive_pairs == {pair_id}
+        assert await run_moves(plan, queue=queue, drive=drive) == ["New"]
+        for side in (local_dir, remote_dir):
+            assert not (side / "Old").exists()
+            assert (side / "New" / "a.txt").read_text() == "alpha"
+            assert (side / "New" / "sub" / "b.txt").read_text() == "beta"
+
+        # A plain dry run (bisync's 50% brake lifted, as the engine's dry run does).
+        with sf() as db:
+            target = engine.bisync_target(db.get(Account, acc.id), db.get(SyncPair, pair_id))
+        counters = Counters()
+        res = await run_rclone(
+            c.bisync_args(env, target, dry_run=True, max_delete_percent=100),
+            env.env(),
+            log_path=tmp_path / "dry.log",
+            on_line=counters.feed,
+        )
+        assert res.exit_code == 0, res.error_tail
+        assert counters.bisync_successful, (tmp_path / "dry.log").read_text()
+        assert counters.planned == [], counters.planned
+        assert (counters.deletions, counters.uploaded, counters.downloaded) == (0, 0, 0)
+        assert int(counters.final_stats["deletes"]) == 0
+        assert int(counters.final_stats["transfers"]) == 0
+
+        # The real cycle through the engine: dry run, gate, real run.
+        await engine.run_pair(pair_id, "APP")
+        with sf() as db:
+            jobs = db.scalars(select(SyncJob).order_by(SyncJob.id)).all()
+            assert [(j.kind, j.state) for j in jobs] == [
+                ("DRY_RUN", "SUCCESS"),
+                ("BISYNC", "SUCCESS"),
+            ], [j.error_message for j in jobs]
+            assert jobs[0].planned_deletions == 0
+            assert jobs[1].files_changed == 0 and jobs[1].conflicts == 0
+            assert db.scalars(select(Conflict)).all() == []
+            assert db.get(SyncPair, pair_id).status == "HEALTHY"
+        for side in (local_dir, remote_dir):
+            assert sorted(p.name for p in side.iterdir() if p.name != "RCLONE_TEST") == [
+                "New",
+                *[f"f{i}.txt" for i in range(6)],
+            ]
+    finally:
+        await queue.stop()
+        eng.dispose()

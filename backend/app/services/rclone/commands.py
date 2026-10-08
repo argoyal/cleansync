@@ -234,6 +234,18 @@ def lsjson_args(
     return args + [NO_PROMPT_FLAG]
 
 
+def moveto_args(env: RcloneEnv, src: str, dst: str) -> list[str]:
+    """Move one file or folder within Drive. A server-side move keeps file IDs and sharing."""
+    return env.base() + [
+        "moveto",
+        _remote(src),
+        _remote(dst),
+        TRASH_FLAG,
+        *LOG_FLAGS,
+        NO_PROMPT_FLAG,
+    ]
+
+
 def about_args(env: RcloneEnv, remote_name: str) -> list[str]:
     return env.base() + ["about", f"{_remote_name(remote_name)}:", "--json", NO_PROMPT_FLAG]
 

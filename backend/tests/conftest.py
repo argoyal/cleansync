@@ -1,3 +1,4 @@
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -187,6 +188,7 @@ class StubQueue:
         self.requests: list[tuple[int, str, str]] = []
         self.answer = "queued"
         self.running: set[int] = set()
+        self.held: list[int] = []
         self.disabled_reason: str | None = None
 
     def request(self, pair_id, trigger, action="sync"):
@@ -201,6 +203,11 @@ class StubQueue:
 
     def add_finish_listener(self, listener):
         pass
+
+    @contextlib.contextmanager
+    def hold(self, pair_id):
+        self.held.append(pair_id)
+        yield
 
     async def stop(self):
         pass

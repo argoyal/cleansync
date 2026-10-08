@@ -1,7 +1,5 @@
 """Open and download files from the browser: inline view with Range, download, folder zip."""
 
-import os
-from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -12,7 +10,7 @@ from app.api.files import clean_path, get_scope
 from app.auth.deps import AuthContext, get_db, require_user
 from app.core.pathsafe import UnsafePath, safe_join
 from app.services.files.mimes import guess_mime, serve_policy
-from app.services.files.scope import is_hidden
+from app.services.files.scope import resolves_to_hidden
 from app.services.files.thumbs import ThumbBusy, ThumbError
 from app.services.files.zipstream import zip_folder
 
@@ -37,15 +35,6 @@ def _csp_for(served: str) -> str:
     return FILE_CSP
 
 
-def _resolves_to_hidden(root: Path, target: Path) -> bool:
-    """True when a symlink inside the account leads into a hidden name."""
-    try:
-        rel = os.path.relpath(target.resolve(), root.resolve())
-    except (OSError, RuntimeError, ValueError):
-        return True
-    return is_hidden(rel.replace(os.sep, "/"))
-
-
 def content_disposition(kind: str, filename: str) -> str:
     fallback = "".join(
         c if c.isascii() and c not in '"\\' and c.isprintable() else "_" for c in filename
@@ -68,7 +57,7 @@ def serve_file(
         target = safe_join(scope.root, rel)
     except UnsafePath as e:
         raise HTTPException(422, str(e)) from e
-    if not rel or not target.is_file() or _resolves_to_hidden(scope.root, target):
+    if not rel or not target.is_file() or resolves_to_hidden(scope.root, target):
         raise HTTPException(404, "file not found")
     served, inline_ok = serve_policy(guess_mime(target.name))
     kind = "inline" if inline_ok and not download else "attachment"
@@ -95,7 +84,7 @@ def download_zip(
         folder = safe_join(scope.root, rel)
     except UnsafePath as e:
         raise HTTPException(422, str(e)) from e
-    if not folder.is_dir() or _resolves_to_hidden(scope.root, folder):
+    if not folder.is_dir() or resolves_to_hidden(scope.root, folder):
         raise HTTPException(404, "folder not found")
     name = folder.name if rel else scope.account.email
     return StreamingResponse(
@@ -122,7 +111,7 @@ async def thumbnail(
         target = safe_join(scope.root, rel)
     except UnsafePath as e:
         raise HTTPException(422, str(e)) from e
-    if not rel or not target.is_file() or _resolves_to_hidden(scope.root, target):
+    if not rel or not target.is_file() or resolves_to_hidden(scope.root, target):
         raise HTTPException(404, "file not found")
     try:
         out = await request.app.state.thumbs.get(target)

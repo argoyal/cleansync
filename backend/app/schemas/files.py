@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.common import UtcDatetime
 
@@ -67,3 +67,32 @@ class StorageOut(BaseModel):
     drive: DriveQuota
     disk: DiskUsage
     synced_bytes: int | None  # bytes on disk inside this account's sync pairs
+
+
+class MkdirIn(BaseModel):
+    account_id: int
+    path: str = ""  # the folder to create it in
+    name: str = Field(max_length=1024)
+
+
+class RenameIn(BaseModel):
+    account_id: int
+    path: str
+    new_name: str = Field(max_length=1024)
+
+
+class MoveIn(BaseModel):
+    account_id: int
+    paths: list[str] = Field(min_length=1, max_length=1000)
+    to: str = ""
+
+
+class DeleteIn(BaseModel):
+    account_id: int
+    paths: list[str] = Field(min_length=1, max_length=1000)
+
+
+class OpOut(BaseModel):
+    paths: list[str]
+    # pair id -> what happened to the follow-up sync ("queued", "dirty", "not_initialized", ...)
+    syncs: dict[int, str]

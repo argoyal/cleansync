@@ -48,6 +48,7 @@ class Trigger(StrEnum):
     RESOLVE = "RESOLVE"
     RECOVERY = "RECOVERY"
     RESYNC = "RESYNC"
+    APP = "APP"  # a file action in the web UI (new folder, rename, move, delete)
 
 
 class ConflictState(StrEnum):
