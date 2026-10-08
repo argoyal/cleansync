@@ -411,3 +411,293 @@ async def test_app_triggered_sync_waits_for_a_blocked_pair(
     )
     assert await sync_engine.run_pair(pair.id, "APP") is None
     assert fake_rclone.calls() == []
+
+
+# ---- fix round 1 ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "trailing.",
+        "CON",
+        "con.txt",
+        "Lpt9.log",
+        "COM1",
+        "nul.tar.gz",
+        "a\\b",
+        "a:b",
+        "a*b",
+        "a?b",
+        'a"b',
+        "a<b",
+        "a>b",
+        "a|b",
+        "x\x85y",
+        "evil‮txt.exe",
+        "a⁦b",
+    ],
+)
+def test_names_windows_cannot_hold_are_refused(name):
+    from app.core.pathsafe import UnsafePath
+    from app.services.files.names import validate_name
+
+    with pytest.raises(UnsafePath):
+        validate_name(name)
+
+
+def test_names_are_nfc_normalized_and_lookalikes_are_fine(auth_client, env):
+    from app.services.files.names import validate_name
+
+    assert validate_name("CONSOLE.txt") == "CONSOLE.txt"
+    assert validate_name("comma") == "comma"
+    acc, root, _ = env
+    r = _post(auth_client, "mkdir", account_id=acc.id, path="Drive", name="café")
+    assert r.json()["paths"] == ["Drive/café"]
+
+
+def test_item_missing_from_an_old_listing_is_checked_on_drive(
+    auth_client, env, fake_rclone, save_catalog
+):
+    acc, root, pair = env
+    _put(root, "Drive/new.txt")
+    save_catalog(pair.id, [])  # listed before new.txt reached Drive
+    fake_rclone.on("lsjson", match=[f"{acc.remote_name}:new.txt"], stdout=['{"Path":"new.txt"}'])
+    _stat_missing(fake_rclone)
+    r = _post(auth_client, "rename", account_id=acc.id, path="Drive/new.txt", new_name="n.txt")
+    assert r.status_code == 200, r.text
+    [args] = _moves(fake_rclone)
+    assert f"{acc.remote_name}:new.txt" in args and f"{acc.remote_name}:n.txt" in args
+
+
+def test_no_listing_and_no_login_refuses_moves_in_an_initialized_pair(
+    auth_client, app, env, fake_rclone
+):
+    from app.models import Account
+
+    acc, root, _ = env
+    _put(root, "Drive/a.txt")
+    with app.state.session_factory() as db:
+        db.get(Account, acc.id).status = "NEEDS_REAUTH"
+        db.commit()
+    r = _post(auth_client, "rename", account_id=acc.id, path="Drive/a.txt", new_name="b.txt")
+    assert r.status_code == 409
+    assert fake_rclone.calls() == [] and (root / "Drive/a.txt").exists()
+
+
+def test_delete_is_refused_while_the_pair_is_busy(auth_client, env, stub_queue):
+    acc, root, pair = env
+    _put(root, "Drive/a.txt")
+    stub_queue.running.add(pair.id)
+    assert _post(auth_client, "delete", account_id=acc.id, paths=["Drive/a.txt"]).status_code == 409
+    assert (root / "Drive/a.txt").exists() and stub_queue.requests == []
+    stub_queue.running.clear()
+    assert _post(auth_client, "delete", account_id=acc.id, paths=["Drive/a.txt"]).status_code == 200
+    assert stub_queue.held == [pair.id]
+
+
+def test_partial_delete_says_what_was_done(auth_client, env, stub_queue, monkeypatch):
+    from app.services.files import ops
+
+    acc, root, pair = env
+    for n in ("a", "b", "c"):
+        _put(root, f"Drive/{n}.txt")
+    real = ops.shutil.move
+
+    def flaky(src, dst):
+        if src.endswith("b.txt"):
+            raise PermissionError(13, "Permission denied")
+        return real(src, dst)
+
+    monkeypatch.setattr(ops.shutil, "move", flaky)
+    paths = ["Drive/a.txt", "Drive/b.txt", "Drive/c.txt"]
+    r = _post(auth_client, "delete", account_id=acc.id, paths=paths)
+    assert r.status_code == 403
+    detail = r.json()["detail"]
+    assert detail["done"] == ["Drive/a.txt"] and detail["failed"] == "Drive/b.txt"
+    assert detail["not_done"] == ["Drive/c.txt"] and "not allowed" in detail["message"]
+    assert not (root / "Drive/a.txt").exists() and (root / "Drive/c.txt").exists()
+    assert stub_queue.requests == [(pair.id, "APP", "sync")]  # a.txt is gone: sync anyway
+
+
+def test_partial_move_says_what_was_done(auth_client, env, fake_rclone, save_catalog):
+    acc, root, pair = env
+    for n in ("a", "b", "c"):
+        _put(root, f"Drive/{n}.txt")
+    (root / "Drive/Dest").mkdir()
+    save_catalog(pair.id, [_entry("a.txt"), _entry("b.txt"), _entry("c.txt")])
+    fake_rclone.on("moveto", match=[f"{acc.remote_name}:b.txt"], exit=1, stderr=["Error: 403"])
+    _stat_missing(fake_rclone)
+    paths = ["Drive/a.txt", "Drive/b.txt", "Drive/c.txt"]
+    r = _post(auth_client, "move", account_id=acc.id, paths=paths, to="Drive/Dest")
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert (detail["done"], detail["failed"], detail["not_done"]) == (
+        ["Drive/a.txt"],
+        "Drive/b.txt",
+        ["Drive/c.txt"],
+    )
+    assert (root / "Drive/Dest/a.txt").exists() and (root / "Drive/b.txt").exists()
+
+
+def test_repeated_and_nested_selections_are_done_once(auth_client, app, env, fake_rclone):
+    acc, root, _ = env
+    _stat_missing(fake_rclone)
+    _put(root, "Drive/F/x.txt")
+    _put(root, "Drive/G/y.txt")
+    (root / "Drive/Dest").mkdir()
+    r = _post(
+        auth_client,
+        "move",
+        account_id=acc.id,
+        paths=["Drive/F", "Drive/F/x.txt", "Drive/F"],
+        to="Drive/Dest",
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["paths"] == ["Drive/Dest/F"] and (root / "Drive/Dest/F/x.txt").exists()
+    r = _post(
+        auth_client, "delete", account_id=acc.id, paths=["Drive/G/y.txt", "Drive/G", "Drive/G"]
+    )
+    assert r.status_code == 200, r.text
+    [kept] = r.json()["paths"]
+    assert (app.state.layout.backups_dir / kept / "y.txt").read_bytes() == b"x"
+
+
+def test_each_delete_gets_a_new_recovery_folder(auth_client, app, env, monkeypatch):
+    from app.services.files import ops
+
+    acc, root, pair = env
+    _put(root, "Drive/a.txt")
+    tokens = iter(["aaaa", "bbbb"])
+    monkeypatch.setattr(ops.secrets, "token_hex", lambda n: next(tokens))
+    monkeypatch.setattr(
+        "app.api.fileops.utcnow", lambda: __import__("datetime").datetime(2026, 10, 8, 12, 0, 0)
+    )
+    day = app.state.layout.backups_dir / acc.email / str(pair.id) / "2026-10-08"
+    (day / ".drivesync-deleted-120000-aaaa").mkdir(parents=True)  # an earlier delete
+    r = _post(auth_client, "delete", account_id=acc.id, paths=["Drive/a.txt"])
+    assert r.status_code == 200, r.text
+    assert "/.drivesync-deleted-120000-bbbb/" in r.json()["paths"][0]
+    assert list((day / ".drivesync-deleted-120000-aaaa").iterdir()) == []
+
+
+def test_failed_undo_says_the_next_sync_will_reconcile(
+    auth_client, app, env, fake_rclone, save_catalog, monkeypatch
+):
+    from app.services.files import ops
+
+    acc, root, pair = env
+    _put(root, "Drive/a.txt")
+    save_catalog(pair.id, [_entry("a.txt")])
+    _stat_missing(fake_rclone)
+    calls = []
+
+    async def move(account, src, dst):
+        calls.append((src, dst))
+        if len(calls) > 1:
+            raise ops.FileOpError("Google Drive refused to move the item: offline", 502)
+
+    monkeypatch.setattr(app.state.drive_mover, "move", move)
+
+    def refuse(scope, step):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(ops, "apply_local", refuse)
+    r = _post(auth_client, "rename", account_id=acc.id, path="Drive/a.txt", new_name="b.txt")
+    assert r.status_code == 403
+    assert "next sync will reconcile" in r.json()["detail"]
+    assert len(calls) == 2
+
+
+async def test_a_cancelled_request_still_moves_drive_back(layout, monkeypatch):
+    import asyncio
+
+    from app.services.files import moves, ops
+
+    moved = []
+
+    class Drive:
+        async def move(self, account, src, dst):
+            moved.append((src, dst))
+
+    class Queue:
+        @staticmethod
+        def hold(pid):
+            import contextlib
+
+            return contextlib.nullcontext()
+
+    def cancelled(scope, step):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(ops, "apply_local", cancelled)
+    scope = type("S", (), {"account": None, "pairs": [], "root": layout.root})()
+    step = ops.MoveStep("a", "b", None)
+    plan = moves.MovePlan(scope, [moves._Planned(step, "gd:a", "gd:b")])
+    with pytest.raises(asyncio.CancelledError):
+        await moves.run_moves(plan, queue=Queue(), drive=Drive())
+    assert moved == [("gd:a", "gd:b"), ("gd:b", "gd:a")]
+
+
+def test_moving_a_folder_into_itself_ignores_case(auth_client, env):
+    acc, root, _ = env
+    (root / "Drive/F/G").mkdir(parents=True)
+    (root / "Drive/f/G").mkdir(parents=True, exist_ok=True)  # the same folder on macOS
+    r = _post(auth_client, "move", account_id=acc.id, paths=["Drive/F"], to="Drive/f/G")
+    assert r.status_code == 422
+
+
+@pytest.fixture
+def drive_mover(layout, fake_rclone):
+    from app.services.files.moves import DriveMover
+    from app.services.rclone.commands import RcloneEnv
+
+    class Accounts:
+        async def mark_needs_reauth(self, *a):
+            pass
+
+    env = RcloneEnv(
+        binary=fake_rclone.binary,
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    return DriveMover(layout=layout, env=env, accounts=Accounts(), timeout_s=1.0)
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"exit": 1, "stderr": [jl("Failed to lsjson: error 500", level="error")]},
+        {"exit": 1, "stderr": [jl("Failed to lsjson: object not found", level="error")]},
+        {"exit": 0, "stdout": ["not json"]},
+        {"exit": 0, "stdout": []},
+    ],
+)
+async def test_exists_fails_closed_on_unclear_answers(drive_mover, fake_rclone, rule):
+    from app.services.files.ops import FileOpError
+
+    fake_rclone.on("lsjson", **rule)
+    acc = type("A", (), {"id": 1})()
+    with pytest.raises(FileOpError) as e:
+        await drive_mover.exists(acc, "gd_1:a.txt")
+    assert e.value.status == 502
+
+
+@pytest.mark.parametrize(("code", "found"), [(3, False), (4, False)])
+async def test_exists_reads_rclone_not_found_exit_codes(drive_mover, fake_rclone, code, found):
+    fake_rclone.on("lsjson", exit=code)
+    assert await drive_mover.exists(type("A", (), {"id": 1})(), "gd_1:a.txt") is found
+
+
+async def test_drive_calls_are_bounded_and_rclone_is_stopped(drive_mover, fake_rclone):
+    import time
+
+    from app.services.files.ops import FileOpError
+
+    fake_rclone.on("moveto", sleep=20)
+    started = time.monotonic()
+    with pytest.raises(FileOpError) as e:
+        await drive_mover.move(type("A", (), {"id": 1})(), "gd_1:a", "gd_1:b")
+    assert e.value.status == 504
+    assert time.monotonic() - started < 10

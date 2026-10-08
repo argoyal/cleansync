@@ -40,18 +40,32 @@ def os_error(e: OSError) -> HTTPException:
 
 
 def _http(e: Exception) -> HTTPException:
+    if isinstance(e, ops.PartialError):
+        inner = _http(e.cause)
+        detail = {
+            "message": inner.detail,
+            "done": e.done,  # paths as sent: these items were changed
+            "failed": e.failed,
+            "not_done": e.not_done,  # left as they were
+        }
+        return HTTPException(inner.status_code, detail)
+    if isinstance(e, ops.UndoFailed):
+        inner = _http(e.cause)
+        return HTTPException(inner.status_code, f"{inner.detail} {ops.UNDO_FAILED}")
     if isinstance(e, UnsafePath):
         return HTTPException(422, str(e))
     if isinstance(e, ops.FileOpError):
         return HTTPException(e.status, str(e))
-    assert isinstance(e, OSError)
-    return os_error(e)
+    if isinstance(e, OSError):
+        return os_error(e)
+    log.exception("file action failed unexpectedly", exc_info=e)
+    return HTTPException(500, "the file action failed unexpectedly")
 
 
 async def guarded(awaitable):
     try:
         return await awaitable
-    except (UnsafePath, ops.FileOpError, OSError) as e:
+    except Exception as e:
         raise _http(e) from e
 
 
@@ -143,6 +157,20 @@ async def delete(
 ):
     refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
-    rels = [clean_path(p) for p in body.paths]
-    kept = await run_op(ops.delete_to_recovery, request.app.state.layout, scope, rels, utcnow())
-    return OpOut(paths=kept, syncs=after_change(request, scope, rels))
+    rels = ops.prune_selection([clean_path(p) for p in body.paths])
+    queue = request.app.state.queue
+    pair_ids = moves.touched_pairs(scope, rels)
+    try:
+        moves.check_pairs(queue, pair_ids)  # before anything moves
+    except ops.FileOpError as e:
+        raise _http(e) from e
+    try:
+        # No await between the check and the hold, so no sync can start in between.
+        with moves.hold_pairs(queue, pair_ids):
+            kept = await run_op(
+                ops.delete_to_recovery, request.app.state.layout, scope, rels, utcnow()
+            )
+    finally:
+        # Also after a failure part-way: earlier items may be gone already.
+        syncs = after_change(request, scope, rels)
+    return OpOut(paths=kept, syncs=syncs)

@@ -33,6 +33,33 @@ class FileOpError(Exception):
         self.status = status
 
 
+UNDO_FAILED = (
+    "Google Drive was renamed already and could not be changed back; the next sync will "
+    "reconcile it."
+)
+
+
+class UndoFailed(FileOpError):
+    """The disk move failed after the Drive move, and the Drive move could not be undone."""
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(f"{cause} {UNDO_FAILED}", getattr(cause, "status", 500))
+        self.cause = cause
+
+
+class PartialError(FileOpError):
+    """A multi-item action stopped part-way: some items were done, one failed."""
+
+    def __init__(
+        self, cause: Exception, *, done: list[str], failed: str, not_done: list[str]
+    ) -> None:
+        super().__init__(str(cause), getattr(cause, "status", 500))
+        self.cause = cause
+        self.done = done
+        self.failed = failed
+        self.not_done = not_done
+
+
 PAIR_FOLDER_MSG = (
     "This folder is a sync pair's folder or holds one. Change or remove the pair in "
     "Sync activity first."
@@ -41,6 +68,24 @@ CROSS_PAIR_MSG = (
     "Items can't be moved straight from one sync pair to another: Google Drive would see a "
     "delete in one and a new upload in the other. Move them on Google Drive instead."
 )
+
+
+def prune_selection(rels: list[str]) -> list[str]:
+    """Drop repeated paths and paths inside another selected folder (they go along with it)."""
+    unique = list(dict.fromkeys(rels))
+    chosen = set(unique)
+    out = []
+    for rel in unique:
+        parent = rel
+        inside = False
+        while "/" in parent:
+            parent = parent_rel(parent)
+            if parent in chosen:
+                inside = True
+                break
+        if not inside and not (rel and "" in chosen):
+            out.append(rel)
+    return out
 
 
 def _existing(scope: Scope, rel: str) -> Path:
@@ -121,11 +166,12 @@ def plan_move(scope: Scope, rels: list[str], to: str) -> list[MoveStep]:
     _folder(scope, to)
     plan: list[MoveStep] = []
     names: set[str] = set()
-    for rel in rels:
+    for rel in prune_selection(rels):
         if touches_pair_root(scope.pairs, rel):
             raise FileOpError(PAIR_FOLDER_MSG)
         src = _existing(scope, rel)
-        if to == rel or to.startswith(rel + "/"):
+        folded, to_folded = rel.casefold(), to.casefold()
+        if to_folded == folded or to_folded.startswith(folded + "/"):
             raise FileOpError("a folder can't be moved into itself", 422)
         if parent_rel(rel) == to:
             continue  # already there
@@ -148,30 +194,57 @@ def apply_local(scope: Scope, step: MoveStep) -> None:
     os.rename(src, dest)
 
 
-def recovery_root(
-    layout: Layout, scope: Scope, rel: str, when: datetime, run: str
-) -> tuple[Path, str]:
-    """Where a deleted item goes: backups/<email>/<pair id or 'unsynced'>/<date>/<run>/..."""
+def recovery_root(layout: Layout, scope: Scope, rel: str, when: datetime) -> tuple[Path, str]:
+    """Where a deleted item goes: backups/<email>/<pair id or 'unsynced'>/<date>/, then a new
+    .drivesync-deleted-<HHMMSS>-<hex>/ folder per delete, then the path inside the pair."""
     pair = pair_for(scope.pairs, rel)
     bucket = str(pair.id) if pair else UNSYNCED
     inner = to_pair_rel(pair, rel) if pair else rel
-    base = layout.backups_dir / scope.account.email / bucket / when.date().isoformat() / run
-    return base, inner
+    return layout.backups_dir / scope.account.email / bucket / when.date().isoformat(), inner
+
+
+def _new_run_folder(base_day: Path, when: datetime) -> Path:
+    """A fresh Recovery folder for this delete; never reuses one that already exists."""
+    base_day.mkdir(parents=True, exist_ok=True)
+    for _ in range(20):
+        run = base_day / f".drivesync-deleted-{when:%H%M%S}-{secrets.token_hex(2)}"
+        try:
+            run.mkdir()
+            return run
+        except FileExistsError:
+            continue
+    raise FileOpError("could not create a new Recovery folder", 500)
 
 
 def delete_to_recovery(layout: Layout, scope: Scope, rels: list[str], when: datetime) -> list[str]:
-    """Move items into a new Recovery folder for this delete; returns where they went."""
-    run = f".drivesync-deleted-{when:%H%M%S}-{secrets.token_hex(2)}"
+    """Move items into a new Recovery folder for this delete; returns where they went.
+
+    With several items, a failure part-way raises PartialError naming what was done.
+    """
     sources = []
-    for rel in rels:
+    for rel in prune_selection(rels):
         if touches_pair_root(scope.pairs, rel):
             raise FileOpError(PAIR_FOLDER_MSG)
         sources.append((rel, _existing(scope, rel)))
+    runs: dict[Path, Path] = {}  # backups/<email>/<bucket>/<date> -> this delete's folder
     kept: list[str] = []
-    for rel, src in sources:
-        base, inner = recovery_root(layout, scope, rel, when, run)
-        dest = safe_join(base, inner)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dest))  # a rename on the same disk, so instant
+    for n, (rel, src) in enumerate(sources):
+        try:
+            day, inner = recovery_root(layout, scope, rel, when)
+            if day not in runs:
+                runs[day] = _new_run_folder(day, when)
+            dest = safe_join(runs[day], inner)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            # A rename when backups are on the same disk as storage; otherwise copy, then remove.
+            shutil.move(str(src), str(dest))
+        except Exception as e:
+            if len(sources) == 1:
+                raise
+            raise PartialError(
+                e,
+                done=[r for r, _ in sources[:n]],
+                failed=rel,
+                not_done=[r for r, _ in sources[n + 1 :]],
+            ) from e
         kept.append(str(dest.relative_to(layout.backups_dir)))
     return kept

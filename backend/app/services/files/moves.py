@@ -10,14 +10,15 @@ import asyncio
 import contextlib
 import json
 import logging
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 
 from app.models import Account, SyncPair
 from app.models.enums import AccountStatus
 from app.paths import Layout
 from app.services.files import ops
-from app.services.files.ops import FileOpError, MoveStep
-from app.services.files.scope import Scope, join_rel
+from app.services.files.ops import FileOpError, MoveStep, PartialError, UndoFailed
+from app.services.files.scope import Scope, join_rel, pair_for
 from app.services.rclone.commands import RcloneEnv, lsjson_args, moveto_args, remote_target
 from app.services.rclone.errors import Failure, classify_failure
 from app.services.rclone.runner import RunResult, run_rclone
@@ -27,6 +28,7 @@ log = logging.getLogger(__name__)
 BUSY_MSG = "this sync pair is busy; try again when the current job finishes"
 DISABLED_MSG = "database integrity check failed; restore a backup (see docs/backup-recovery.md)"
 AUTH_REASON = "Google says the login expired or was revoked"
+DRIVE_TIMEOUT_S = 120.0
 
 
 def _drive_error(res: RunResult, what: str) -> str:
@@ -37,20 +39,39 @@ def _drive_error(res: RunResult, what: str) -> str:
 class DriveMover:
     """Server-side moves and existence checks on an account's Google Drive."""
 
-    def __init__(self, *, layout: Layout, env: RcloneEnv, accounts, runner=run_rclone) -> None:
+    def __init__(
+        self,
+        *,
+        layout: Layout,
+        env: RcloneEnv,
+        accounts,
+        runner=run_rclone,
+        timeout_s: float = DRIVE_TIMEOUT_S,
+    ) -> None:
         self.layout = layout
         self.env = env
         self.accounts = accounts
         self.runner = runner
+        self.timeout_s = timeout_s
 
     async def _rclone(self, args: list[str], out: list[str] | None = None) -> RunResult:
-        return await self.runner(
+        call = self.runner(
             args,
             self.env.env(),
             log_path=self.layout.logs_dir / "rclone-fileops.log",
             on_stdout=out.append if out is not None else None,
             secrets=[self.env.config_pass],
         )
+        try:
+            # On timeout the runner is cancelled, and its cleanup stops rclone.
+            return await asyncio.wait_for(call, self.timeout_s)
+        except TimeoutError:
+            log.warning("rclone did not finish a file action within %ss", self.timeout_s)
+            raise FileOpError(
+                "Google Drive did not answer in time. Check the item on Google Drive; the "
+                "next sync will reconcile any change.",
+                504,
+            ) from None
 
     async def _failed(self, account: Account, res: RunResult, what: str) -> FileOpError:
         if classify_failure(res.exit_code, res.error_tail) == Failure.AUTH:
@@ -65,7 +86,7 @@ class DriveMover:
         res = await self._rclone(lsjson_args(self.env, target, stat=True), out)
         if res.exit_code != 0:
             # rclone's documented exit codes: 3 = directory not found, 4 = file not found.
-            if res.exit_code in (3, 4) or any("not found" in ln.lower() for ln in res.error_tail):
+            if res.exit_code in (3, 4):
                 return False
             raise await self._failed(account, res, "check the folder")
         try:
@@ -93,7 +114,6 @@ class _Planned:
 class MovePlan:
     scope: Scope
     items: list[_Planned]
-    pairs: dict[int, SyncPair] = field(default_factory=dict)
 
     @property
     def drive_pairs(self) -> set[int]:
@@ -102,6 +122,36 @@ class MovePlan:
     @property
     def touched(self) -> list[str]:
         return [r for p in self.items for r in (p.step.src, p.step.dst)]
+
+
+def touched_pairs(scope: Scope, rels: Iterable[str]) -> list[int]:
+    ids: list[int] = []
+    for rel in rels:
+        pair = pair_for(scope.pairs, rel)
+        if pair is not None and pair.id not in ids:
+            ids.append(pair.id)
+    return ids
+
+
+def check_pairs(queue, pair_ids: Iterable[int]) -> None:
+    """Refuse when syncing is off or a pair is busy; before anything changes."""
+    if getattr(queue, "disabled_reason", None) is not None:
+        raise FileOpError(DISABLED_MSG, 503)
+    for pid in pair_ids:
+        if queue.is_busy(pid):
+            raise FileOpError(BUSY_MSG)
+
+
+@contextlib.contextmanager
+def hold_pairs(queue, pair_ids: Iterable[int]) -> Iterator[None]:
+    """Keep the pairs' syncs from starting while their files change."""
+    with contextlib.ExitStack() as held:
+        for pid in pair_ids:
+            try:
+                held.enter_context(queue.hold(pid))
+            except RuntimeError:
+                raise FileOpError(BUSY_MSG) from None
+        yield
 
 
 def _target(account: Account, pair: SyncPair, prel: str) -> str:
@@ -113,31 +163,29 @@ async def prepare_moves(
 ) -> MovePlan:
     """Decide which items move on Drive too, and check everything before anything moves."""
     plan = MovePlan(scope, [_Planned(s) for s in steps])
-    for s in steps:
-        if s.pair is not None:
-            plan.pairs[s.pair.id] = s.pair
-    if getattr(queue, "disabled_reason", None) is not None:
-        raise FileOpError(DISABLED_MSG, 503)
-    for pid in plan.pairs:
-        if queue.is_busy(pid):
-            raise FileOpError(BUSY_MSG)
+    check_pairs(queue, touched_pairs(scope, plan.touched))
     account = scope.account
-    listings = {
-        pid: await asyncio.to_thread(catalog.load, pid) for pid in plan.pairs
-    }  # pair id -> Drive listing (or None)
+    connected = account.status == AccountStatus.CONNECTED
+    listings: dict[int, object] = {}
     for item in plan.items:
         pair = item.step.pair
         if pair is None:
             continue
+        if pair.id not in listings:
+            listings[pair.id] = await asyncio.to_thread(catalog.load, pair.id)
         listing = listings[pair.id]
         src_prel, dst_prel = item.step.src_prel, item.step.dst_prel
         src_target = _target(account, pair, src_prel)
-        connected = account.status == AccountStatus.CONNECTED
-        if listing is not None:
-            on_drive = src_prel in listing.files
-        else:
-            # No listing yet: ask Drive (needs a working login).
-            on_drive = connected and await drive.exists(account, src_target)
+        # The listing can only confirm an item is on Drive: it may be up to an hour old.
+        on_drive = listing is not None and src_prel in listing.files
+        if not on_drive and (pair.initialized or listing is None):
+            if connected:
+                on_drive = await drive.exists(account, src_target)
+            elif pair.initialized and listing is None:
+                raise FileOpError(
+                    "DriveSync can't tell whether this item is on Google Drive until the Google "
+                    "login is reconnected."
+                )
         if not on_drive:
             continue  # not on Drive yet: the next sync uploads it under the new name
         if not connected:
@@ -156,31 +204,47 @@ async def prepare_moves(
     return plan
 
 
-async def run_moves(plan: MovePlan, *, queue, drive: DriveMover) -> list[str]:
-    """Move every planned item; returns their new account paths."""
+async def _undo_drive_move(account: Account, item: _Planned, drive: DriveMover) -> bool:
+    try:
+        await drive.move(account, item.dst_target, item.src_target)  # type: ignore[arg-type]
+        return True
+    except BaseException:
+        log.exception("could not undo the Google Drive move of %s", item.step.src)
+        return False
+
+
+async def _move_one(plan: MovePlan, item: _Planned, drive: DriveMover) -> None:
     account = plan.scope.account
+    on_drive = bool(item.src_target and item.dst_target)
+    if on_drive:
+        await drive.move(account, item.src_target, item.dst_target)  # type: ignore[arg-type]
+    try:
+        await asyncio.to_thread(ops.apply_local, plan.scope, item.step)
+    except BaseException as e:  # also a cancelled request: never leave Drive half done
+        if on_drive and not await _undo_drive_move(account, item, drive):
+            if isinstance(e, Exception):
+                raise UndoFailed(e) from e
+        raise
+
+
+async def run_moves(plan: MovePlan, *, queue, drive: DriveMover) -> list[str]:
+    """Move every planned item; returns their new account paths.
+
+    With several items, a failure part-way raises PartialError naming what was done.
+    """
     moved: list[str] = []
-    with contextlib.ExitStack() as held:
-        for pid in plan.drive_pairs:
+    with hold_pairs(queue, touched_pairs(plan.scope, plan.touched)):
+        for n, item in enumerate(plan.items):
             try:
-                held.enter_context(queue.hold(pid))
-            except RuntimeError:
-                raise FileOpError(BUSY_MSG) from None
-        for item in plan.items:
-            if item.src_target and item.dst_target:
-                await drive.move(account, item.src_target, item.dst_target)
-            try:
-                await asyncio.to_thread(ops.apply_local, plan.scope, item.step)
-            except Exception:
-                if item.src_target and item.dst_target:
-                    try:
-                        await drive.move(account, item.dst_target, item.src_target)
-                    except Exception:
-                        log.exception(
-                            "could not undo the Google Drive move of %s after the local move "
-                            "failed; the next sync will reconcile it",
-                            item.step.src,
-                        )
-                raise
+                await _move_one(plan, item, drive)
+            except Exception as e:
+                if len(plan.items) == 1:
+                    raise
+                raise PartialError(
+                    e,
+                    done=[i.step.src for i in plan.items[:n]],
+                    failed=item.step.src,
+                    not_done=[i.step.src for i in plan.items[n + 1 :]],
+                ) from e
             moved.append(item.step.dst)
     return moved
