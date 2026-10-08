@@ -33,6 +33,7 @@ from app.services.catalog.service import CatalogService
 from app.services.catalog.store import CatalogStore
 from app.services.events.bus import EventBus
 from app.services.files.status import StatusIndexes
+from app.services.files.thumbs import Thumbnails
 from app.services.queue import SyncQueue, make_handler
 from app.services.rclone.setup import build_rclone_env, ensure_config_encrypted
 from app.services.scheduler import Scheduler
@@ -149,6 +150,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
 
     app.state.indexes = StatusIndexes(layout=layout, catalog=app.state.catalog)
     app.state.catalog.listeners.append(app.state.indexes.invalidate)
+    app.state.thumbs = Thumbnails(layout.thumbs_dir)
     app.state.queue = SyncQueue(
         make_handler(
             app.state.engine,

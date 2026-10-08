@@ -11,6 +11,7 @@ from app.models import Account, SyncPair
 from app.models.enums import AccountStatus
 from app.paths import Layout
 from app.services.app_settings import get_setting
+from app.services.files.thumbs import prune_thumbs
 from app.services.logs import prune_job_logs
 from app.services.sync.backups import prune_backups
 from app.services.sync.engine import is_eligible
@@ -154,3 +155,9 @@ class Scheduler:
                 log.info("removed %s old job logs", gone)
         except Exception:
             log.exception("job log pruning failed")
+        try:
+            gone = prune_thumbs(self.layout.thumbs_dir)
+            if gone:
+                log.info("removed %s old previews", gone)
+        except Exception:
+            log.exception("preview cache pruning failed")

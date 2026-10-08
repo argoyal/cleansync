@@ -13,6 +13,7 @@ from app.auth.deps import AuthContext, get_db, require_user
 from app.core.pathsafe import UnsafePath, safe_join
 from app.services.files.mimes import guess_mime, serve_policy
 from app.services.files.scope import is_hidden
+from app.services.files.thumbs import ThumbError
 from app.services.files.zipstream import zip_folder
 
 router = APIRouter()
@@ -104,4 +105,30 @@ def download_zip(
             "Content-Disposition": content_disposition("attachment", f"{name}.zip"),
             "Cache-Control": "private, no-store",
         },
+    )
+
+
+@router.get("/api/thumbs/{account_id}/{path:path}")
+async def thumbnail(
+    account_id: int,
+    path: str,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    scope = get_scope(request, db, account_id)
+    rel = clean_path(path)
+    try:
+        target = safe_join(scope.root, rel)
+    except UnsafePath as e:
+        raise HTTPException(422, str(e)) from e
+    if not rel or not target.is_file() or _resolves_to_hidden(scope.root, target):
+        raise HTTPException(404, "file not found")
+    try:
+        out = await request.app.state.thumbs.get(target)
+    except (ThumbError, OSError) as e:
+        raise HTTPException(404, str(e)) from e
+    # The UI adds ?v=<modified time> to the address, so a changed file gets a new preview.
+    return FileResponse(
+        out, media_type="image/webp", headers={"Cache-Control": "private, max-age=604800"}
     )

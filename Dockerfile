@@ -28,6 +28,8 @@ LABEL org.opencontainers.image.source="https://github.com/argoyal/drivesync" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       org.opencontainers.image.description="Two-way Google Drive sync for your own server"
 COPY --from=rclone /out/rclone /usr/local/bin/rclone
+RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=deps /app/backend/.venv /app/backend/.venv
 COPY backend/ /app/backend/

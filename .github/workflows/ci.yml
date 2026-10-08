@@ -27,6 +27,8 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      - name: Install poppler (PDF previews)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
       - run: uv run pytest -q -m "not realrclone"
 
   real-rclone:
