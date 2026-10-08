@@ -96,6 +96,9 @@ def test_resolve_api_queues_sync(auth_client, app, db, layout, setup):
             self.requests.append(a)
             return "queued"
 
+        def is_running(self, pair_id):
+            return False
+
         async def stop(self):
             pass
 
@@ -127,6 +130,9 @@ def test_resolve_api_busy_still_resolves_and_says_sync_is_later(auth_client, app
         def request(self, *a, **k):
             return "busy"
 
+        def is_running(self, pair_id):
+            return False
+
         async def stop(self):
             pass
 
@@ -149,3 +155,83 @@ def test_list_conflicts_defaults_to_open(auth_client, setup):
     body = auth_client.get(f"/api/sync-pairs/{pair.id}/conflicts").json()
     assert [x["id"] for x in body] == [c.id]
     assert auth_client.get(f"/api/sync-pairs/{pair.id}/conflicts?state=RESOLVED").json() == []
+
+
+def _again(db, pair, root, name_l="r.conflict1.xlsx", name_r="r.conflict2.xlsx"):
+    (root / "d" / name_l).write_text("LOCAL2")
+    (root / "d" / name_r).write_text("DRIVE2")
+    c = Conflict(
+        pair_id=pair.id, path="d/r.xlsx", local_variant="d/" + name_l, remote_variant="d/" + name_r
+    )
+    db.add(c)
+    db.commit()
+    return c
+
+
+def test_second_resolve_same_day_keeps_every_backup(db, layout, setup):
+    acc, pair, c, root = setup
+    _resolve(db, layout, setup, "keep_local")
+    c2 = _again(db, pair, root)
+    resolve_conflict(db, layout, acc, pair, c2, "keep_local", date(2026, 10, 8))
+    folder = layout.backups_dir / acc.email / str(pair.id) / "2026-10-08" / "conflicts" / "d"
+    contents = sorted(f.read_text() for f in folder.iterdir())
+    assert contents == ["DRIVE", "DRIVE2", "LOCAL"]  # first original (LOCAL) backed up too
+
+
+def test_keep_remote_saves_local_loser(db, layout, setup):
+    acc, pair, _, root = setup
+    _resolve(db, layout, setup, "keep_remote")
+    saved = layout.backups_dir / acc.email / str(pair.id) / "2026-10-08" / "conflicts" / "d"
+    assert (saved / "r.conflict1.xlsx").read_text() == "LOCAL"
+
+
+def test_keep_both_with_existing_name_does_not_overwrite(db, layout, setup):
+    _, _, _, root = setup
+    (root / "d" / "r (local).xlsx").write_text("OLD")
+    _resolve(db, layout, setup, "keep_both")
+    assert (root / "d" / "r (local).xlsx").read_text() == "OLD"
+    assert (root / "d" / "r (local) 2.xlsx").read_text() == "LOCAL"
+
+
+def test_resolving_handled_conflict_again_is_409(auth_client, setup):
+    _, _, c, _ = setup
+    assert (
+        auth_client.post(f"/api/conflicts/{c.id}/resolve", json={"action": "skip"}).status_code
+        == 200
+    )
+    r = auth_client.post(f"/api/conflicts/{c.id}/resolve", json={"action": "keep_local"})
+    assert r.status_code == 409
+
+
+def test_unsafe_stored_variant_is_409_and_moves_nothing(auth_client, db, setup):
+    _, _, c, root = setup
+    c.remote_variant = "../x"
+    db.commit()
+    r = auth_client.post(f"/api/conflicts/{c.id}/resolve", json={"action": "keep_local"})
+    assert r.status_code == 409
+    assert (root / "d" / "r.conflict1.xlsx").exists()
+    assert not (root / "d" / "r.xlsx").exists()
+
+
+def test_resolve_api_409_while_pair_is_syncing(auth_client, app, setup):
+    _, _, c, root = setup
+
+    class Running:
+        def request(self, *a, **k):
+            raise AssertionError("must not queue")
+
+        def is_running(self, pair_id):
+            return True
+
+        async def stop(self):
+            pass
+
+    app.state.queue = Running()
+    r = auth_client.post(f"/api/conflicts/{c.id}/resolve", json={"action": "keep_local"})
+    assert r.status_code == 409 and "busy" in r.json()["detail"]
+    assert (root / "d" / "r.conflict1.xlsx").exists()
+
+
+def test_bad_state_filter_is_422(auth_client, setup):
+    _, pair, _, _ = setup
+    assert auth_client.get(f"/api/sync-pairs/{pair.id}/conflicts?state=bogus").status_code == 422

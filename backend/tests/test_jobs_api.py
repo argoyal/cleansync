@@ -67,3 +67,16 @@ def test_planned_changes_default_to_latest_blocked(
         ("local", "b.txt"),
         ("remote", "a.txt"),
     ]
+
+
+def test_logs_for_pair_without_jobs(auth_client, make_account, make_pair):
+    pair = make_pair(make_account())
+    assert auth_client.get(f"/api/sync-pairs/{pair.id}/logs").json() == {
+        "job_id": None,
+        "lines": [],
+    }
+
+
+def test_status_counts_new(auth_client, make_account, make_pair):
+    make_pair(make_account())
+    assert auth_client.get("/api/status").json()["new"] == 1

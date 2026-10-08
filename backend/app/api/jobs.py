@@ -22,6 +22,7 @@ def status(ctx: AuthContext = Depends(require_user), db: Session = Depends(get_d
         "accounts": count(Account, Account.status != AccountStatus.DISCONNECTED),
         "accounts_attention": count(Account, Account.status == AccountStatus.NEEDS_REAUTH),
         "pairs": count(SyncPair),
+        "new": count(SyncPair, SyncPair.status == PairStatus.NEW),
         "healthy": count(SyncPair, SyncPair.status == PairStatus.HEALTHY),
         "attention": count(SyncPair, SyncPair.status.in_([PairStatus.ATTENTION, PairStatus.ERROR])),
         "running": count(SyncPair, SyncPair.status == PairStatus.RUNNING),
@@ -71,6 +72,8 @@ def logs(
     db: Session = Depends(get_db),
 ) -> dict:
     load_pair(db, pair_id)
+    if job_id is None and not db.scalar(select(SyncJob.id).where(SyncJob.pair_id == pair_id)):
+        return {"job_id": None, "lines": []}
     job = _job_for_pair(db, pair_id, job_id)
     path = request.app.state.layout.job_log(job.id)
     return {"job_id": job.id, "lines": tail_lines(path, max(1, min(tail, 5000)))}

@@ -26,3 +26,13 @@ def test_prune_old_job_logs(layout):
     os.utime(old, (long_ago, long_ago))
     assert prune_job_logs(layout, 30, time.time()) == 1
     assert not old.exists() and new.exists()
+
+
+def test_tail_caps_long_lines_and_scan(tmp_path):
+    f = tmp_path / "l.log"
+    f.write_text("x" * 50_000 + "\nshort\n")
+    out = tail_lines(f, 2)
+    assert len(out[0]) == 10_000 and out[1] == "short"
+    big = tmp_path / "b.log"
+    big.write_bytes(b"y" * (9 * 1024 * 1024))  # no newlines at all
+    assert len(tail_lines(big, 5)[0]) == 10_000

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
-from app.core.pathsafe import safe_join
+from app.core.pathsafe import UnsafePath, safe_join
 from app.models import Account, Conflict, SyncPair
 from app.models.enums import AttentionReason, ConflictState, PairStatus
 from app.paths import Layout
@@ -132,6 +132,8 @@ def _free_name(folder: Path, stem: str, suffix: str) -> Path:
 def _to_backup(src: Path, backup_root: Path, rel: str) -> None:
     dst = safe_join(backup_root, rel)
     dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():  # never overwrite an earlier backup (e.g. a second resolve the same day)
+        dst = _free_name(dst.parent, PurePosixPath(dst.name).stem, PurePosixPath(dst.name).suffix)
     shutil.move(str(src), str(dst))
 
 
@@ -153,26 +155,10 @@ def resolve_conflict(
         layout.backups_dir / account.email / str(pair.id) / today.isoformat() / "conflicts"
     )
     if action != "skip":
-        if not conflict.local_variant or not conflict.remote_variant:
-            raise ConflictError("DriveSync could not find both versions; run a sync first")
-        local_v = safe_join(local_dir, conflict.local_variant)
-        remote_v = safe_join(local_dir, conflict.remote_variant)
-        if not local_v.is_file() or not remote_v.is_file():
-            raise ConflictError("the conflict files are no longer there; run a sync first")
-        original = safe_join(local_dir, conflict.path)
-        if action in ("keep_local", "keep_remote"):
-            if action == "keep_local":
-                winner, loser, loser_rel = local_v, remote_v, conflict.remote_variant
-            else:
-                winner, loser, loser_rel = remote_v, local_v, conflict.local_variant
-            if original.exists():
-                _to_backup(original, backup_root, conflict.path)
-            _to_backup(loser, backup_root, loser_rel)
-            os.replace(winner, original)
-        else:
-            p = PurePosixPath(conflict.path)
-            os.replace(local_v, _free_name(original.parent, f"{p.stem} (local)", p.suffix))
-            os.replace(remote_v, _free_name(original.parent, f"{p.stem} (Drive)", p.suffix))
+        try:
+            _resolve_files(local_dir, backup_root, conflict, action)
+        except UnsafePath as e:
+            raise ConflictError(f"unsafe path in conflict: {e}") from e
     conflict.state = ConflictState.SKIPPED if action == "skip" else ConflictState.RESOLVED
     conflict.resolution = action
     conflict.resolved_at = utcnow()
@@ -185,3 +171,26 @@ def resolve_conflict(
         pair.attention_reason = None
         db.commit()
     return conflict
+
+
+def _resolve_files(local_dir: Path, backup_root: Path, conflict: Conflict, action: str) -> None:
+    if not conflict.local_variant or not conflict.remote_variant:
+        raise ConflictError("DriveSync could not find both versions; run a sync first")
+    local_v = safe_join(local_dir, conflict.local_variant)
+    remote_v = safe_join(local_dir, conflict.remote_variant)
+    if not local_v.is_file() or not remote_v.is_file():
+        raise ConflictError("the conflict files are no longer there; run a sync first")
+    original = safe_join(local_dir, conflict.path)
+    if action in ("keep_local", "keep_remote"):
+        if action == "keep_local":
+            winner, loser, loser_rel = local_v, remote_v, conflict.remote_variant
+        else:
+            winner, loser, loser_rel = remote_v, local_v, conflict.local_variant
+        if original.exists():
+            _to_backup(original, backup_root, conflict.path)
+        _to_backup(loser, backup_root, loser_rel)
+        os.replace(winner, original)
+    else:
+        p = PurePosixPath(conflict.path)
+        os.replace(local_v, _free_name(original.parent, f"{p.stem} (local)", p.suffix))
+        os.replace(remote_v, _free_name(original.parent, f"{p.stem} (Drive)", p.suffix))
