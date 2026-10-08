@@ -536,3 +536,72 @@ async def test_real_engine_brake_then_override_once(tmp_path):
         assert (remote_dir / "f7.txt").exists()
     finally:
         eng.dispose()
+
+
+async def test_real_lsjson_metadata_listing_parses_into_a_catalog(tmp_path):
+    import json as _json
+
+    from app.services.catalog.model import parse_item
+
+    root = tmp_path / "drive"
+    (root / "Work" / "Deep").mkdir(parents=True)
+    (root / "Work" / "a b [1].txt").write_text("hello")
+    (root / "top.pdf").write_bytes(b"%PDF-1.4")
+    conf = tmp_path / "rclone.conf"
+    conf.write_text(f"[al]\ntype = alias\nremote = {root}\n")
+    env = c.RcloneEnv(
+        binary="rclone", config_file=conf, cache_dir=tmp_path / "cache", config_pass=""
+    )
+    lines: list[str] = []
+    res = await run_rclone(
+        c.lsjson_args(
+            env, "al:", recursive=True, fast_list=True, metadata=True, show_all_gdocs=True
+        ),
+        env.env(),
+        log_path=None,
+        on_stdout=lines.append,
+    )
+    assert res.exit_code == 0, res.error_tail
+    # One item per line: the catalog parses the listing line by line, never as one blob.
+    items = [_json.loads(ln.rstrip(",")) for ln in lines if ln.startswith("{")]
+    entries = {e.path: e for e in map(parse_item, items)}
+    assert set(entries) == {"Work", "Work/Deep", "Work/a b [1].txt", "top.pdf"}
+    assert entries["Work"].is_dir and entries["Work/a b [1].txt"].size == 5
+    assert entries["top.pdf"].mime == "application/pdf"
+    assert all(e.id is None and e.native is None for e in entries.values())
+
+    out: list[str] = []
+    res = await run_rclone(
+        c.lsjson_args(env, "al:Work", stat=True), env.env(), log_path=None, on_stdout=out.append
+    )
+    assert res.exit_code == 0 and _json.loads("\n".join(out))["IsDir"] is True
+
+    res = await run_rclone(c.lsjson_args(env, "al:Nope", recursive=True), env.env(), log_path=None)
+    assert res.exit_code != 0
+    assert any("directory not found" in ln.lower() for ln in res.error_tail), res.error_tail
+
+
+async def test_real_config_dump_reads_an_encrypted_config(tmp_path):
+    import json as _json
+
+    passcmd = tmp_path / "pass.sh"
+    passcmd.write_text('#!/bin/sh\nprintf "%s" "$RCLONE_CONFIG_PASS"\n')
+    passcmd.chmod(0o755)
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=tmp_path / "rclone.conf",
+        cache_dir=tmp_path / "cache",
+        config_pass="a-long-test-passphrase",
+        password_command=str(passcmd),
+    )
+    res = await run_rclone(
+        c.config_create_alias_args(env, "local_1", tmp_path), env.env(), log_path=None
+    )
+    assert res.exit_code == 0, res.error_tail
+    from app.services.rclone.setup import ensure_config_encrypted
+
+    assert await ensure_config_encrypted(env) is True
+    out: list[str] = []
+    res = await run_rclone(c.config_dump_args(env), env.env(), log_path=None, on_stdout=out.append)
+    assert res.exit_code == 0, res.error_tail
+    assert _json.loads("\n".join(out))["local_1"]["type"] == "alias"

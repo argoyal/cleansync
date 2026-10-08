@@ -214,6 +214,9 @@ def lsjson_args(
     dirs_only: bool = False,
     recursive: bool = False,
     fast_list: bool = False,
+    metadata: bool = False,
+    stat: bool = False,
+    show_all_gdocs: bool = False,
 ) -> list[str]:
     args = env.base() + ["lsjson", _remote(target)]
     if dirs_only:
@@ -222,6 +225,12 @@ def lsjson_args(
         args.append("--recursive")
     if fast_list:
         args.append("--fast-list")
+    if metadata:
+        args.append("--metadata")  # Drive adds e.g. "starred" here
+    if stat:
+        args.append("--stat")  # describe the target itself, not its contents
+    if show_all_gdocs:
+        args.append("--drive-show-all-gdocs")  # also list Forms, Sites, ... (no export format)
     return args + [NO_PROMPT_FLAG]
 
 
@@ -263,6 +272,25 @@ def config_create_args(
         "--non-interactive",
         NO_PROMPT_FLAG,
     ]
+
+
+def config_create_alias_args(env: RcloneEnv, name: str, folder: Path) -> list[str]:
+    """A remote that is just a local folder: used by the dev/test 'pretend Google account'."""
+    return env.base() + [
+        "config",
+        "create",
+        _remote_name(name),
+        "alias",
+        "remote",
+        _local(folder),
+        "--non-interactive",
+        NO_PROMPT_FLAG,
+    ]
+
+
+def config_dump_args(env: RcloneEnv) -> list[str]:
+    # Prints every saved login, decrypted. Only drive_api reads it, never logs it.
+    return env.base() + ["config", "dump", NO_PROMPT_FLAG]
 
 
 def config_delete_args(env: RcloneEnv, name: str) -> list[str]:
