@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures contain fake tokens by design"
+paths = ['''backend/tests/''']

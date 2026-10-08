@@ -1,0 +1,87 @@
+name: CI
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # keep in sync with the Dockerfile ARG RCLONE_VERSION (not named RCLONE_VERSION: rclone reads that variable itself)
+  RCLONE_PIN_VERSION: "1.75.1"
+  # keep in sync with the Dockerfile ARG RCLONE_SHA256_AMD64
+  RCLONE_PIN_SHA256_AMD64: "982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab"
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -q -m "not realrclone"
+
+  real-rclone:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install pinned rclone
+        run: |
+          curl -fsSLo /tmp/rclone.zip "https://downloads.rclone.org/v${RCLONE_PIN_VERSION}/rclone-v${RCLONE_PIN_VERSION}-linux-amd64.zip"
+          echo "${RCLONE_PIN_SHA256_AMD64}  /tmp/rclone.zip" | sha256sum -c -
+          sudo unzip -j /tmp/rclone.zip "*/rclone" -d /usr/local/bin
+          rclone version
+      - run: uv sync --frozen
+      - run: uv run pytest -q -m realrclone
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: drivesync:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start container
+        run: |
+          docker run -d --name ds -p 8080:8080 --read-only --tmpfs /tmp \
+            --tmpfs /drivesync:uid=1000,gid=1000 --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            -e PUBLIC_URL=http://localhost:8080 -e ADMIN_PASSWORD=ci-smoke-password drivesync:ci
+          for i in $(seq 1 30); do curl -fsS http://localhost:8080/api/health && break; sleep 1; done
+      - name: Health and login
+        run: |
+          curl -fsS http://localhost:8080/api/health
+          curl -fsS -X POST http://localhost:8080/api/auth/login \
+            -H 'content-type: application/json' \
+            -d '{"username":"admin","password":"ci-smoke-password"}' | grep -q must_change_password
+      - if: failure()
+        run: docker logs ds
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
