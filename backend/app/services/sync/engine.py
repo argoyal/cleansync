@@ -327,17 +327,22 @@ class SyncEngine:
         return latest.planned_deletions
 
     def _block(
-        self, db: Session, pair: SyncPair, account: Account, dry: SyncJob, planned, res, n: int
+        self,
+        db: Session,
+        pair: SyncPair,
+        account: Account,
+        dry: SyncJob,
+        planned,
+        res,
+        message: str,
     ) -> int:
+        """Store the dry run's plan for review and wait for the user (BLOCKED)."""
         # Deletes first, so a capped list still shows every delete it can.
         rows = sorted(planned, key=lambda r: r[1] != "delete")[:_MAX_PLANNED_ROWS]
         for side, action, path in rows:
             db.add(PlannedChange(job_id=dry.id, side=side, action=action, path=path))
         self.finish_job(db, dry, JobState.BLOCKED, res)
-        pair.last_error = (
-            f"This sync would delete {n} files. Your limit is "
-            f"{pair.max_deletions}. Review the changes before continuing."
-        )
+        pair.last_error = message
         pair.last_error_at = self.clock()
         self.set_status(db, pair, PairStatus.ATTENTION, AttentionReason.BLOCKED)
         record_event(
@@ -431,12 +436,14 @@ class SyncEngine:
         # 2. deletion gate
         over = deletions > pair.max_deletions
         override_used = False
-        if over and override_requested:
+        # Under the limit, an override still matters for two-way pairs: it lifts bisync's own
+        # 50% brake, which may have stopped the plan the user reviewed (see the real run).
+        if override_requested and (over or bidirectional):
             # The override approves the plan the user reviewed, not whatever comes next.
             approved = self._approved_deletions(db, pair, dry.id)
             if approved is not None and deletions <= approved:
                 override_used = True
-            else:
+            elif over:
                 record_event(
                     db,
                     self.bus,
@@ -450,7 +457,11 @@ class SyncEngine:
                     ),
                 )
         if over and not override_used:
-            return self._block(db, pair, account, dry, planned.planned, res, deletions)
+            message = (
+                f"This sync would delete {deletions} files. Your limit is "
+                f"{pair.max_deletions}. Review the changes before continuing."
+            )
+            return self._block(db, pair, account, dry, planned.planned, res, message)
         self.finish_job(db, dry, JobState.SUCCESS, res)
         # One-way sync has no bisync percentage brake, so cap the real run's deletes too.
         cap = None
@@ -513,6 +524,16 @@ class SyncEngine:
                 require_files=True,
             )
             self.finish_job(db, job, JobState.FAILED, res)
+            if failure == Failure.TOO_MANY_DELETES and bidirectional and not override_used:
+                # The plan was under the user's limit but tripped bisync's 50% brake. Keep it
+                # for review, so "Override once" can approve exactly this plan.
+                message = (
+                    f"rclone's 50% safety brake stopped this sync: it would delete {deletions} "
+                    "files, more than half of the files on one side. Nothing was deleted. "
+                    "Review the changes; 'Override once' will allow exactly this plan."
+                )
+                self._block(db, pair, account, dry, planned.planned, None, message)
+                return job.id
             await self.handle_failure(db, pair, account, failure, res)
             return job.id
 

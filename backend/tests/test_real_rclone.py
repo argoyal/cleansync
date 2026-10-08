@@ -137,6 +137,11 @@ async def test_real_bisync_safety_brake_is_classified(tmp_path):
     res, _ = await _run(env, t, tmp_path, dry_run=False)
     assert classify_failure(res.exit_code, res.error_tail) == Failure.TOO_MANY_DELETES
     assert (p2 / "f0.txt").exists()
+    # "Override once" on that stored plan reruns it with the brake lifted, and it goes through.
+    res, counters = await _run(env, t, tmp_path, dry_run=False, max_delete_percent=100)
+    assert res.exit_code == 0, res.error_tail
+    assert counters.deleted_remote == 6
+    assert not any((p2 / f"f{i}.txt").exists() for i in range(6))
 
 
 async def test_real_one_way_sync_max_delete_stops_extra_deletes(tmp_path):
@@ -428,5 +433,106 @@ async def test_real_initial_preview_fails_for_a_missing_remote(tmp_path):
         with sf() as db:
             assert db.get(SyncJob, job_id).state == "FAILED"
         assert initial.load_preview(pair_id) is None
+    finally:
+        eng.dispose()
+
+
+async def test_real_engine_brake_then_override_once(tmp_path):
+    # The whole R2 path through the engine with real rclone: a plan under the user's limit trips
+    # bisync's 50% brake on the real run, is stored for review, and "Override once" runs it.
+    from sqlalchemy import select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, PlannedChange, SyncJob, SyncPair
+    from app.paths import Layout
+    from app.services.events.bus import EventBus
+    from app.services.sync.engine import SyncEngine
+    from app.services.sync.filters import refresh_pair_filters
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            pass
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text("[gd_alice]\ntype = local\n")  # stands in for Google Drive
+    remote_dir = tmp_path / "drive"
+    engine = SyncEngine(
+        layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=_Accounts()
+    )
+    try:
+        with sf() as db:
+            acc = Account(email="alice@example.com", remote_name="gd_alice")
+            db.add(acc)
+            db.commit()
+            pair = SyncPair(
+                account_id=acc.id,
+                name="Docs",
+                local_subpath="",
+                remote_path=str(remote_dir),
+                initialized=True,
+                status="HEALTHY",
+                max_deletions=10,
+                backups_enabled=False,
+            )
+            db.add(pair)
+            db.commit()
+            refresh_pair_filters(db, layout, pair)
+            local_dir = layout.account_dir(acc.email)
+            for d in (local_dir, remote_dir):
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "RCLONE_TEST").write_text("x")
+                for i in range(8):
+                    (d / f"f{i}.txt").write_text("x")
+            seed = await run_rclone(
+                c.bisync_args(env, engine.bisync_target(acc, pair), dry_run=False, resync=True),
+                env.env(),
+                log_path=None,
+            )
+            assert seed.exit_code == 0, seed.error_tail
+            for i in range(6):  # 6 of 9 files: under the limit of 10, over bisync's 50%
+                (local_dir / f"f{i}.txt").unlink()
+            pair_id = pair.id
+
+        await engine.run_pair(pair_id, "SCHEDULE")
+        with sf() as db:
+            pair = db.get(SyncPair, pair_id)
+            jobs = db.scalars(select(SyncJob).order_by(SyncJob.id)).all()
+            assert [(j.kind, j.state) for j in jobs] == [
+                ("DRY_RUN", "BLOCKED"),
+                ("BISYNC", "FAILED"),
+            ]
+            planned = db.scalars(
+                select(PlannedChange).where(PlannedChange.job_id == jobs[0].id)
+            ).all()
+            assert sorted(p.path for p in planned if p.action == "delete") == [
+                f"f{i}.txt" for i in range(6)
+            ]
+            assert pair.attention_reason == "BLOCKED" and "50%" in pair.last_error
+            assert (remote_dir / "f0.txt").exists()
+            pair.override_next = True
+            db.commit()
+
+        await engine.run_pair(pair_id, "MANUAL")
+        with sf() as db:
+            pair = db.get(SyncPair, pair_id)
+            last = db.scalars(select(SyncJob).order_by(SyncJob.id.desc())).first()
+            assert (last.kind, last.state, last.override_used) == ("BISYNC", "SUCCESS", True), (
+                last.error_message
+            )
+            assert pair.status == "HEALTHY"
+        assert not any((remote_dir / f"f{i}.txt").exists() for i in range(6))
+        assert (remote_dir / "f7.txt").exists()
     finally:
         eng.dispose()

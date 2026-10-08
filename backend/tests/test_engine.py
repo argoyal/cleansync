@@ -843,3 +843,79 @@ async def test_override_only_approves_the_latest_dry_run(
     assert len(_real_calls(fake_rclone, "sync")) == real_before
     last = _jobs(db, pair.id)[-1]
     assert (last.kind, last.state, last.planned_deletions) == ("DRY_RUN", "BLOCKED", 15)
+
+
+# ---- residual fixes: bisync's 50% brake on the real run leaves a plan to review -----------
+
+
+def _brake():
+    return [
+        jl(
+            'too many deletes (>50%, 6 of 8) on Path2 "gd:/". Run with --force if desired.',
+            level="error",
+        ),
+        jl("Failed to bisync: too many deletes", level="notice"),
+    ]
+
+
+async def _brake_blocks(sync_engine, fake_rclone, db, pair, n, trigger="SCHEDULE"):
+    copies = [jl("- Path1    Queue copy to Path2    - {path2/}new.txt")]
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*copies, *_deletes(n)))
+    fake_rclone.on("bisync", not_match=["--dry-run"], exit=1, stderr=_brake())
+    return await sync_engine.run_pair(pair.id, trigger)
+
+
+async def test_real_run_brake_stores_the_plan_and_blocks(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=10)
+    await _brake_blocks(sync_engine, fake_rclone, db, pair, 6)
+    dry, real = _jobs(db, pair.id)
+    assert (dry.kind, dry.state, dry.planned_deletions) == ("DRY_RUN", "BLOCKED", 6)
+    assert (real.kind, real.state) == ("BISYNC", "FAILED")
+    planned = db.scalars(
+        select(PlannedChange).where(PlannedChange.job_id == dry.id).order_by(PlannedChange.id)
+    ).all()
+    assert [p.action for p in planned] == ["delete"] * 6 + ["copy"]
+    db.refresh(pair)
+    assert (pair.status, pair.attention_reason) == ("ATTENTION", "BLOCKED")
+    assert "50%" in pair.last_error and "Override once" in pair.last_error
+    assert pair.fail_count == 0 and pair.next_retry_at is None
+
+
+async def test_override_after_the_brake_runs_that_plan_without_the_brake(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=10)
+    await _brake_blocks(sync_engine, fake_rclone, db, pair, 6)
+    db.refresh(pair)
+    pair.override_next = True
+    db.commit()
+    fake_rclone.plan_file.write_text("{}")
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(6)))
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    real = _real_calls(fake_rclone)
+    assert [_max_delete(c) for c in real] == ["50", "100"]
+    last = _jobs(db, pair.id)[-1]
+    assert (last.kind, last.state, last.override_used) == ("BISYNC", "SUCCESS", True)
+    db.refresh(pair)
+    assert pair.status == "HEALTHY"
+
+
+async def test_override_after_the_brake_does_not_cover_a_bigger_plan(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=10)
+    await _brake_blocks(sync_engine, fake_rclone, db, pair, 6)
+    db.refresh(pair)
+    pair.override_next = True
+    db.commit()
+    fake_rclone.plan_file.write_text("{}")
+    await _brake_blocks(sync_engine, fake_rclone, db, pair, 7, trigger="MANUAL")
+    real = _real_calls(fake_rclone)
+    assert [_max_delete(c) for c in real] == ["50", "50"]  # the brake stayed on
+    jobs = _jobs(db, pair.id)
+    assert jobs[-1].override_used is False
+    assert (jobs[-2].state, jobs[-2].planned_deletions) == ("BLOCKED", 7)
+    db.refresh(pair)
+    assert (pair.attention_reason, pair.override_next) == ("BLOCKED", False)
