@@ -1,4 +1,4 @@
-.PHONY: dev test lint format build
+.PHONY: dev dev-seed test lint format build
 
 dev:
 	cd backend && uv run uvicorn app.main:create_app --factory --reload --port 8080
