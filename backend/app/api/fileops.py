@@ -4,19 +4,22 @@ of items already on Google Drive, Drive too), then queues a sync."""
 import asyncio
 import errno
 import logging
+import os
 from collections.abc import Iterable
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
+from starlette.requests import ClientDisconnect
 
 from app.api.files import clean_path, get_scope
 from app.auth.deps import AuthContext, get_db, require_user
 from app.core.clock import utcnow
 from app.core.pathsafe import UnsafePath
 from app.models.enums import Trigger
-from app.schemas.files import DeleteIn, MkdirIn, MoveIn, OpOut, RenameIn
+from app.schemas.files import DeleteIn, MkdirIn, MoveIn, OpOut, RenameIn, UploadOut
 from app.services.files import moves, ops
-from app.services.files.scope import Scope, pair_for
+from app.services.files.scope import Scope, join_rel, pair_for
+from app.services.files.upload import new_temp, plan_target, publish, save_stream
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files")
@@ -184,3 +187,63 @@ async def delete(
         # Also after a failure part-way: earlier items may be gone already.
         syncs = after_change(request, scope, rels)
     return OpOut(paths=kept, syncs=syncs)
+
+
+MAX_MTIME_MS = 4_102_444_800_000  # year 2100
+
+
+@router.post("/upload", response_model=UploadOut)
+async def upload(
+    request: Request,
+    account_id: int,
+    name: str,
+    path: str = "",
+    mtime_ms: int | None = None,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """The request body is the file itself (not a form), so any size streams straight to disk.
+
+    `name` may contain '/' for a folder upload ("Trip/day 1/photo.jpg"); folders are created.
+    A file never replaces one that is already there: it gets a free name instead.
+    """
+    refuse_when_disabled(request)
+    scope = get_scope(request, db, account_id)
+    queue = request.app.state.queue
+
+    def check(dir_rel: str) -> None:
+        moves.check_pairs(queue, moves.touched_pairs(scope, [dir_rel]))
+
+    folder, dir_rel, leaf = await run_op(
+        lambda: plan_target(scope, clean_path(path), name, before_create=check)
+    )
+    pair_ids = moves.touched_pairs(scope, [dir_rel])
+    tmp = new_temp(request.app.state.layout)
+    expected = request.headers.get("content-length")
+
+    async def publish_held() -> str:
+        moves.check_pairs(queue, pair_ids)  # it may have become busy during the upload
+        with moves.hold_pairs(queue, pair_ids):
+            # Held until the thread is done, even if the request is cancelled.
+            final, error, cancelled = await moves.finish_in_thread(publish, tmp, folder, leaf)
+        if cancelled:
+            raise asyncio.CancelledError()
+        if error is not None:
+            raise error
+        return final
+
+    try:
+        size = await save_stream(request.stream(), tmp)
+        if expected is not None and expected.isdigit() and size != int(expected):
+            raise HTTPException(400, "the upload was cut off; try again")
+        if mtime_ms is not None and 0 < mtime_ms < MAX_MTIME_MS:
+            os.utime(tmp, ns=(mtime_ms * 1_000_000, mtime_ms * 1_000_000))  # keep "modified"
+        final = await guarded(publish_held())
+    except ClientDisconnect:
+        raise HTTPException(400, "the upload was cancelled") from None
+    except OSError as e:
+        raise os_error(e) from e
+    finally:
+        tmp.unlink(missing_ok=True)
+    rel = join_rel(dir_rel, final)
+    return UploadOut(path=rel, size=size, syncs=after_change(request, scope, [rel]))

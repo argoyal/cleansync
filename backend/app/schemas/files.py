@@ -96,3 +96,9 @@ class OpOut(BaseModel):
     paths: list[str]
     # pair id -> what happened to the follow-up sync ("queued", "dirty", "not_initialized", ...)
     syncs: dict[int, str]
+
+
+class UploadOut(BaseModel):
+    path: str
+    size: int
+    syncs: dict[int, str]

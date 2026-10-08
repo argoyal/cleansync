@@ -36,6 +36,7 @@ from app.services.events.bus import EventBus
 from app.services.files.moves import DriveMover
 from app.services.files.status import StatusIndexes
 from app.services.files.thumbs import Thumbnails
+from app.services.files.upload import clear_uploads
 from app.services.queue import SyncQueue, make_handler
 from app.services.rclone.setup import build_rclone_env, ensure_config_encrypted
 from app.services.scheduler import Scheduler
@@ -57,6 +58,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     )
     layout = Layout(settings.drivesync_root)
     layout.ensure()
+    clear_uploads(layout)
     run_migrations(layout.db_file)
     engine = make_engine(layout.db_file)
     session_factory = sessionmaker(engine, expire_on_commit=False)
