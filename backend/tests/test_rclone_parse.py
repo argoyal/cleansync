@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from app.services.rclone.errors import Failure, classify_failure
 from app.services.rclone.parse import (
     Counters,
@@ -36,21 +38,49 @@ def test_progress_from_stats_line():
     assert p.transferring[0]["name"] == "video.mp4"
 
 
-def test_counters_from_bisync_queue_lines():
+_ROOTS_LINE = 'Synching Path1 "/srv/drivesync/storage/alice@example.com/" with Path2 "gd_1:Docs/"'
+_L = "/srv/drivesync/storage/alice@example.com/"
+_R = "gd_1:Docs/"
+
+
+def _real_lines(colour: bool) -> list[str]:
+    def c(label: str, code: str) -> str:
+        return f"\x1b[{code}m{label}\x1b[0m" if colour else label
+
+    def q(side: str, action: str, path: str) -> str:
+        return f"- {c(side, '36')}    {c(action, '35')}                 - {c(path, '36')}"
+
+    return [
+        _ROOTS_LINE,
+        q("Path2", "Queue delete", _R + "sub dir/old file.txt"),
+        q("Path1", "Queue delete", _L + "gone.pdf"),
+        q("Path1", "Queue copy to Path2", _R + "new.txt"),
+        q("Path2", "Queue copy to Path1", _L + "my folder/photo 1.jpg"),
+        f"- {c('WARNING', '34')}  {c('New or changed in both paths', '35')}       - "
+        f"{c('sub dir/report.xlsx', '36')}",
+    ]
+
+
+@pytest.mark.parametrize("colour", [False, True])
+def test_counters_from_real_format_bisync_lines(colour):
     c = Counters()
-    for msg in [
-        "- Path2    Queue delete                        - {path2/}old.txt",
-        "- Path1    Queue delete                        - {path1/}gone.pdf",
-        "- Path1    Queue copy to Path2                 - {path2/}new.txt",
-        "- Path2    Queue copy to Path1                 - {path1/}photo.jpg",
-        "- WARNING  New or changed in both paths        - report.xlsx",
-    ]:
-        c.feed(parse_line(jl(msg)))
+    for msg in _real_lines(colour):
+        c.feed(parse_line(jl(msg, level="notice")))
     assert (c.uploaded, c.downloaded, c.deleted_local, c.deleted_remote) == (1, 1, 1, 1)
     assert c.deletions == 2
-    assert c.conflict_paths == ["report.xlsx"]
-    assert ("remote", "delete", "old.txt") in c.planned
-    assert ("local", "delete", "gone.pdf") in c.planned
+    assert c.conflict_paths == ["sub dir/report.xlsx"]
+    assert c.planned == [
+        ("remote", "delete", "sub dir/old file.txt"),
+        ("local", "delete", "gone.pdf"),
+        ("remote", "copy", "new.txt"),
+        ("local", "copy", "my folder/photo 1.jpg"),
+    ]
+
+
+def test_counters_still_accept_path_prefix_form():
+    c = Counters()
+    c.feed(parse_line(jl("- Path2    Queue delete                        - {path2/}old.txt")))
+    assert c.planned == [("remote", "delete", "old.txt")]
 
 
 def test_one_way_dry_run_delete_lines():
@@ -106,3 +136,12 @@ def test_ansi_colour_codes_are_stripped_from_real_bisync_lines():
         c.feed(parse_line(jl(msg)))
     assert c.conflict_paths == ["both.txt"]
     assert c.planned == [("remote", "delete", "keep.txt")]
+
+
+def test_config_errors_win_over_needs_resync():
+    resync = "Bisync aborted. Must run --resync to recover."
+    assert classify_failure(2, ["Error: unknown flag: --bogus", resync]) == Failure.OTHER
+    assert (
+        classify_failure(2, ["specified filters file does not exist: /x", resync]) == Failure.OTHER
+    )
+    assert classify_failure(2, ["unknown flag: --x", resync]) == Failure.OTHER

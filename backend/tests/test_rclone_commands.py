@@ -134,7 +134,7 @@ def test_one_way_sync_flags():
     )
     assert args[5:8] == ["sync", "gd_1:Docs", "/d/l/Docs"]
     for flag in (
-        "--filters-file",
+        "--filter-from",
         "--drive-skip-gdocs",
         "--dry-run",
         "--backup-dir",
@@ -377,3 +377,13 @@ def test_bisync_and_check_accept_absolute_local_remote_side():
     assert chk[chk.index("check") + 2] == "/d/b"
     with pytest.raises(UnsafeArgument):
         c.check_args(ENV, Path("/d/a"), "relative/b", Path("/d/f"))
+
+
+def test_sync_and_check_use_filter_from_not_filters_file():
+    # --filters-file only exists on bisync; sync/check reject it as an unknown flag.
+    sync = c.sync_args(ENV, "/l", "gd_1:Docs", Path("/f"), None, dry_run=True)
+    chk = c.check_args(ENV, Path("/l"), "gd_1:", Path("/f"))
+    for args in (sync, chk):
+        assert "--filters-file" not in args
+        assert args[args.index("--filter-from") + 1] == "/f"
+    assert "--filters-file" in c.bisync_args(ENV, T, dry_run=True)

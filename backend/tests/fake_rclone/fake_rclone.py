@@ -36,12 +36,14 @@ def main() -> int:
             for path in rule.get("create_files", []):
                 Path(path).parent.mkdir(parents=True, exist_ok=True)
                 Path(path).write_text("x")
-            if rule.get("sleep"):
-                time.sleep(rule["sleep"])
             for line in rule.get("stdout", []):
                 sys.stdout.write(line + "\n")
             for line in rule.get("stderr", []):
                 sys.stderr.write(line + "\n")
+            sys.stdout.flush()
+            sys.stderr.flush()
+            if rule.get("sleep"):  # after output, so tests can act on early lines mid-run
+                time.sleep(rule["sleep"])
             return int(rule.get("exit", 0))
     return 0
 

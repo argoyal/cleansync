@@ -1,4 +1,10 @@
+import asyncio
 import resource
+import subprocess
+import time
+import uuid
+
+import pytest
 
 from app.services.rclone.runner import run_rclone
 from tests.fake_rclone import jl
@@ -60,3 +66,59 @@ async def test_runner_streams_large_output_without_buffering(fake_rclone, tmp_pa
     assert len(result.error_tail) <= 50
     # ru_maxrss is KiB on Linux, bytes on macOS; either way 10M of text must not stay resident.
     assert after - before < 200 * 1024 * 1024
+
+
+async def test_runner_plain_text_errors_reach_error_tail(fake_rclone, tmp_path):
+    fake_rclone.on(
+        "sync",
+        stderr=[
+            "Error: unknown flag: --bogus",
+            "Usage:",
+            "  rclone sync source:path dest:path [flags]",
+        ],
+        exit=1,
+    )
+    result = await run_rclone([fake_rclone.binary, "sync"], fake_rclone.env(), log_path=None)
+    assert "Error: unknown flag: --bogus" in result.error_tail
+
+
+async def test_runner_failed_to_notice_reaches_error_tail(fake_rclone):
+    fake_rclone.on(
+        "bisync", stderr=[jl("Failed to bisync: bisync aborted", level="notice")], exit=2
+    )
+    result = await run_rclone([fake_rclone.binary, "bisync"], fake_rclone.env(), log_path=None)
+    assert result.error_tail == ["Failed to bisync: bisync aborted"]
+
+
+async def test_runner_survives_a_two_mebibyte_line(fake_rclone, tmp_path):
+    fake_rclone.on("bisync", stderr=["y" * (2 * 1024 * 1024), jl("after")])
+    log = tmp_path / "big.log"
+    seen = []
+    result = await run_rclone(
+        [fake_rclone.binary, "bisync"], fake_rclone.env(), log_path=log, on_line=seen.append
+    )
+    assert result.exit_code == 0
+    assert "[truncated]" in log.read_text()
+    assert log.stat().st_size < 1024 * 1024 + 1000
+    assert seen[-1].msg == "after"
+
+
+def _alive(marker: str) -> bool:
+    return subprocess.run(["pgrep", "-f", marker], capture_output=True).returncode == 0
+
+
+async def test_runner_cleans_up_process_when_callback_raises(fake_rclone, tmp_path):
+    marker = f"--marker-{uuid.uuid4().hex}"
+    fake_rclone.on("bisync", stderr=[jl("first")], sleep=60)
+
+    def boom(_):
+        raise RuntimeError("callback failed")
+
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match="callback failed"):
+        await run_rclone(
+            [fake_rclone.binary, "bisync", marker], fake_rclone.env(), log_path=None, on_line=boom
+        )
+    assert time.monotonic() - start < 20
+    await asyncio.sleep(0.2)
+    assert not _alive(marker)

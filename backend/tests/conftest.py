@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.paths import Layout
+from tests.fake_rclone import FakeRclone
 
 _ENV_VARS = (
     "DRIVESYNC_ROOT",
@@ -128,9 +129,6 @@ def auth_client(client, settings):
     assert r.status_code == 200, r.text
     client.headers["X-CSRF-Token"] = r.json()["csrf_token"]
     return client
-
-
-from tests.fake_rclone import FakeRclone  # noqa: E402
 
 
 @pytest.fixture

@@ -18,6 +18,7 @@ _AUTH = (
     "invalid_client",
 )
 _ACCESS = ("check file check failed", "access test failed")
+_CONFIG = ("specified filters file does not exist", "unknown flag")
 _RESYNC = ("must run --resync",)
 _TRANSIENT = (
     "ratelimitexceeded",
@@ -40,6 +41,10 @@ def classify_failure(exit_code: int, error_tail: list[str]) -> Failure | None:
     text = "\n".join(error_tail).lower()
     if any(m in text for m in _AUTH):
         return Failure.AUTH
+    if any(m in text for m in _CONFIG) or any(
+        ln.lstrip().startswith("Error:") for ln in error_tail
+    ):
+        return Failure.OTHER
     if any(m in text for m in _ACCESS):
         return Failure.ACCESS_CHECK
     if any(m in text for m in _RESYNC):

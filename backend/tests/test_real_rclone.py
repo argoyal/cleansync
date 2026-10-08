@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.services.rclone import commands as c
-from app.services.rclone.parse import Counters
+from app.services.rclone.parse import Counters, count_dry_run_deletes, parse_check_combined
 from app.services.rclone.runner import run_rclone
 
 pytestmark = [
@@ -70,6 +70,7 @@ async def test_real_bisync_conflict_is_detected_and_keeps_both(tmp_path):
     (p1 / "both.txt").write_text("local edit, longer")
     (p2 / "both.txt").write_text("remote edit")
     res, counters = await _run(env, t, tmp_path, dry_run=False)
+    assert res.exit_code == 0, res.error_tail
     assert counters.conflict_paths == ["both.txt"], (tmp_path / "log.txt").read_text()
     names = sorted(p.name for p in p1.iterdir())
     assert "both.conflict1.txt" in names and "both.conflict2.txt" in names, names
@@ -85,3 +86,49 @@ async def test_real_access_check_blocks_when_marker_missing(tmp_path):
     res, _ = await _run(env, t, tmp_path, dry_run=False)
     assert res.exit_code != 0
     assert (p2 / "keep.txt").exists()
+
+
+def _filtered_dirs(tmp_path: Path):
+    env, t, p1, p2 = _setup(tmp_path)
+    t.filters_file.write_text("- /skip/**\n+ **\n")
+    (p1 / "skip").mkdir()
+    (p1 / "skip" / "a.txt").write_text("a")
+    (p2 / "skip").mkdir()
+    (p2 / "skip" / "b.txt").write_text("b")
+    (p1 / "new.txt").write_text("n")
+    (p2 / "extra.txt").write_text("e")
+    return env, t, p1, p2
+
+
+async def test_real_sync_dry_run_honours_filter_from(tmp_path):
+    env, t, p1, p2 = _filtered_dirs(tmp_path)
+    lines = []
+    res = await run_rclone(
+        c.sync_args(env, str(p1), str(p2), t.filters_file, None, dry_run=True),
+        env.env(),
+        log_path=None,
+        on_line=lines.append,
+    )
+    assert res.exit_code == 0, res.error_tail
+    skipped = [ln for ln in lines if ln.msg.startswith("Skipped ")]
+    objs = {ln.obj for ln in skipped}
+    assert {"new.txt", "extra.txt"} <= objs, [ln.raw for ln in lines]
+    assert not any(o.startswith("skip/") for o in objs), objs
+    assert sum(count_dry_run_deletes(ln) for ln in lines) == 1
+    assert not (p2 / "new.txt").exists()
+
+
+async def test_real_check_honours_filter_from_and_parses_combined(tmp_path):
+    env, t, p1, p2 = _filtered_dirs(tmp_path)
+    out = []
+    res = await run_rclone(
+        c.check_args(env, p1, str(p2), t.filters_file),
+        env.env(),
+        log_path=None,
+        on_stdout=out.append,
+    )
+    assert res.exit_code == 1, res.error_tail  # differences found
+    parsed = {m for m in map(parse_check_combined, out) if m}
+    assert ("+", "new.txt") in parsed and ("-", "extra.txt") in parsed
+    assert ("=", "keep.txt") in parsed
+    assert not any(path.startswith("skip/") for _, path in parsed)
