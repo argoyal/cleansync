@@ -882,3 +882,32 @@ async def test_real_same_new_file_on_both_sides_with_different_times_is_no_confl
         assert sorted(p.name for p in local_dir.iterdir()) == ["RCLONE_TEST", "keep.txt", "s.txt"]
     finally:
         eng.dispose()
+
+
+async def test_real_upload_temp_files_never_sync_at_any_depth(tmp_path):
+    from app.services.sync.filters import render_filters
+
+    env, t, p1, p2 = _setup(tmp_path)
+    t.filters_file.write_text(render_filters([]))
+    res, _ = await _run(env, t, tmp_path, dry_run=False, resync=True)
+    assert res.exit_code == 0, res.error_tail
+    (p1 / "sub" / "deeper").mkdir(parents=True)
+    for rel in (
+        ".drivesync-upload-root",
+        "sub/.drivesync-upload-a",
+        "sub/deeper/.drivesync-upload-b",
+    ):
+        (p1 / rel).write_text("half")
+    (p1 / "sub" / "deeper" / "real.txt").write_text("r")
+    res, _ = await _run(env, t, tmp_path, dry_run=False)
+    assert res.exit_code == 0, res.error_tail
+    assert (p2 / "sub" / "deeper" / "real.txt").exists()
+    assert not list(p2.rglob(".drivesync-upload-*"))
+    # One-way sync (remote to local) must not delete them either: they are excluded.
+    res = await run_rclone(
+        c.sync_args(env, str(p2), str(p1), t.filters_file, None, dry_run=False),
+        env.env(),
+        log_path=None,
+    )
+    assert res.exit_code == 0, res.error_tail
+    assert len(list(p1.rglob(".drivesync-upload-*"))) == 3

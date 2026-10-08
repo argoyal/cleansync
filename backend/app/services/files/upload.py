@@ -8,6 +8,7 @@ import asyncio
 import errno
 import os
 import shutil
+import time
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -16,7 +17,13 @@ from app.core.pathsafe import safe_join
 from app.paths import Layout
 from app.services.files.names import free_name, validate_name
 from app.services.files.ops import FileOpError
-from app.services.files.scope import Scope, is_hidden, join_rel, resolves_to_hidden
+from app.services.files.scope import (
+    UPLOAD_TEMP_PREFIX,
+    Scope,
+    is_hidden,
+    join_rel,
+    resolves_to_hidden,
+)
 
 FLUSH_BYTES = 4 * 1024 * 1024
 MAX_DEPTH = 64
@@ -81,7 +88,7 @@ async def save_stream(stream: AsyncIterator[bytes], tmp: Path) -> int:
 
 def _copy_beside(tmp: Path, folder: Path) -> Path:
     """Copy tmp into the destination folder under a short hidden name (other disk)."""
-    hidden = folder / f".drivesync-upload-{uuid.uuid4().hex}"
+    hidden = folder / f"{UPLOAD_TEMP_PREFIX}{uuid.uuid4().hex}"
     try:
         shutil.copyfile(tmp, hidden)
         shutil.copystat(tmp, hidden)
@@ -148,4 +155,31 @@ def clear_uploads(layout: Layout) -> int:
     for f in layout.uploads_dir.glob("*.part"):
         f.unlink(missing_ok=True)
         removed += 1
+    return removed
+
+
+STALE_TEMP_S = 3600.0
+
+
+def sweep_upload_leftovers(
+    storage: Path, max_age_s: float = STALE_TEMP_S, now: float | None = None
+) -> int:
+    """Remove upload copies a crash left inside synced folders. Only ones older than
+    max_age_s, so a copy an upload is placing right now is never touched: the copy keeps the
+    uploaded file's own modified time, so its inode change time (made now) counts too.
+    Never follows links."""
+    cutoff = (time.time() if now is None else now) - max_age_s
+    removed = 0
+    for folder, _dirs, files in os.walk(storage, followlinks=False):
+        for name in files:
+            if not name.casefold().startswith(UPLOAD_TEMP_PREFIX):
+                continue
+            path = Path(folder) / name
+            try:
+                st = path.lstat()
+                if max(st.st_mtime, st.st_ctime) < cutoff and not path.is_symlink():
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                continue
     return removed

@@ -6,9 +6,13 @@ from sqlalchemy.orm import Session
 
 from app.models import SyncPair
 from app.paths import Layout
+from app.services.files.scope import UPLOAD_TEMP_PREFIX
 
 _SPECIAL = re.compile(r"([\\*?\[\]{}])")
-ALWAYS_EXCLUDED = ["- /.google-exports/**"]
+# Upload temp files (".drivesync-upload-<hex>", made beside the target when storage/ is on
+# another disk) never sync. No leading "/": rclone then matches the name in every folder,
+# the pair's own folder included (checked with real rclone; "- **/name" misses the root).
+ALWAYS_EXCLUDED = ["- /.google-exports/**", f"- {UPLOAD_TEMP_PREFIX}*"]
 
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")

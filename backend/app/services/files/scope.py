@@ -17,11 +17,14 @@ from app.paths import Layout
 # Never listed, served, renamed or deleted from the UI.
 HIDDEN_NAMES = frozenset({"RCLONE_TEST", ".google-exports"})
 _HIDDEN_FOLDED = frozenset(n.casefold() for n in HIDDEN_NAMES)
+# Half-placed upload copies (see app.services.files.upload); never synced either.
+UPLOAD_TEMP_PREFIX = ".drivesync-upload-"
 
 
 def is_hidden_name(name: str) -> bool:
     """Case-insensitive: the disk may be case-insensitive (Windows, macOS)."""
-    return name.casefold() in _HIDDEN_FOLDED
+    folded = name.casefold()
+    return folded in _HIDDEN_FOLDED or folded.startswith(UPLOAD_TEMP_PREFIX)
 
 
 def is_hidden(rel: str) -> bool:

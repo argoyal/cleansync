@@ -39,7 +39,7 @@ from app.services.events.bus import EventBus
 from app.services.files.moves import DriveMover
 from app.services.files.status import StatusIndexes
 from app.services.files.thumbs import Thumbnails
-from app.services.files.upload import clear_uploads
+from app.services.files.upload import clear_uploads, sweep_upload_leftovers
 from app.services.queue import SyncQueue, make_handler
 from app.services.rclone.setup import build_rclone_env, ensure_config_encrypted
 from app.services.scheduler import Scheduler
@@ -51,6 +51,15 @@ from app.web.security import SecurityHeaders
 from app.web.spa import mount_spa
 
 logger = logging.getLogger(__name__)
+
+
+def _log_sweep(task: asyncio.Future) -> None:
+    if task.cancelled():
+        return
+    if task.exception() is not None:
+        logger.warning("could not sweep old upload copies: %r", task.exception())
+    elif task.result():
+        logger.info("removed %s upload copies left by an earlier crash", task.result())
 
 
 def create_app(settings: Settings | None = None, *, start_background: bool = True) -> FastAPI:
@@ -79,6 +88,9 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 "Restore a copy from app/data/db-backups (see docs/backup-recovery.md)."
             )
         elif start_background:
+            # Walking all of storage/ can take a while on a slow disk: don't hold up startup.
+            sweep = asyncio.ensure_future(asyncio.to_thread(sweep_upload_leftovers, layout.storage))
+            sweep.add_done_callback(_log_sweep)
             with session_factory() as db:
                 for pair_id in recover_interrupted(db):
                     app.state.queue.request(pair_id, "RECOVERY")
