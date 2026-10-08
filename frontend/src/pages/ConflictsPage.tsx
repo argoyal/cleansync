@@ -5,7 +5,7 @@ import { api, friendlyError } from "../api/client";
 import { fileUrl, useConflicts, usePairs } from "../api/queries";
 import type { Conflict, Pair } from "../api/types";
 import { useToast } from "../components/Toasts";
-import { Button, Dialog, Empty } from "../components/ui";
+import { Button, Dialog, Empty, Notice } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { formatBytes, formatWhen } from "../lib/format";
 import { accountPath } from "../lib/files";
@@ -18,7 +18,7 @@ const DONE: Record<Action, string> = {
   skip: "Skipped. Both copies stay as they are.",
 };
 
-function Version({ title, pair, path, size, mtime }: { title: string; pair: Pair; path: string; size: number | null; mtime: string | null }) {
+function Version({ title, label, pair, path, size, mtime }: { title: string; label: string; pair: Pair; path: string; size: number | null; mtime: string | null }) {
   const full = accountPath(pair.local_subpath, path);
   return (
     <div className="rounded-ctl border border-line p-3">
@@ -27,10 +27,10 @@ function Version({ title, pair, path, size, mtime }: { title: string; pair: Pair
         {formatBytes(size)}, changed {formatWhen(mtime)}
       </p>
       <div className="mt-2 flex gap-4 text-table">
-        <a className="font-semibold text-accent" href={fileUrl(pair.account_id, full)} target="_blank" rel="noopener noreferrer">
+        <a aria-label={`Open ${title.toLowerCase()} version of ${label}`} className="font-semibold text-accent" href={fileUrl(pair.account_id, full)} target="_blank" rel="noopener noreferrer">
           Open
         </a>
-        <a className="font-semibold text-accent" href={fileUrl(pair.account_id, full, true)}>
+        <a aria-label={`Download ${title.toLowerCase()} version of ${label}`} className="font-semibold text-accent" href={fileUrl(pair.account_id, full, true)}>
           Download
         </a>
       </div>
@@ -55,20 +55,20 @@ export function ConflictCard({ conflict, pair }: { conflict: Conflict; pair: Pai
     <article className="rounded-card border border-line p-4">
       <h2 className="mb-3 break-all font-semibold">{conflict.path}</h2>
       <div className="grid gap-3 sm:grid-cols-2">
-        <Version title="On this server" pair={pair} path={conflict.local_variant} size={conflict.local_size} mtime={conflict.local_mtime} />
-        <Version title="On Google Drive" pair={pair} path={conflict.remote_variant} size={conflict.remote_size} mtime={conflict.remote_mtime} />
+        <Version title="On this server" label={conflict.path} pair={pair} path={conflict.local_variant} size={conflict.local_size} mtime={conflict.local_mtime} />
+        <Version title="On Google Drive" label={conflict.path} pair={pair} path={conflict.remote_variant} size={conflict.remote_size} mtime={conflict.remote_mtime} />
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
-        <Button disabled={resolve.isPending} onClick={() => run("keep_local")}>
+        <Button aria-label={`Keep local version of ${conflict.path}`} disabled={resolve.isPending} onClick={() => run("keep_local")}>
           Keep local
         </Button>
-        <Button disabled={resolve.isPending} onClick={() => run("keep_remote")}>
+        <Button aria-label={`Keep Drive version of ${conflict.path}`} disabled={resolve.isPending} onClick={() => run("keep_remote")}>
           Keep Drive
         </Button>
-        <Button disabled={resolve.isPending} onClick={() => run("keep_both")}>
+        <Button aria-label={`Keep both versions of ${conflict.path}`} disabled={resolve.isPending} onClick={() => run("keep_both")}>
           Keep both
         </Button>
-        <Button tone="quiet" disabled={resolve.isPending} onClick={() => run("skip")}>
+        <Button tone="quiet" aria-label={`Skip ${conflict.path}`} disabled={resolve.isPending} onClick={() => run("skip")}>
           Skip
         </Button>
       </div>
@@ -78,10 +78,9 @@ export function ConflictCard({ conflict, pair }: { conflict: Conflict; pair: Pai
           onClose={() => setConfirming(null)}
           footer={
             <>
-              <Button onClick={() => setConfirming(null)}>Cancel</Button>
+              <Button data-autofocus onClick={() => setConfirming(null)}>Cancel</Button>
               <Button
                 tone="primary"
-                data-autofocus
                 onClick={() => {
                   resolve.mutate(confirming);
                   setConfirming(null);
@@ -100,9 +99,17 @@ export function ConflictCard({ conflict, pair }: { conflict: Conflict; pair: Pai
 }
 
 export function ConflictList({ pair }: { pair: Pair }) {
-  const { data = [] } = useConflicts(pair.id);
+  const { data = [], isError, error, refetch } = useConflicts(pair.id);
   return (
     <div className="space-y-4">
+      {isError && (
+        <Notice tone="err">
+          <p>Could not load the conflicts of {pair.name}. {friendlyError(error)}</p>
+          <Button className="mt-2" onClick={() => void refetch()}>
+            Try again
+          </Button>
+        </Notice>
+      )}
       {data.map((c) => (
         <ConflictCard key={c.id} conflict={c} pair={pair} />
       ))}

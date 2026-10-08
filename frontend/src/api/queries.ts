@@ -70,8 +70,11 @@ export const useStorage = (accountId: number | null) =>
     enabled: accountId !== null,
   });
 
-export const useHistory = (pairId: number) =>
-  useQuery({ queryKey: ["history", pairId], queryFn: () => api<Job[]>(`/api/sync-pairs/${pairId}/history`) });
+export const useHistory = (pairId: number, limit = 50) =>
+  useQuery({
+    queryKey: ["history", pairId, limit],
+    queryFn: () => api<Job[]>(`/api/sync-pairs/${pairId}/history${query({ limit })}`),
+  });
 export const useLogs = (pairId: number, live: boolean) =>
   useQuery({
     queryKey: ["logs", pairId],

@@ -5,7 +5,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { api, friendlyError } from "../api/client";
 import { useActivity, useCatalog, useHistory, usePair, usePairJobs, usePlanned } from "../api/queries";
 import type { Pair } from "../api/types";
-import { PairActions, usePairAction } from "../components/PairActions";
+import { AttentionNotice, PairActions, usePairAction } from "../components/PairActions";
 import { PairStatusPill } from "../components/StatusBadge";
 import { useToast } from "../components/Toasts";
 import { Button, Dialog, Field, inputClass, Notice } from "../components/ui";
@@ -81,7 +81,7 @@ function Overview({ pair }: { pair: Pair }) {
   const c = catalog.data;
   return (
     <div className="space-y-6">
-      {pair.last_error && <Notice tone={pair.status === "ERROR" ? "err" : "warn"}>{pair.last_error}</Notice>}
+      <AttentionNotice pair={pair} />
       <PairActions pair={pair} details={false} />
       <dl className="grid max-w-2xl grid-cols-[auto,1fr] gap-x-6 gap-y-2 text-table">
         <dt className="text-ink-2">On this server</dt>
@@ -129,11 +129,13 @@ const STATE_COLOR: Record<string, string> = {
 };
 
 function History({ pairId }: { pairId: number }) {
-  const { data = [] } = useHistory(pairId);
+  const [limit, setLimit] = useState(50);
+  const { data = [], isError, error } = useHistory(pairId, limit);
+  if (isError) return <Notice tone="err">{friendlyError(error)}</Notice>;
   if (data.length === 0) return <p className="text-ink-2">No syncs yet.</p>;
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[640px] text-table">
+      <table aria-label="Sync history" className="w-full min-w-[640px] text-table">
         <thead className="text-left text-meta text-ink-2">
           <tr className="border-b border-line">
             <th className="py-2 font-medium">Started</th>
@@ -143,6 +145,7 @@ function History({ pairId }: { pairId: number }) {
             <th className="font-medium">Deleted</th>
             <th className="font-medium">Conflicts</th>
             <th className="font-medium">Took</th>
+            <th className="font-medium"><span className="sr-only">Log</span></th>
           </tr>
         </thead>
         <tbody className="tabular">
@@ -158,10 +161,20 @@ function History({ pairId }: { pairId: number }) {
               <td>{j.files_deleted_local + j.files_deleted_remote}</td>
               <td>{j.conflicts}</td>
               <td>{j.duration_s !== null ? `${Math.round(j.duration_s)} s` : ""}</td>
+              <td>
+                <a className="font-semibold text-accent" aria-label={`Download log of the sync that started ${formatWhen(j.started_at) || "earlier"} (job ${j.id})`} href={`/api/sync-pairs/${pairId}/logs/${j.id}/download`}>
+                  Log
+                </a>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+      {data.length >= limit && (
+        <Button className="mt-3" onClick={() => setLimit(limit + 50)}>
+          Load more
+        </Button>
+      )}
     </div>
   );
 }
@@ -181,13 +194,16 @@ const RETENTION: [number | null, string][] = [
   [null, "Keep forever"],
 ];
 
+/** A whole number of zero or more; an empty box is not zero. */
+const isCount = (v: string) => /^\d+$/.test(v.trim());
+
 function PairSettings({ pair }: { pair: Pair }) {
   const qc = useQueryClient();
   const toast = useToast();
   const navigate = useNavigate();
   const [name, setName] = useState(pair.name);
   const [interval, setInterval] = useState<number | null>(pair.schedule_interval_s);
-  const [limit, setLimit] = useState(pair.max_deletions);
+  const [limit, setLimit] = useState(String(pair.max_deletions));
   const [backups, setBackups] = useState(pair.backups_enabled);
   const [retention, setRetention] = useState<number | null>(pair.backup_retention_days);
   const [removing, setRemoving] = useState(false);
@@ -195,12 +211,13 @@ function PairSettings({ pair }: { pair: Pair }) {
     mutationFn: () =>
       api(`/api/sync-pairs/${pair.id}`, {
         method: "PUT",
-        body: { name, schedule_interval_s: interval, max_deletions: limit, backups_enabled: backups, backup_retention_days: retention },
+        body: { name, schedule_interval_s: interval, max_deletions: Number(limit), backups_enabled: backups, backup_retention_days: retention },
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["pairs"] });
       toast("Saved.");
     },
+    onError: (e) => toast(friendlyError(e), { tone: "error" }),
   });
   const remove = useMutation({
     mutationFn: () => api(`/api/sync-pairs/${pair.id}`, { method: "DELETE" }),
@@ -215,6 +232,7 @@ function PairSettings({ pair }: { pair: Pair }) {
     e.preventDefault();
     save.mutate();
   };
+  const validLimit = isCount(limit);
   const pick = (v: string) => (v === "" ? null : Number(v));
   return (
     <form onSubmit={submit} className="max-w-lg space-y-4">
@@ -231,7 +249,7 @@ function PairSettings({ pair }: { pair: Pair }) {
         </select>
       </Field>
       <Field label="Deletion limit" hint="A sync that would delete more files than this stops and asks you first.">
-        <input className={inputClass} type="number" min={0} value={limit} onChange={(e) => setLimit(Math.max(0, Number(e.target.value)))} />
+        <input className={inputClass} type="number" min={0} step={1} inputMode="numeric" value={limit} onChange={(e) => setLimit(e.target.value)} aria-invalid={!validLimit} />
       </Field>
       <label className="flex items-center gap-2">
         <input type="checkbox" checked={backups} onChange={(e) => setBackups(e.target.checked)} />
@@ -248,7 +266,7 @@ function PairSettings({ pair }: { pair: Pair }) {
       </Field>
       {save.isError && <Notice tone="err">{friendlyError(save.error)}</Notice>}
       <div className="flex flex-wrap gap-2">
-        <Button tone="primary" type="submit" disabled={save.isPending || !name.trim()}>
+        <Button tone="primary" type="submit" disabled={save.isPending || !name.trim() || !validLimit}>
           Save
         </Button>
         <Button tone="quiet" className="text-err" onClick={() => setRemoving(true)}>
@@ -285,77 +303,109 @@ export function BlockedPage() {
   const jobs = usePairJobs(id);
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const [limit, setLimit] = useState<number | null>(null);
+  const toast = useToast();
+  const [limit, setLimit] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const changeLimit = useMutation({
     mutationFn: (max: number) => api(`/api/sync-pairs/${id}`, { method: "PUT", body: { max_deletions: max } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pairs"] }),
+    onError: (e) => toast(friendlyError(e), { tone: "error" }),
   });
   const p = pair.data;
+  if (pair.isError) return <div className="p-6"><Notice tone="err">{friendlyError(pair.error)}</Notice></div>;
+  if (!p) return <p className="p-6 text-ink-2">Loading</p>;
+  const blocked = p.attention_reason === "BLOCKED";
   const changes = planned.data?.changes ?? [];
   const deletes = changes.filter((c) => c.action === "delete");
   const local = deletes.filter((c) => c.side === "local");
   const remote = deletes.filter((c) => c.side === "remote");
-  // The list is capped (deletes first); the blocked job's own count is the true total when we have it.
+  // The list is capped (deletes first); the blocked job's own count is the true total when we can find it.
   const blockedJob = (jobs.data ?? []).find((j) => j.id === planned.data?.job_id);
+  const jobsSettled = !jobs.isPending;
   const total = Math.max(deletes.length, blockedJob?.planned_deletions ?? 0);
   const cutShort = total > deletes.length;
-  if (!p) return <p className="p-6 text-ink-2">Loading</p>;
+  const totalUnsure = planned.isSuccess && jobsSettled && !blockedJob && planned.data?.job_id != null;
+  const limitText = limit ?? String(p.max_deletions);
+  const limitOk = isCount(limitText);
+  const ready = planned.isSuccess;
   return (
     <div className="max-w-4xl space-y-6 p-4 sm:p-6">
       <Link to={`/activity/${id}`} className="text-table text-accent">
         {p.name}
       </Link>
       <h1 className="text-hero font-semibold tracking-tight">Synchronization blocked</h1>
-      {p.attention_reason !== "BLOCKED" ? (
+      {!blocked ? (
         <Notice tone="ok">Nothing is blocked for this pair right now.</Notice>
+      ) : planned.isError ? (
+        <Notice tone="err">
+          <p>Could not load the list of planned deletions. {friendlyError(planned.error)}</p>
+          <Button className="mt-2" onClick={() => void planned.refetch()}>
+            Retry
+          </Button>
+        </Notice>
+      ) : !ready ? (
+        <p className="text-ink-2">Loading the list…</p>
       ) : (
         <Notice tone="warn">
           This sync would delete {total.toLocaleString()} files; your limit is {p.max_deletions}. Nothing has been deleted yet,
           and nothing has changed on either side.
         </Notice>
       )}
-      {cutShort && (
+      {blocked && ready && cutShort && (
         <Notice tone="warn">
           The lists below are cut short: they show {deletes.length.toLocaleString()} of the {total.toLocaleString()} files that would be deleted.
         </Notice>
       )}
-      <div className="grid gap-4 md:grid-cols-2">
-        {[
-          { title: "Would be deleted on this server", list: local },
-          { title: "Would be deleted on Google Drive (to Drive's trash)", list: remote },
-        ].map(({ title, list }) => (
-          <section key={title} className="rounded-card border border-line p-4">
-            <h2 className="mb-2 font-semibold">
-              {title} ({list.length})
-            </h2>
-            <ul className="max-h-72 overflow-y-auto font-mono text-meta">
-              {list.map((c) => (
-                <li key={c.path} className="truncate py-0.5">
-                  {c.path}
-                </li>
-              ))}
-              {list.length === 0 && <li className="font-sans text-ink-2">None</li>}
-            </ul>
-          </section>
-        ))}
-      </div>
-      {p.attention_reason === "BLOCKED" && (
+      {blocked && totalUnsure && (
+        <Notice tone="warn">The total may be larger than the lists below show.</Notice>
+      )}
+      {blocked && ready && (
+        <div className="grid gap-4 md:grid-cols-2">
+          {[
+            { title: "Would be deleted on this server", list: local },
+            { title: "Would be deleted on Google Drive (to Drive's trash)", list: remote },
+          ].map(({ title, list }) => (
+            <section key={title} className="rounded-card border border-line p-4">
+              <h2 className="mb-2 font-semibold">
+                {title} ({list.length})
+              </h2>
+              <ul className="max-h-72 overflow-y-auto font-mono text-meta">
+                {list.map((c) => (
+                  <li key={c.path} className="truncate py-0.5">
+                    {c.path}
+                  </li>
+                ))}
+                {list.length === 0 && <li className="font-sans text-ink-2">None</li>}
+              </ul>
+            </section>
+          ))}
+        </div>
+      )}
+      {blocked && (
         <div className="flex flex-wrap items-end gap-4">
-          <Button tone="primary" disabled={act.isPending} onClick={() => setConfirming(true)}>
+          <Button tone="primary" disabled={!ready || act.isPending} onClick={() => setConfirming(true)}>
             Override once
           </Button>
           <form
             className="flex items-end gap-2"
             onSubmit={(e) => {
               e.preventDefault();
-              if (limit !== null) changeLimit.mutate(limit);
+              if (limit !== null && limitOk) changeLimit.mutate(Number(limitText));
             }}
           >
             <Field label="New deletion limit">
-              <input className={`${inputClass} w-32`} type="number" min={0} value={limit ?? p.max_deletions} onChange={(e) => setLimit(Number(e.target.value))} />
+              <input
+                className={`${inputClass} w-32`}
+                type="number"
+                min={0}
+                step={1}
+                inputMode="numeric"
+                value={limitText}
+                aria-invalid={!limitOk}
+                onChange={(e) => setLimit(e.target.value)}
+              />
             </Field>
-            <Button type="submit" disabled={limit === null || changeLimit.isPending}>
+            <Button type="submit" disabled={limit === null || !limitOk || changeLimit.isPending}>
               Change limit
             </Button>
           </form>
@@ -368,7 +418,9 @@ export function BlockedPage() {
           onClose={() => setConfirming(false)}
           footer={
             <>
-              <Button onClick={() => setConfirming(false)}>Cancel</Button>
+              <Button data-autofocus onClick={() => setConfirming(false)}>
+                Cancel
+              </Button>
               <Button
                 tone="danger"
                 onClick={() => {

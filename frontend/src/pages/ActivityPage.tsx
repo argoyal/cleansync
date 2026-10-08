@@ -1,10 +1,11 @@
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useActivity, useCatalog, useLogs, usePairs } from "../api/queries";
 import type { ActivityEvent, Pair } from "../api/types";
-import { PairActions } from "../components/PairActions";
+import { AttentionNotice, PairActions } from "../components/PairActions";
 import { PairStatusPill } from "../components/StatusBadge";
-import { Empty, Notice } from "../components/ui";
+import { Empty } from "../components/ui";
 import { formatInterval, formatRelative, formatWhen } from "../lib/format";
 
 function PairCard({ pair }: { pair: Pair }) {
@@ -28,11 +29,9 @@ function PairCard({ pair }: { pair: Pair }) {
         <dt className="text-ink-2">On Drive</dt>
         <dd className="tabular">{catalog.data ? `${catalog.data.files.toLocaleString()} files` : ""}</dd>
       </dl>
-      {pair.last_error && (
-        <div className="mb-3">
-          <Notice tone={pair.status === "ERROR" ? "err" : "warn"}>{pair.last_error}</Notice>
-        </div>
-      )}
+      <div className="mb-3 empty:hidden">
+        <AttentionNotice pair={pair} />
+      </div>
       <PairActions pair={pair} />
     </article>
   );
@@ -40,7 +39,22 @@ function PairCard({ pair }: { pair: Pair }) {
 
 export function LogTail({ pairId, live }: { pairId: number; live: boolean }) {
   const logs = useLogs(pairId, live);
+  const { refetch } = logs;
   const lines = logs.data?.lines ?? [];
+  const box = useRef<HTMLPreElement>(null);
+  const seen = useRef<number | null>(null);
+  const [fresh, setFresh] = useState(0);
+  const wasLive = useRef(live);
+  // One last fetch after the job ends, so the end of the log is not missed.
+  useEffect(() => {
+    if (wasLive.current && !live) void refetch();
+    wasLive.current = live;
+  }, [live, refetch]);
+  useEffect(() => {
+    if (box.current) box.current.scrollTop = box.current.scrollHeight;
+    if (seen.current !== null && lines.length > seen.current) setFresh((n) => n + lines.length - (seen.current ?? 0));
+    seen.current = lines.length;
+  }, [lines.length]);
   return (
     <div>
       <div className="mb-2 flex items-center gap-3">
@@ -51,9 +65,12 @@ export function LogTail({ pairId, live }: { pairId: number; live: boolean }) {
           </a>
         )}
       </div>
-      <pre className="max-h-80 overflow-auto rounded-card bg-sunken p-3 font-mono text-meta leading-5" aria-live={live ? "polite" : "off"}>
+      <pre ref={box} tabIndex={0} aria-label="Sync log" className="max-h-80 overflow-auto rounded-card bg-sunken p-3 font-mono text-meta leading-5">
         {lines.length ? lines.join("\n") : "No log yet."}
       </pre>
+      <p role="status" aria-live="polite" className="mt-1 text-meta text-ink-2">
+        {live && fresh > 0 ? `${fresh} new ${fresh === 1 ? "line" : "lines"}` : ""}
+      </p>
     </div>
   );
 }
