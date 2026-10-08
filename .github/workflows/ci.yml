@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 env:
-  # keep in sync with the Dockerfile ARG RCLONE_VERSION
-  RCLONE_VERSION: "1.75.1"
+  # keep in sync with the Dockerfile ARG RCLONE_VERSION (not named RCLONE_VERSION: rclone reads that variable itself)
+  RCLONE_PIN_VERSION: "1.75.1"
 
 jobs:
   backend:
@@ -39,7 +39,7 @@ jobs:
           python-version: "3.12"
       - name: Install pinned rclone
         run: |
-          curl -fsSLo /tmp/rclone.zip "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip"
+          curl -fsSLo /tmp/rclone.zip "https://downloads.rclone.org/v${RCLONE_PIN_VERSION}/rclone-v${RCLONE_PIN_VERSION}-linux-amd64.zip"
           sudo unzip -j /tmp/rclone.zip "*/rclone" -d /usr/local/bin
           rclone version
       - run: uv sync --frozen
