@@ -1,4 +1,5 @@
 import logging
+import time
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
@@ -9,6 +10,8 @@ from app.database.backup import backup_database
 from app.models import Account, SyncPair
 from app.models.enums import AccountStatus
 from app.paths import Layout
+from app.services.app_settings import get_setting
+from app.services.logs import prune_job_logs
 from app.services.sync.backups import prune_backups
 from app.services.sync.engine import is_eligible
 
@@ -119,7 +122,18 @@ class Scheduler:
             backup_database(self.layout.db_file, self.layout.db_backups, today=today)
         except Exception:
             log.exception("daily database backup failed")
-        with self.session_factory() as db:
-            removed = prune_backups(self.layout, db, today)
-        if removed:
-            log.info("removed %s expired backup folders", removed)
+        try:
+            with self.session_factory() as db:
+                removed = prune_backups(self.layout, db, today)
+            if removed:
+                log.info("removed %s expired backup folders", removed)
+        except Exception:
+            log.exception("backup pruning failed")
+        try:
+            with self.session_factory() as db:
+                days = int(get_setting(db, "log_retention_days"))  # type: ignore[arg-type]
+            gone = prune_job_logs(self.layout, days, time.time())
+            if gone:
+                log.info("removed %s old job logs", gone)
+        except Exception:
+            log.exception("job log pruning failed")

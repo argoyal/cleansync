@@ -111,3 +111,26 @@ async def test_daily_and_quota_jobs_coalesce_and_tolerate_late_starts(session_fa
             assert job.coalesce is True and job.misfire_grace_time == 3600
     finally:
         s.shutdown()
+
+
+async def test_daily_maintenance_prunes_logs_and_isolates_failures(
+    session_factory, layout, make_account, make_pair, monkeypatch
+):
+    import os
+    import time
+
+    old = layout.job_log(1)
+    old.write_text("x")
+    long_ago = time.time() - 90 * 86400
+    os.utime(old, (long_ago, long_ago))
+    acc = make_account()
+    pair = make_pair(acc, backup_retention_days=7)
+    oldb = layout.backups_dir / acc.email / str(pair.id) / "2000-01-01"
+    oldb.mkdir(parents=True)
+
+    def boom(*a, **k):
+        raise RuntimeError("prune broke")
+
+    monkeypatch.setattr("app.services.scheduler.prune_backups", boom)
+    _sched(session_factory, layout, StubQueue()).daily_maintenance()
+    assert not old.exists()  # log pruning still ran after the backup prune failed

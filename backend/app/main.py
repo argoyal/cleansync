@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy.orm import sessionmaker
 
-from app.api import accounts, auth, browse, events, health, pairs
+from app.api import accounts, auth, browse, conflicts, events, health, jobs, pairs, system
 from app.auth.bootstrap import ensure_admin
 from app.auth.ratelimit import LoginLimiter
 from app.config import Settings
@@ -138,6 +138,9 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         accounts.router,
         pairs.router,
         browse.router,
+        jobs.router,
+        conflicts.router,
+        system.router,
     ):
         app.include_router(router)
     return app

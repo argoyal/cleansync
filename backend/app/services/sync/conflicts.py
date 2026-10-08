@@ -1,12 +1,18 @@
+import os
 import re
-from datetime import UTC, datetime
+import shutil
+from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Conflict, SyncPair
-from app.models.enums import ConflictState
+from app.core.clock import utcnow
+from app.core.pathsafe import safe_join
+from app.models import Account, Conflict, SyncPair
+from app.models.enums import AttentionReason, ConflictState, PairStatus
+from app.paths import Layout
+from app.services.sync.pairs import pair_local_dir
 
 
 def _rel(parent: PurePosixPath, name: str) -> str:
@@ -105,3 +111,77 @@ def record_conflicts(
         created += 1
     db.commit()
     return created
+
+
+ACTIONS = ("keep_local", "keep_remote", "keep_both", "skip")
+
+
+class ConflictError(ValueError):
+    pass
+
+
+def _free_name(folder: Path, stem: str, suffix: str) -> Path:
+    candidate = folder / f"{stem}{suffix}"
+    n = 2
+    while candidate.exists():
+        candidate = folder / f"{stem} {n}{suffix}"
+        n += 1
+    return candidate
+
+
+def _to_backup(src: Path, backup_root: Path, rel: str) -> None:
+    dst = safe_join(backup_root, rel)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+
+
+def resolve_conflict(
+    db: Session,
+    layout: Layout,
+    account: Account,
+    pair: SyncPair,
+    conflict: Conflict,
+    action: str,
+    today: date,
+) -> Conflict:
+    if action not in ACTIONS:
+        raise ConflictError(f"unknown action {action!r}")
+    if conflict.state != ConflictState.OPEN:
+        raise ConflictError("this conflict is already handled")
+    local_dir = pair_local_dir(layout, account, pair)
+    backup_root = (
+        layout.backups_dir / account.email / str(pair.id) / today.isoformat() / "conflicts"
+    )
+    if action != "skip":
+        if not conflict.local_variant or not conflict.remote_variant:
+            raise ConflictError("DriveSync could not find both versions; run a sync first")
+        local_v = safe_join(local_dir, conflict.local_variant)
+        remote_v = safe_join(local_dir, conflict.remote_variant)
+        if not local_v.is_file() or not remote_v.is_file():
+            raise ConflictError("the conflict files are no longer there; run a sync first")
+        original = safe_join(local_dir, conflict.path)
+        if action in ("keep_local", "keep_remote"):
+            if action == "keep_local":
+                winner, loser, loser_rel = local_v, remote_v, conflict.remote_variant
+            else:
+                winner, loser, loser_rel = remote_v, local_v, conflict.local_variant
+            if original.exists():
+                _to_backup(original, backup_root, conflict.path)
+            _to_backup(loser, backup_root, loser_rel)
+            os.replace(winner, original)
+        else:
+            p = PurePosixPath(conflict.path)
+            os.replace(local_v, _free_name(original.parent, f"{p.stem} (local)", p.suffix))
+            os.replace(remote_v, _free_name(original.parent, f"{p.stem} (Drive)", p.suffix))
+    conflict.state = ConflictState.SKIPPED if action == "skip" else ConflictState.RESOLVED
+    conflict.resolution = action
+    conflict.resolved_at = utcnow()
+    db.commit()
+    still_open = db.scalar(
+        select(Conflict.id).where(Conflict.pair_id == pair.id, Conflict.state == ConflictState.OPEN)
+    )
+    if still_open is None and pair.attention_reason == AttentionReason.CONFLICTS:
+        pair.status = PairStatus.HEALTHY
+        pair.attention_reason = None
+        db.commit()
+    return conflict
