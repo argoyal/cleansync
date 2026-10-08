@@ -97,3 +97,36 @@ async def test_handler_dispatches_actions_and_reports_changes():
         ("safe_resync", 1, "MANUAL"),
     ]
     assert len(changes) == 2
+
+
+async def test_different_non_sync_action_while_pending_is_busy():
+    gate = asyncio.Event()
+
+    async def handler(pair_id, action, trigger):
+        await gate.wait()
+
+    q = SyncQueue(handler, max_parallel=1)
+    q.request(1, "MANUAL")  # occupies the only slot
+    await asyncio.sleep(0.01)
+    assert q.request(2, "MANUAL") == "queued"  # pending sync
+    assert q.request(2, "MANUAL", action="resync") == "busy"
+    assert q.request(2, "MANUAL") == "already_queued"
+    assert q.request(3, "INITIAL", action="preview") == "queued"  # pending preview
+    assert q.request(3, "INITIAL", action="preview") == "already_queued"
+    assert q.request(3, "INITIAL", action="initial") == "busy"
+    gate.set()
+    await q.wait_idle()
+
+
+async def test_disabled_queue_refuses_everything():
+    calls = []
+
+    async def handler(pair_id, action, trigger):
+        calls.append(pair_id)
+
+    q = SyncQueue(handler)
+    q.disabled_reason = "database integrity check failed"
+    assert q.request(1, "MANUAL") == "disabled"
+    assert q.request(1, "INITIAL", action="preview") == "disabled"
+    await q.wait_idle()
+    assert calls == []

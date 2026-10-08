@@ -77,7 +77,7 @@ async def test_tick_respects_backoff(session_factory, layout, make_account, make
     assert q.requests == []
 
 
-async def test_auth_failure_marks_account_and_stops_scheduling(
+async def test_tick_skips_account_needing_reauth(
     session_factory, layout, make_account, make_pair, db
 ):
     acc = make_account()
@@ -100,3 +100,14 @@ async def test_daily_maintenance_backs_up_db_and_prunes(
     _sched(session_factory, layout, StubQueue()).daily_maintenance()
     assert not old.exists()
     assert list(layout.db_backups.glob("drivesync-*.db"))
+
+
+async def test_daily_and_quota_jobs_coalesce_and_tolerate_late_starts(session_factory, layout):
+    s = _sched(session_factory, layout, StubQueue())
+    s.start()
+    try:
+        for job_id in ("daily", "quotas"):
+            job = s.aps.get_job(job_id)
+            assert job.coalesce is True and job.misfire_grace_time == 3600
+    finally:
+        s.shutdown()

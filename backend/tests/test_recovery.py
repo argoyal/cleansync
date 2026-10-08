@@ -18,6 +18,20 @@ def test_startup_marks_running_jobs_interrupted_and_requeues(db, make_account, m
     assert pair.status == "HEALTHY"
 
 
+def test_queued_jobs_get_a_not_started_message(db, make_account, make_pair):
+    acc = make_account()
+    pair = make_pair(acc, initialized=True)
+    db.add(SyncJob(pair_id=pair.id, kind="BISYNC", trigger="SCHEDULE", state="QUEUED"))
+    db.add(SyncJob(pair_id=pair.id, kind="BISYNC", trigger="SCHEDULE", state="RUNNING"))
+    db.commit()
+    recover_interrupted(db)
+    msgs = [j.error_message for j in db.scalars(select(SyncJob).order_by(SyncJob.id))]
+    assert msgs == [
+        "DriveSync stopped before this job started.",
+        "DriveSync stopped while this job was running.",
+    ]
+
+
 def test_uninitialized_pair_is_reset_but_not_requeued(db, make_account, make_pair):
     acc = make_account()
     pair = make_pair(acc, initialized=False, status="RUNNING")
@@ -50,7 +64,21 @@ def test_app_startup_recovers_and_starts_scheduler(settings, layout, db, make_ac
     db.add(SyncJob(pair_id=pair.id, kind="BISYNC", trigger="SCHEDULE", state="RUNNING"))
     db.commit()
     app = create_app(settings)
+
+    class RecordingQueue:
+        def __init__(self):
+            self.requests = []
+
+        def request(self, pair_id, trigger, action="sync"):
+            self.requests.append((pair_id, trigger, action))
+            return "queued"
+
+        async def stop(self):
+            pass
+
+    app.state.queue = rq = RecordingQueue()
     with TestClient(app):
+        assert rq.requests == [(pair.id, "RECOVERY", "sync")]
         assert app.state.scheduler.aps.running
         assert app.state.scheduler.aps.get_job(f"pair-{pair.id}") is not None
     assert not app.state.scheduler.aps.running

@@ -1,3 +1,4 @@
+import logging
 import shutil
 from datetime import date, timedelta
 
@@ -6,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.models import Account, SyncPair
 from app.paths import Layout
+
+log = logging.getLogger(__name__)
 
 
 def prune_backups(layout: Layout, db: Session, today: date) -> int:
@@ -25,6 +28,10 @@ def prune_backups(layout: Layout, db: Session, today: date) -> int:
             except ValueError:
                 continue
             if d.is_dir() and not d.is_symlink() and day < cutoff:
-                shutil.rmtree(d)
+                try:
+                    shutil.rmtree(d)
+                except OSError:
+                    log.exception("could not remove expired backup folder %s", d)
+                    continue
                 removed += 1
     return removed

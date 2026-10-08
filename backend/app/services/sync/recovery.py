@@ -12,9 +12,13 @@ def recover_interrupted(db: Session) -> list[int]:
     for job in db.scalars(
         select(SyncJob).where(SyncJob.state.in_([JobState.RUNNING, JobState.QUEUED]))
     ):
-        job.state = JobState.INTERRUPTED
         job.completed_at = utcnow()
-        job.error_message = "DriveSync stopped while this job was running."
+        job.error_message = (
+            "DriveSync stopped before this job started."
+            if job.state == JobState.QUEUED
+            else "DriveSync stopped while this job was running."
+        )
+        job.state = JobState.INTERRUPTED
         pair_ids.add(job.pair_id)
     for pair in db.scalars(select(SyncPair).where(SyncPair.status == PairStatus.RUNNING)):
         pair.status = PairStatus.HEALTHY if pair.initialized else PairStatus.NEW

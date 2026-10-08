@@ -41,7 +41,7 @@ _WAITING_FOR_USER = {
     AttentionReason.ACCESS_CHECK,
     AttentionReason.NEEDS_RESYNC,
 }
-_AUTOMATIC_TRIGGERS = {Trigger.SCHEDULE, Trigger.WATCHER}
+_AUTOMATIC_TRIGGERS = {Trigger.SCHEDULE, Trigger.WATCHER, Trigger.RECOVERY}
 
 
 def backoff(fail_count: int) -> timedelta:

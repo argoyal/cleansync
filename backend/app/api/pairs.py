@@ -138,6 +138,10 @@ def _queue(request: Request, pair_id: int, trigger: str, action: str = "sync") -
     result = request.app.state.queue.request(pair_id, trigger, action)
     if result == "busy":
         raise HTTPException(409, "this pair is busy; try again when the current job finishes")
+    if result == "disabled":
+        raise HTTPException(
+            503, "database integrity check failed; restore a backup (see docs/backup-recovery.md)"
+        )
     return {"result": result}
 
 
@@ -170,7 +174,12 @@ async def override_once(
         raise HTTPException(409, "this pair is busy; try again when the current job finishes")
     pair.override_next = True
     db.commit()
-    return _queue(request, pair_id, "MANUAL")
+    try:
+        return _queue(request, pair_id, "MANUAL")
+    except HTTPException:
+        pair.override_next = False  # nothing was queued: don't leave an approval lying around
+        db.commit()
+        raise
 
 
 @router.post("/{pair_id}/preview", status_code=202)

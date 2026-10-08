@@ -35,10 +35,23 @@ class Scheduler:
     def start(self) -> None:
         self.aps.start()
         self.aps.add_job(
-            self.daily_maintenance, "cron", hour=3, minute=0, id="daily", replace_existing=True
+            self.daily_maintenance,
+            "cron",
+            hour=3,
+            minute=0,
+            id="daily",
+            replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=3600,
         )
         self.aps.add_job(
-            self.refresh_quotas, "interval", hours=1, id="quotas", replace_existing=True
+            self.refresh_quotas,
+            "interval",
+            hours=1,
+            id="quotas",
+            replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=3600,
         )
         self.reload()
 

@@ -156,3 +156,41 @@ def test_routes_queue_on_the_real_event_loop(auth_client, make_account, db, app)
     r = auth_client.post(f"/api/sync-pairs/{p['id']}/sync")
     assert r.status_code == 202, r.text
     assert r.json() == {"result": "queued"}
+
+
+def test_pending_sync_blocks_a_resync_request(auth_client, make_account, queue, db):
+    p = _pair(auth_client, make_account)
+    _set(db, p["id"], initialized=True)
+    queue.answer = "busy"  # what SyncQueue answers when a different action is pending
+    r = auth_client.post(f"/api/sync-pairs/{p['id']}/resync")
+    assert r.status_code == 409 and "busy" in r.text
+
+
+def test_db_integrity_failure_disables_the_queue(settings, monkeypatch):
+    from app import main as main_mod
+
+    monkeypatch.setattr(main_mod, "integrity_ok", lambda engine: False)
+    a = main_mod.create_app(settings, start_background=False)
+    assert a.state.queue.request(1, "MANUAL") == "disabled"
+    assert a.state.queue.request(1, "INITIAL", action="preview") == "disabled"
+
+
+def test_disabled_queue_answers_503(auth_client, make_account, db, app):
+    p = _pair(auth_client, make_account)
+    _set(db, p["id"], initialized=True)
+    app.state.queue.disabled_reason = "database integrity check failed"
+    for path in ("sync", "resync", "override-once"):
+        if path == "override-once":
+            _set(db, p["id"], attention_reason="BLOCKED")
+        r = auth_client.post(f"/api/sync-pairs/{p['id']}/{path}")
+        assert r.status_code == 503, path
+        assert "integrity" in r.text and "backup-recovery.md" in r.text
+
+
+def test_refused_override_does_not_leave_the_flag_set(auth_client, make_account, db, app):
+    p = _pair(auth_client, make_account)
+    _set(db, p["id"], initialized=True, attention_reason="BLOCKED")
+    app.state.queue.disabled_reason = "database integrity check failed"
+    assert auth_client.post(f"/api/sync-pairs/{p['id']}/override-once").status_code == 503
+    db.expire_all()
+    assert db.get(SyncPair, p["id"]).override_next is False

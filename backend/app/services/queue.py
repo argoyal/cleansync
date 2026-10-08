@@ -19,14 +19,21 @@ class SyncQueue:
         self._running: set[int] = set()
         self._dirty: dict[int, str] = {}
         self._tasks: set[asyncio.Task] = set()
+        # Set when syncing must stop entirely (e.g. the database failed its integrity check).
+        self.disabled_reason: str | None = None
 
     def request(self, pair_id: int, trigger: str, action: str = "sync") -> str:
+        if self.disabled_reason is not None:
+            return "disabled"
         if pair_id in self._running:
             if action != "sync":
                 return "busy"
             self._dirty[pair_id] = trigger
             return "dirty"
         if pair_id in self._pending:
+            # Never silently drop a user's resync/preview/confirm behind a different job.
+            if action != "sync" and action != self._pending[pair_id][0]:
+                return "busy"
             return "already_queued"
         self._pending[pair_id] = (action, trigger)
         task = asyncio.get_running_loop().create_task(self._run(pair_id))

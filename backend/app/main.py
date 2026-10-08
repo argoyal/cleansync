@@ -92,6 +92,8 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         ),
         max_parallel=max_parallel,
     )
+    if not app.state.db_ok:
+        app.state.queue.disabled_reason = "database integrity check failed"
     app.state.scheduler = Scheduler(
         session_factory=session_factory,
         queue=app.state.queue,

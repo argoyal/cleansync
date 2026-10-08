@@ -516,6 +516,7 @@ async def test_schedule_and_watcher_do_not_retry_pairs_waiting_for_the_user(
     fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
     assert await sync_engine.run_pair(pair.id, "SCHEDULE") is None
     assert await sync_engine.run_pair(pair.id, "WATCHER") is None
+    assert await sync_engine.run_pair(pair.id, "RECOVERY") is None
     assert fake_rclone.calls() == []
     assert await sync_engine.run_pair(pair.id, "MANUAL") is not None
 
