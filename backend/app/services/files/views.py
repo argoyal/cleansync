@@ -1,14 +1,24 @@
 """Recent, Starred and Search: lists across every pair of one account."""
 
 import heapq
+import unicodedata
 from datetime import UTC, datetime
 
+from app.core.clock import as_utc
 from app.schemas.files import FileItemOut
 from app.services.files.listing import PairView, make_item, remote_item
 from app.services.files.scope import Scope, is_hidden, to_account_rel
 
 MAX_SEARCH_RESULTS = 200
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def _when(dt: datetime | None) -> datetime:
+    return as_utc(dt) or _EPOCH
+
+
+def _fold(text: str) -> str:
+    return unicodedata.normalize("NFC", text).casefold()
 
 
 def _local_item(scope: Scope, pair, view: PairView, prel: str) -> FileItemOut:
@@ -32,7 +42,8 @@ def _drive_only(view: PairView):
     if view.catalog is None:
         return
     for ent in view.catalog.natives.values():
-        yield ent
+        if not is_hidden(ent.path):
+            yield ent
     for path, ent in view.catalog.files.items():
         if path not in view.index.local and not is_hidden(path):
             yield ent
@@ -47,12 +58,12 @@ def recent(scope: Scope, views: dict[int, PairView], limit: int) -> list[FileIte
         files = ((p, e) for p, e in view.index.local.items() if not e.is_dir)
         for prel, _ in heapq.nlargest(limit, files, key=lambda pe: pe[1].mtime):
             item = _local_item(scope, pair, view, prel)
-            candidates.append((item.mtime or _EPOCH, item))
+            candidates.append((_when(item.mtime), item))
         remote = (e for e in _drive_only(view) if not e.is_dir)
-        for ent in heapq.nlargest(limit, remote, key=lambda e: e.mtime or _EPOCH):
+        for ent in heapq.nlargest(limit, remote, key=lambda e: _when(e.mtime)):
             prel = ent.path
             item = remote_item(to_account_rel(pair, prel), ent, view.status(prel, False), pair.id)
-            candidates.append((ent.mtime or _EPOCH, item))
+            candidates.append((_when(ent.mtime), item))
     candidates.sort(key=lambda c: c[0], reverse=True)
     return [item for _, item in candidates[:limit]]
 
@@ -78,22 +89,18 @@ def starred(scope: Scope, views: dict[int, PairView]) -> list[FileItemOut]:
 def search(
     scope: Scope, views: dict[int, PairView], query: str, limit: int = MAX_SEARCH_RESULTS
 ) -> list[FileItemOut]:
-    needle = query.casefold()
+    needle = _fold(query)
     out: list[FileItemOut] = []
     for pair in scope.pairs:
         view = views.get(pair.id)
         if view is None:
             continue
         for prel in view.index.local:
-            if len(out) >= limit:
-                break
-            if needle in prel.rsplit("/", 1)[-1].casefold():
+            if needle in _fold(prel.rsplit("/", 1)[-1]):
                 out.append(_local_item(scope, pair, view, prel))
         for ent in _drive_only(view):
-            if len(out) >= limit:
-                break
-            if needle in ent.display_name.casefold():
+            if needle in _fold(ent.display_name):
                 status = view.status(ent.path, ent.is_dir)
                 out.append(remote_item(to_account_rel(pair, ent.path), ent, status, pair.id))
-    out.sort(key=lambda i: (not i.is_dir, i.name.casefold(), i.path))
-    return out[:limit]
+    out.sort(key=lambda i: (not i.is_dir, _fold(i.name), i.path))
+    return out[: max(0, limit)]

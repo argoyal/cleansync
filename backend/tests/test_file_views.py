@@ -124,3 +124,102 @@ def test_status_counts_open_conflicts(auth_client, world, db):
 def test_views_need_an_existing_account(auth_client):
     for url in ("/api/recent", "/api/starred", "/api/storage"):
         assert auth_client.get(url, params={"account_id": 99}).status_code == 404
+
+
+def _names(items):
+    return [i["name"] for i in items]
+
+
+def test_hidden_natives_never_listed(auth_client, world, save_catalog):
+    acc, pair = world
+    save_catalog(
+        pair.id,
+        [
+            CatalogEntry("ok report.txt", False, 1, NOW, id="K1", starred=True),
+            CatalogEntry(
+                ".google-exports/x report", False, 0, NOW, id="H1", native="document", starred=True
+            ),
+            CatalogEntry(
+                "RCLONE_TEST/y report", False, 0, NOW, id="H2", native="document", starred=True
+            ),
+            CatalogEntry(
+                "rclone_test/y report2", False, 0, NOW, id="H3", native="document", starred=True
+            ),
+        ],
+    )
+    for url, extra in (("/api/recent", {}), ("/api/search", {"q": "report"}), ("/api/starred", {})):
+        names = _names(_get(auth_client, url, account_id=acc.id, **extra))
+        assert not [n for n in names if n.startswith(("x ", "y "))], (url, names)
+    assert "ok report.txt" in _names(
+        _get(auth_client, "/api/search", account_id=acc.id, q="report")
+    )
+
+
+def test_search_cap_and_ranking_across_pairs(
+    auth_client, app, make_account, make_pair, save_catalog, stub_queue
+):
+    acc = make_account()
+    p1 = make_pair(acc, local_subpath="A", remote_path="", initialized=True)
+    p2 = make_pair(acc, local_subpath="B", remote_path="", initialized=True)
+    save_catalog(
+        p1.id, [CatalogEntry(f"zz{i:03}.txt", False, 1, NOW, id=f"a{i}") for i in range(250)]
+    )
+    save_catalog(p2.id, [CatalogEntry("aa-first.txt", False, 1, NOW, id="b1")])
+    items = _get(auth_client, "/api/search", account_id=acc.id, q="txt")
+    assert len(items) == 200 and items[0]["name"] == "aa-first.txt"
+    assert len(_get(auth_client, "/api/recent", account_id=acc.id, limit=500)) == 200
+
+
+def test_search_unicode_and_regex_chars(auth_client, world, save_catalog):
+    acc, pair = world
+    save_catalog(
+        pair.id,
+        [
+            CatalogEntry("Straße.txt", False, 1, NOW, id="u1"),
+            CatalogEntry("école.txt", False, 1, NOW, id="u2"),  # decomposed e-acute
+            CatalogEntry("a[b].txt", False, 1, NOW, id="u3"),
+            CatalogEntry("plain.txt", False, 1, NOW, id="u4"),
+        ],
+    )
+    s = lambda q: _names(_get(auth_client, "/api/search", account_id=acc.id, q=q))  # noqa: E731
+    assert s("STRASSE") == ["Stra\u00dfe.txt"]
+    assert s("straße") == ["Straße.txt"]
+    assert s("Éc") == ["école.txt"]
+    assert s(".*") == []
+    assert s("[b") == ["a[b].txt"]
+
+
+def test_search_query_length_and_limit_clamp(auth_client, world):
+    acc, _ = world
+    assert (
+        auth_client.get("/api/search", params={"account_id": acc.id, "q": "ol"}).status_code == 200
+    )
+    assert (
+        auth_client.get("/api/search", params={"account_id": acc.id, "q": "o"}).status_code == 422
+    )
+    for lim in (0, -5):
+        assert len(_get(auth_client, "/api/recent", account_id=acc.id, limit=lim)) == 1
+
+
+def test_other_account_files_never_appear(
+    auth_client, world, make_account, make_pair, app, save_catalog
+):
+    acc, _ = world
+    other = make_account("bob@example.com")
+    op = make_pair(other, local_subpath="Drive", remote_path="", initialized=True)
+    _write(app.state.layout.account_dir(other.email), "Drive/secret report.txt", NOW)
+    save_catalog(op.id, [CatalogEntry("secret report.txt", False, 3, NOW, id="S1", starred=True)])
+    for url, extra in (("/api/recent", {}), ("/api/search", {"q": "report"}), ("/api/starred", {})):
+        assert "secret report.txt" not in _names(_get(auth_client, url, account_id=acc.id, **extra))
+
+
+def test_storage_null_quota_and_missing_root(auth_client, make_account, app):
+    acc = make_account("carol@example.com")
+    root = app.state.layout.account_dir(acc.email)
+    import shutil
+
+    shutil.rmtree(root)
+    s = _get(auth_client, "/api/storage", account_id=acc.id)
+    assert s["drive"] == {"total": None, "used": None, "trash": None, "checked_at": None}
+    assert s["disk"]["total"] > 0 and s["synced_bytes"] is None
+    assert not root.exists()

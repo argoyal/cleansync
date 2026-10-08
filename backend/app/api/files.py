@@ -151,6 +151,7 @@ async def storage(
 ):
     scope = get_scope(request, db, account_id)
     usage = await asyncio.to_thread(_disk_usage, scope.root)
+    # synced_bytes comes from the cached status index, so it can lag by about a minute.
     views = await pair_views(request, db, scope, scope.pairs)
     acc = scope.account
     return StorageOut(
