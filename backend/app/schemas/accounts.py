@@ -1,6 +1,6 @@
-from datetime import datetime
-
 from pydantic import BaseModel
+
+from app.schemas.common import UtcDatetime
 
 
 class AccountOut(BaseModel):
@@ -10,8 +10,8 @@ class AccountOut(BaseModel):
     quota_total: int | None
     quota_used: int | None
     quota_trash: int | None
-    connected_at: datetime
-    last_checked_at: datetime | None
+    connected_at: UtcDatetime
+    last_checked_at: UtcDatetime | None
 
 
 class AuthUrlOut(BaseModel):

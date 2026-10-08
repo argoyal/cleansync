@@ -42,7 +42,7 @@ def test_env_value_wins_over_file(tmp_path):
 
 
 def test_secret_generated_once_and_reused_with_private_mode(tmp_path):
-    f = tmp_path / "secrets" / "session_secret"
+    f = tmp_path / "secrets" / "example_secret"
     first = resolve_secret("", f)
     assert len(first) >= 48
     assert resolve_secret("", f) == first
@@ -59,17 +59,16 @@ def test_repr_never_shows_secret_values():
     s = Settings(
         public_url="https://drivesync.example.com",
         admin_password="pw-" + "x" * 12,
-        session_secret="sess-" + "s" * 20,
         rclone_config_pass="rcp-" + "r" * 15,
         google_client_secret="gcs-" + "g" * 15,
     )
     text = repr(s)
-    for value in (s.admin_password, s.session_secret, s.rclone_config_pass, s.google_client_secret):
+    for value in (s.admin_password, s.rclone_config_pass, s.google_client_secret):
         assert value not in text
 
 
 def test_empty_secret_file_is_regenerated_not_returned_empty(tmp_path):
-    f = tmp_path / "secrets" / "session_secret"
+    f = tmp_path / "secrets" / "example_secret"
     f.parent.mkdir(parents=True)
     f.write_text("")
     got = resolve_secret("", f)
@@ -79,16 +78,16 @@ def test_empty_secret_file_is_regenerated_not_returned_empty(tmp_path):
 
 
 def test_whitespace_only_secret_file_is_regenerated(tmp_path):
-    f = tmp_path / "session_secret"
+    f = tmp_path / "example_secret"
     f.write_text("  \n")
     got = resolve_secret("", f)
     assert len(got) >= 48
 
 
 def test_no_temp_files_left_behind(tmp_path):
-    f = tmp_path / "session_secret"
+    f = tmp_path / "example_secret"
     resolve_secret("", f)
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["session_secret"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["example_secret"]
 
 
 def test_secret_created_when_hard_links_are_unsupported(tmp_path, monkeypatch):
@@ -98,9 +97,9 @@ def test_secret_created_when_hard_links_are_unsupported(tmp_path, monkeypatch):
         raise OSError(errno.EPERM, "hard links not supported here")
 
     monkeypatch.setattr(os, "link", no_links)
-    f = tmp_path / "secrets" / "session_secret"
+    f = tmp_path / "secrets" / "example_secret"
     first = resolve_secret("", f)
     assert len(first) >= 48
     assert resolve_secret("", f) == first
     assert stat.S_IMODE(os.stat(f).st_mode) == 0o600
-    assert sorted(p.name for p in f.parent.iterdir()) == ["session_secret"]
+    assert sorted(p.name for p in f.parent.iterdir()) == ["example_secret"]

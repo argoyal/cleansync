@@ -5,10 +5,22 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy.orm import sessionmaker
 
-from app.api import accounts, auth, browse, conflicts, events, health, jobs, pairs, system
+from app.api import (
+    accounts,
+    auth,
+    browse,
+    conflicts,
+    docs,
+    events,
+    health,
+    jobs,
+    pairs,
+    system,
+)
 from app.auth.bootstrap import ensure_admin
 from app.auth.ratelimit import LoginLimiter
 from app.config import Settings
+from app.core.logsetup import configure_logging
 from app.database.engine import integrity_ok, make_engine
 from app.database.migrate import run_migrations
 from app.paths import Layout
@@ -28,6 +40,10 @@ logger = logging.getLogger(__name__)
 
 def create_app(settings: Settings | None = None, *, start_background: bool = True) -> FastAPI:
     settings = settings or Settings()
+    redactor = configure_logging(
+        settings.log_level,
+        [settings.google_client_secret, settings.admin_password, settings.rclone_config_pass],
+    )
     layout = Layout(settings.drivesync_root)
     layout.ensure()
     run_migrations(layout.db_file)
@@ -73,8 +89,10 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     app = FastAPI(
         lifespan=lifespan,
         title=settings.app_name,
-        docs_url="/api/docs",
-        openapi_url="/api/openapi.json",
+        # The built-in docs are public; app.api.docs serves them behind the login instead.
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
     app.state.settings = settings
     app.state.layout = layout
@@ -88,6 +106,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     app.state.login_limiter = LoginLimiter()
     app.state.bus = EventBus()
     app.state.rclone_env = build_rclone_env(settings, layout)
+    redactor.add_secret(app.state.rclone_env.config_pass)  # may have been generated just now
     app.state.accounts = AccountService(
         settings=settings,
         layout=layout,
@@ -133,6 +152,8 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         queue=app.state.queue,
         debounce_s=debounce,
     )
+    # rclone's own writes during a job must not queue a follow-up sync once it ends.
+    app.state.queue.add_finish_listener(app.state.watcher.job_finished)
     for router in (
         health.router,
         auth.router,
@@ -143,6 +164,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         jobs.router,
         conflicts.router,
         system.router,
+        docs.router,
     ):
         app.include_router(router)
     return app

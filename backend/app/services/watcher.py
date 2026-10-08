@@ -54,6 +54,11 @@ class Debouncer:
         self._handles.pop(key, None)
         self.callback(key)
 
+    def cancel(self, key: int) -> None:
+        old = self._handles.pop(key, None)
+        if old is not None:
+            old.cancel()
+
     def cancel_all(self) -> None:
         for h in self._handles.values():
             h.cancel()
@@ -183,6 +188,14 @@ class LocalWatcher:
             self._loop.call_soon_threadsafe(self._debouncer.touch, hit[0])
         except RuntimeError:  # loop already closed during shutdown
             pass
+
+    def job_finished(self, pair_id: int) -> None:
+        """Drop the pair's pending change: it came from rclone's own writes during the job.
+
+        Called on the event loop when the queue finishes a job for the pair.
+        """
+        if self._debouncer is not None:
+            self._debouncer.cancel(pair_id)
 
     def _fire(self, pair_id: int) -> None:
         if self.queue.is_running(pair_id):

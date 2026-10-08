@@ -145,3 +145,21 @@ async def test_finished_at_is_recorded_after_a_job():
     finished = q.finished_at(1)
     assert finished is not None and before <= finished <= time.monotonic()
     assert q.finished_at(2) is None
+
+
+async def test_finish_listeners_hear_about_every_finished_job():
+    async def handler(pair_id, action, trigger):
+        if pair_id == 2:
+            raise RuntimeError("boom")
+
+    heard = []
+    q = SyncQueue(handler)
+    q.add_finish_listener(heard.append)
+    q.request(1, "MANUAL")
+    q.request(2, "MANUAL")
+    await q.wait_idle()
+    assert sorted(heard) == [1, 2]
+
+
+def test_app_wires_the_watcher_to_finished_jobs(app):
+    assert app.state.watcher.job_finished in app.state.queue._finish_listeners

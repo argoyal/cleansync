@@ -25,12 +25,12 @@ class Settings(BaseSettings):
     google_client_secret: str = Field(default="", repr=False)
     admin_username: str = "admin"
     admin_password: str = Field(default="", repr=False)
-    session_secret: str = Field(default="", repr=False)
     rclone_config_pass: str = Field(default="", repr=False)
     rclone_binary: str = "rclone"
     rclone_password_command: str = ""
     app_name: str = "DriveSync"
     log_level: str = "INFO"
+    # Container time zone (TZ), used for log timestamps only; syncing always works in UTC.
     tz: str = "UTC"
 
     @model_validator(mode="after")

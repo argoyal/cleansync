@@ -21,6 +21,7 @@ class SyncQueue:
         self._dirty: dict[int, str] = {}
         self._finished: dict[int, float] = {}
         self._tasks: set[asyncio.Task] = set()
+        self._finish_listeners: list[Callable[[int], None]] = []
         # Set when syncing must stop entirely (e.g. the database failed its integrity check).
         self.disabled_reason: str | None = None
 
@@ -42,6 +43,10 @@ class SyncQueue:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return "queued"
+
+    def add_finish_listener(self, listener: Callable[[int], None]) -> None:
+        """Call listener(pair_id) on the event loop whenever a job for a pair ends."""
+        self._finish_listeners.append(listener)
 
     def is_running(self, pair_id: int) -> bool:
         return pair_id in self._running
@@ -65,6 +70,11 @@ class SyncQueue:
             finally:
                 self._finished[pair_id] = time.monotonic()
                 self._running.discard(pair_id)
+                for listener in self._finish_listeners:
+                    try:
+                        listener(pair_id)
+                    except Exception:
+                        log.exception("finish listener failed for pair %s", pair_id)
                 again = self._dirty.pop(pair_id, None)
                 if again is not None:
                     self.request(pair_id, again)

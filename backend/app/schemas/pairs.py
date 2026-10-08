@@ -1,8 +1,7 @@
-from datetime import datetime
-
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import Direction
+from app.schemas.common import UtcDatetime
 from app.services.app_settings import INTERVAL_CHOICES, RETENTION_CHOICES
 
 
@@ -62,7 +61,7 @@ class PairOut(BaseModel):
     status: str
     attention_reason: str | None
     last_error: str | None
-    last_sync_at: datetime | None
-    last_success_at: datetime | None
-    last_error_at: datetime | None
-    next_sync_at: datetime | None
+    last_sync_at: UtcDatetime | None
+    last_success_at: UtcDatetime | None
+    last_error_at: UtcDatetime | None
+    next_sync_at: UtcDatetime | None

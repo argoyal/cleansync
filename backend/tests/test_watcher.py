@@ -195,3 +195,31 @@ async def test_one_failing_root_is_isolated_and_status_recovers(
         assert w.status == "limited"
     finally:
         w.stop()
+
+
+async def test_debouncer_cancel_drops_one_pending_timer():
+    fired = []
+    d = Debouncer(0.05, fired.append, asyncio.get_running_loop())
+    d.touch(1)
+    d.touch(2)
+    d.cancel(1)
+    await asyncio.sleep(0.1)
+    assert fired == [2]
+
+
+async def test_finished_job_cancels_the_pairs_pending_change(
+    session_factory, layout, make_account, make_pair
+):
+    # M1: rclone's own writes during a run must not queue a follow-up sync once it ends.
+    acc = make_account()
+    pair = make_pair(acc, initialized=True)
+    q = StubQueue()
+    w = LocalWatcher(session_factory=session_factory, layout=layout, queue=q, debounce_s=0.1)
+    # No observer: drive the debouncer directly, so stray file events can't interfere.
+    w._loop = asyncio.get_running_loop()
+    w._debouncer = Debouncer(0.1, w._fire, w._loop)
+    w._debouncer.touch(pair.id)
+    w._debouncer.touch(pair.id + 1)
+    w.job_finished(pair.id)
+    await asyncio.sleep(0.3)
+    assert q.requests == [(pair.id + 1, "WATCHER")]

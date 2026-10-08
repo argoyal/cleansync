@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.clock import as_utc
 from app.core.redact import redact
 from app.models import Event
 
@@ -68,7 +69,7 @@ class EventBus:
 def event_to_dict(ev: Event) -> dict:
     return {
         "id": ev.id,
-        "ts": ev.ts.isoformat(),
+        "ts": as_utc(ev.ts).isoformat(),
         "level": ev.level,
         "kind": ev.kind,
         "message": ev.message,

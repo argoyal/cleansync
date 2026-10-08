@@ -1,6 +1,6 @@
-from datetime import datetime
-
 from pydantic import BaseModel
+
+from app.schemas.common import UtcDatetime
 
 
 class JobOut(BaseModel):
@@ -9,8 +9,8 @@ class JobOut(BaseModel):
     kind: str
     trigger: str
     state: str
-    started_at: datetime | None
-    completed_at: datetime | None
+    started_at: UtcDatetime | None
+    completed_at: UtcDatetime | None
     duration_s: float | None
     exit_code: int | None
     files_uploaded: int
@@ -32,9 +32,9 @@ class ConflictOut(BaseModel):
     local_variant: str
     remote_variant: str
     local_size: int | None
-    local_mtime: datetime | None
+    local_mtime: UtcDatetime | None
     remote_size: int | None
-    remote_mtime: datetime | None
+    remote_mtime: UtcDatetime | None
     state: str
     resolution: str | None
 
