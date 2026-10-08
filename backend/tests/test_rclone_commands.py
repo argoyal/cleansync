@@ -361,3 +361,19 @@ def test_bisync_remote_must_look_like_remote():
 def test_sync_endpoints_must_be_absolute_or_remote(src, dst):
     with pytest.raises(UnsafeArgument):
         c.sync_args(ENV, src, dst, T.filters_file, None, dry_run=True)
+
+
+def test_bisync_and_check_accept_absolute_local_remote_side():
+    t = c.BisyncTarget(
+        local=Path("/d/a"),
+        remote="/d/b",
+        workdir=Path("/d/w"),
+        filters_file=Path("/d/f"),
+        backup_dir=None,
+    )
+    args = c.bisync_args(ENV, t, dry_run=True)
+    assert args[args.index("bisync") + 2] == "/d/b"
+    chk = c.check_args(ENV, Path("/d/a"), "/d/b", Path("/d/f"))
+    assert chk[chk.index("check") + 2] == "/d/b"
+    with pytest.raises(UnsafeArgument):
+        c.check_args(ENV, Path("/d/a"), "relative/b", Path("/d/f"))

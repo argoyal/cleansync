@@ -128,3 +128,11 @@ def auth_client(client, settings):
     assert r.status_code == 200, r.text
     client.headers["X-CSRF-Token"] = r.json()["csrf_token"]
     return client
+
+
+from tests.fake_rclone import FakeRclone  # noqa: E402
+
+
+@pytest.fixture
+def fake_rclone(tmp_path) -> FakeRclone:
+    return FakeRclone(tmp_path / "fake-rclone")

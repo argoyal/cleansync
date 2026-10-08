@@ -114,7 +114,7 @@ def bisync_args(
     args = env.base() + [
         "bisync",
         _local(t.local),
-        _remote(t.remote),
+        _endpoint(t.remote),
         "--check-access",
         "--check-filename",
         "RCLONE_TEST",
@@ -187,7 +187,7 @@ def check_args(env: RcloneEnv, local: Path, remote: str, filters_file: Path) -> 
     return env.base() + [
         "check",
         _local(local),
-        _remote(remote),
+        _endpoint(remote),
         "--combined",
         "-",
         "--filters-file",
