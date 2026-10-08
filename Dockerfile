@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.12-slim AS rclone
 ARG TARGETARCH
-# keep in sync with the RCLONE_VERSION env in .github/workflows/ci.yml
+# keep in sync with the RCLONE_PIN_VERSION env in .github/workflows/ci.yml
 ARG RCLONE_VERSION=1.75.1
 ARG RCLONE_SHA256_AMD64=982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab
 ARG RCLONE_SHA256_ARM64=03f2504174034b6d004152ed7369251c9a9ec1f7e0836eda420f5c7a5ec0dff9
