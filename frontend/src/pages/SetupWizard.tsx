@@ -1,10 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { type FormEvent, useEffect, useRef, useState } from "react";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 
-import { api, friendlyError } from "../api/client";
-import { useAccounts, usePair, usePreview, useSetup } from "../api/queries";
-import type { Pair, Preview } from "../api/types";
+import { api, ApiError, friendlyError } from "../api/client";
+import { useAccounts, usePair, usePairJobs, usePreview, useSetup } from "../api/queries";
+import type { Job, Pair, Preview } from "../api/types";
 import { FolderPicker } from "../components/FolderPicker";
 import { Icon } from "../components/Icon";
 import { Button, Field, inputClass, Notice } from "../components/ui";
@@ -34,6 +34,22 @@ function Steps({ current }: { current: number }) {
   );
 }
 
+/** The step's heading; takes focus when the step appears so screen readers and keyboards follow the change. */
+function StepHeading({ children }: { children: string }) {
+  const ref = useRef<HTMLHeadingElement>(null);
+  useEffect(() => ref.current?.focus(), []);
+  return (
+    <h1 ref={ref} tabIndex={-1} className="text-hero font-semibold tracking-tight outline-none">
+      {children}
+    </h1>
+  );
+}
+
+const FAILED_JOB = ["FAILED", "BLOCKED", "INTERRUPTED", "CANCELLED"];
+const ACTIVE_JOB = ["QUEUED", "RUNNING"];
+const latest = (jobs: Job[] | undefined, keep: (j: Job) => boolean) =>
+  (jobs ?? []).filter(keep).reduce<Job | undefined>((a, j) => (!a || j.id > a.id ? j : a), undefined);
+
 /**
  * First run: password (already done to get here) → Google account → folders → preview →
  * typed confirmation → start. The step lives in the address (?step=&pair=), so coming back
@@ -42,12 +58,15 @@ function Steps({ current }: { current: number }) {
 export function SetupWizard() {
   useLiveEvents();
   const [params, setParams] = useSearchParams();
-  const pairId = params.get("pair") ? Number(params.get("pair")) : null;
+  const rawPair = Number(params.get("pair"));
+  const pairId = Number.isInteger(rawPair) && rawPair > 0 ? rawPair : null;
   const accounts = useAccounts();
   const usable = (accounts.data ?? []).filter((a) => a.status !== "DISCONNECTED");
   const step = params.get("step") ?? (usable.length ? "folders" : "account");
   const go = (next: string, extra: Record<string, string> = {}) => setParams({ step: next, ...extra });
   const index = { account: 1, folders: 2, preview: 3, start: 4 }[step] ?? 1;
+  // Preview and start need a real pair; a missing or garbled ?pair= goes back to choosing folders.
+  if ((step === "preview" || step === "start") && pairId === null) return <Navigate to="/setup?step=folders" replace />;
   return (
     <main className="mx-auto max-w-3xl px-4 py-8 sm:py-12">
       <div className="mb-8 flex items-center justify-between">
@@ -69,10 +88,19 @@ function AccountStep({ onNext }: { onNext: () => void }) {
   const setup = useSetup();
   const accounts = useAccounts();
   const connect = useConnectGoogle();
+  const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
+  const copyUri = (text: string) => {
+    const done = navigator.clipboard?.writeText(text);
+    if (!done) return setCopy("failed");
+    done.then(
+      () => setCopy("copied"),
+      () => setCopy("failed"),
+    );
+  };
   const usable = (accounts.data ?? []).filter((a) => a.status !== "DISCONNECTED");
   return (
     <section className="space-y-5">
-      <h1 className="text-hero font-semibold tracking-tight">Connect a Google account</h1>
+      <StepHeading>Connect a Google account</StepHeading>
       <p className="max-w-prose text-ink-2">
         DriveSync uses your own Google sign-in client. In the Google Cloud console, add this address to the client's
         allowed redirect addresses:
@@ -80,14 +108,12 @@ function AccountStep({ onNext }: { onNext: () => void }) {
       {setup.data && (
         <div className="flex items-center gap-2">
           <code className="block min-w-0 flex-1 select-all break-all rounded-ctl bg-sunken px-3 py-2 text-table">{setup.data.redirect_uri}</code>
-          <Button
-            icon="content_copy"
-            onClick={() => {
-              void navigator.clipboard?.writeText(setup.data.redirect_uri).catch(() => undefined);
-            }}
-          >
+          <Button icon="content_copy" onClick={() => copyUri(setup.data.redirect_uri)}>
             Copy
           </Button>
+          <span role="status" className="text-table text-ink-2">
+            {copy === "copied" ? "Copied" : copy === "failed" ? "Copy failed" : ""}
+          </span>
         </div>
       )}
       {setup.data && !setup.data.oauth_configured && (
@@ -141,7 +167,7 @@ function FoldersStep({ onCreated }: { onCreated: (pair: Pair) => void }) {
   };
   return (
     <form onSubmit={submit} className="space-y-6">
-      <h1 className="text-hero font-semibold tracking-tight">Choose what to sync</h1>
+      <StepHeading>Choose what to sync</StepHeading>
       {accounts.length > 1 && (
         <Field label="Google account">
           <select className={inputClass} value={acc.id} onChange={(e) => setAccountId(Number(e.target.value))}>
@@ -235,36 +261,80 @@ export function PreviewSummary({ preview }: { preview: Preview }) {
 
 function PreviewStep({ pairId, onNext }: { pairId: number; onNext: () => void }) {
   const pair = usePair(pairId);
-  const [started, setStarted] = useState(false);
-  const preview = usePreview(pairId, started);
-  const start = useMutation({
+  const qc = useQueryClient();
+  // Set after asking for a comparison, until the server shows a newer preview job than this id.
+  const [asked, setAsked] = useState<number | null>(null);
+  const jobs = usePairJobs(pairId, asked !== null);
+  const lastPreview = latest(jobs.data, (j) => j.kind === "PREVIEW");
+  const running = !!lastPreview && ACTIVE_JOB.includes(lastPreview.state);
+  const waiting = running || asked !== null;
+  const preview = usePreview(pairId, waiting);
+  const failedJob = !waiting && lastPreview && FAILED_JOB.includes(lastPreview.state) ? lastPreview : undefined;
+
+  useEffect(() => {
+    if (asked !== null && (lastPreview?.id ?? 0) > asked) setAsked(null);
+  }, [asked, lastPreview?.id]);
+  useEffect(() => {
+    // Give up waiting for a job that never shows up (for example the pair was busy with something else).
+    if (asked === null) return;
+    const t = window.setTimeout(() => setAsked(null), 20_000);
+    return () => window.clearTimeout(t);
+  }, [asked]);
+  const wasWaiting = useRef(false);
+  useEffect(() => {
+    if (wasWaiting.current && !waiting) qc.invalidateQueries({ queryKey: ["preview", pairId] });
+    wasWaiting.current = waiting;
+  }, [waiting, qc, pairId]);
+
+  const compare = useMutation({
     mutationFn: () => api(`/api/sync-pairs/${pairId}/preview`, { method: "POST" }),
-    onSuccess: () => setStarted(true),
+    onSuccess: () => {
+      setAsked(lastPreview?.id ?? 0);
+      qc.invalidateQueries({ queryKey: ["history", pairId] });
+      qc.invalidateQueries({ queryKey: ["preview", pairId] });
+    },
+    onError: (e) => {
+      if (e instanceof ApiError && e.status === 409 && /busy/i.test(e.detail)) {
+        setAsked(lastPreview?.id ?? 0);
+        qc.invalidateQueries({ queryKey: ["history", pairId] });
+      }
+    },
   });
+  const alreadyComparing = compare.error instanceof ApiError && compare.error.status === 409 && /busy/i.test(compare.error.detail);
+
   const [phrase, setPhrase] = useState("");
   const confirm = useMutation({
     mutationFn: () => api(`/api/sync-pairs/${pairId}/confirm-initial`, { method: "POST", body: { phrase } }),
     onSuccess: onNext,
   });
-  const failed = started && !preview.data && pair.data?.last_error;
+
+  if (pair.error instanceof ApiError && pair.error.status === 404) return <Navigate to="/setup?step=folders" replace />;
+  if (pair.data?.initialized) return <Navigate to={`/setup?step=start&pair=${pairId}`} replace />;
+  const shown = !waiting && !failedJob && preview.data ? preview.data : undefined;
+  const previewError = preview.error && !(preview.error instanceof ApiError && preview.error.status === 404) ? preview.error : null;
   return (
     <section className="space-y-6">
-      <h1 className="text-hero font-semibold tracking-tight">Check before anything moves</h1>
+      <StepHeading>Check before anything moves</StepHeading>
       <p className="max-w-prose text-ink-2">
         DriveSync compares both folders without changing either. The first sync never deletes anything: files on one side are
         copied to the other, and for files that differ the newer one wins (the older local version is saved to backups first).
       </p>
-      {!preview.data && !started && (
-        <Button tone="primary" icon="compare_arrows" onClick={() => start.mutate()} disabled={start.isPending}>
-          Compare the folders
+      {!waiting && (
+        <Button tone="primary" icon="compare_arrows" onClick={() => compare.mutate()} disabled={compare.isPending}>
+          {shown || failedJob ? "Compare again" : "Compare the folders"}
         </Button>
       )}
-      {start.isError && <Notice tone="err">{friendlyError(start.error)}</Notice>}
-      {started && !preview.data && !failed && <Notice tone="run">Comparing. On a large Drive this can take a few minutes.</Notice>}
-      {failed && <Notice tone="err">{pair.data?.last_error}</Notice>}
-      {preview.data && (
+      {compare.isError && !alreadyComparing && <Notice tone="err">{friendlyError(compare.error)}</Notice>}
+      {waiting && (
+        <Notice tone="run">
+          {alreadyComparing ? "Already comparing. " : ""}Comparing. On a large Drive this can take a few minutes.
+        </Notice>
+      )}
+      {failedJob && <Notice tone="err">{failedJob.error_message ?? "The comparison did not finish. Try again."}</Notice>}
+      {previewError && <Notice tone="err">{friendlyError(previewError)}</Notice>}
+      {shown && (
         <>
-          <PreviewSummary preview={preview.data} />
+          <PreviewSummary preview={shown} />
           <form
             className="space-y-3 rounded-card border border-line p-4"
             onSubmit={(e) => {
@@ -276,7 +346,7 @@ function PreviewStep({ pairId, onNext }: { pairId: number; onNext: () => void })
               <input className={inputClass} value={phrase} onChange={(e) => setPhrase(e.target.value)} autoComplete="off" spellCheck={false} />
             </Field>
             {confirm.isError && <Notice tone="err">{friendlyError(confirm.error)}</Notice>}
-            <Button tone="primary" type="submit" disabled={phrase !== CONFIRM_PHRASE || confirm.isPending || preview.data.errors > 0}>
+            <Button tone="primary" type="submit" disabled={phrase !== CONFIRM_PHRASE || confirm.isPending || shown.errors > 0}>
               Start the first sync
             </Button>
           </form>
@@ -288,15 +358,24 @@ function PreviewStep({ pairId, onNext }: { pairId: number; onNext: () => void })
 
 function StartStep({ pairId }: { pairId: number }) {
   const pair = usePair(pairId);
+  const jobs = usePairJobs(pairId);
   const navigate = useNavigate();
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => box.current?.focus(), []);
+  if (pair.error instanceof ApiError && pair.error.status === 404) return <Navigate to="/setup?step=folders" replace />;
   const p = pair.data;
-  const done = p?.initialized && p.status !== "RUNNING";
+  // The server sets "initialized" only when the first sync finished; a failed job means it did not.
+  const done = !!p?.initialized;
+  const job = latest(jobs.data, (j) => j.kind !== "PREVIEW");
+  const failed = !done && job && FAILED_JOB.includes(job.state) ? (job.error_message ?? p?.last_error ?? "The first sync did not finish.") : null;
   return (
     <section className="space-y-6">
-      <h1 className="text-hero font-semibold tracking-tight">{done ? "Synced" : "First sync running"}</h1>
-      {!done && !p?.last_error && <Notice tone="run">Copying in both directions. You can leave this page; it keeps going.</Notice>}
-      {p?.last_error && <Notice tone="err">{p.last_error}</Notice>}
-      {done && !p?.last_error && <Notice tone="ok">Both sides are in step. From now on DriveSync keeps them that way.</Notice>}
+      <div ref={box} role="group" aria-label="First sync status" tabIndex={-1} className="space-y-6 outline-none">
+        <h1 className="text-hero font-semibold tracking-tight">{done ? "Synced" : failed ? "The first sync did not finish" : "First sync running"}</h1>
+        {!done && !failed && <Notice tone="run">Copying in both directions. You can leave this page; it keeps going.</Notice>}
+        {failed && <Notice tone="err">{failed}</Notice>}
+        {done && <Notice tone="ok">Both sides are in step. From now on DriveSync keeps them that way.</Notice>}
+      </div>
       <div className="flex flex-wrap gap-2">
         <Button tone="primary" icon="folder" onClick={() => navigate(`/drive?path=${encodeURIComponent(p?.local_subpath ?? "")}`)}>
           Open My Drive

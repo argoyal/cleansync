@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { api, encodePath, query } from "./client";
+import { api, ApiError, encodePath, query } from "./client";
 import type {
   Account,
   ActivityEvent,
@@ -98,13 +98,30 @@ export const useCatalog = (pairId: number) =>
     queryKey: ["catalog", pairId],
     queryFn: () => api<CatalogSummary>(`/api/sync-pairs/${pairId}/catalog`),
   });
+const POLL_MS = 2000;
+const notFound = (e: unknown) => e instanceof ApiError && e.status === 404;
+
+/** The stored first-sync preview. 404 means "none yet"; polling (while waiting) stops on any other error. */
 export const usePreview = (pairId: number | null, waiting: boolean) =>
   useQuery({
     queryKey: ["preview", pairId],
     queryFn: () => api<Preview>(`/api/sync-pairs/${pairId}/preview`),
     enabled: pairId !== null,
     retry: false,
-    refetchInterval: (q) => (waiting && !q.state.data ? 2000 : false),
+    refetchInterval: (q) => (waiting && (!q.state.error || notFound(q.state.error)) ? POLL_MS : false),
+  });
+
+const ACTIVE_JOB = ["QUEUED", "RUNNING"];
+
+/** Recent jobs of a pair including previews and dry runs; polls while one is active (or `poll`), stops on error. */
+export const usePairJobs = (pairId: number | null, poll = false) =>
+  useQuery({
+    queryKey: ["history", pairId, "all"],
+    queryFn: () => api<Job[]>(`/api/sync-pairs/${pairId}/history${query({ limit: 20, include_dry_runs: true })}`),
+    enabled: pairId !== null,
+    retry: false,
+    refetchInterval: (q) =>
+      !q.state.error && (poll || (q.state.data ?? []).some((j) => ACTIVE_JOB.includes(j.state))) ? POLL_MS : false,
   });
 export const useRemoteFolders = (accountId: number, path: string, enabled = true) =>
   useQuery({
