@@ -1,3 +1,10 @@
+"""Parsing of rclone output.
+
+Counters relies on bisync queue lines, which rclone prints at INFO level and above, and on the
+"Synching Path1 ... with Path2 ..." line to make paths relative. commands.LOG_FLAGS sets INFO;
+without it (and without that line) planned paths stay absolute.
+"""
+
 import json
 import re
 from dataclasses import dataclass, field
