@@ -251,7 +251,7 @@ def test_zip_marks_non_ascii_names_as_utf8(tmp_path):
     assert all(i.flag_bits & 0x800 for i in zf.infolist())
 
 
-def test_zip_stops_cleanly_when_a_read_fails(tmp_path, monkeypatch):
+def test_zip_aborts_when_a_read_fails(tmp_path, monkeypatch, caplog):
     folder = tmp_path / "W"
     folder.mkdir()
     (folder / "a.txt").write_bytes(b"A")
@@ -278,5 +278,8 @@ def test_zip_stops_cleanly_when_a_read_fails(tmp_path, monkeypatch):
         return Bad(f) if str(path).endswith("b.txt") else f
 
     monkeypatch.setattr("app.services.files.zipstream.open", fake_open, raising=False)
-    data = b"".join(zip_folder(folder, "W"))  # must not raise
-    assert zipfile.ZipFile(io.BytesIO(data)).read("W/a.txt") == b"A"
+    with pytest.raises(OSError):  # the download fails instead of saving a partial zip
+        b"".join(zip_folder(folder, "W"))
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "b.txt" not in warnings[0] and str(tmp_path) not in warnings[0]

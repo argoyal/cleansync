@@ -82,7 +82,7 @@ def zip_folder(folder: Path, arc_root: str) -> Iterator[bytes]:
                         dst.write(chunk)
                         yield sink.take()
             except OSError:
-                log.warning("a file could not be read while zipping; the zip stops here")
-                break
+                log.warning("a file could not be read while zipping; aborting the download")
+                raise
             yield sink.take()
     yield sink.take()
