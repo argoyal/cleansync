@@ -32,6 +32,8 @@ from app.services.accounts.service import AccountService
 from app.services.app_settings import get_setting
 from app.services.catalog.service import CatalogService
 from app.services.catalog.store import CatalogStore
+from app.services.drive_api.client import DriveApi
+from app.services.drive_api.tokens import TokenProvider
 from app.services.events.bus import EventBus
 from app.services.files.moves import DriveMover
 from app.services.files.status import StatusIndexes
@@ -158,6 +160,9 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     app.state.indexes = StatusIndexes(layout=layout, catalog=app.state.catalog)
     app.state.catalog.listeners.append(app.state.indexes.invalidate)
     app.state.thumbs = Thumbnails(layout.thumbs_dir)
+    app.state.drive_api = DriveApi(
+        TokenProvider(settings=settings, rclone_env=app.state.rclone_env)
+    )
     app.state.queue = SyncQueue(
         make_handler(
             app.state.engine,

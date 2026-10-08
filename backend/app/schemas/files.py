@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.schemas.common import UtcDatetime
@@ -101,4 +103,19 @@ class OpOut(BaseModel):
 class UploadOut(BaseModel):
     path: str
     size: int
+    syncs: dict[int, str]
+
+
+class NewFileIn(BaseModel):
+    account_id: int
+    path: str = ""  # the folder to create it in
+    # docx/xlsx/pptx: an Office file made here, then synced.
+    # document/spreadsheet/presentation: a Google-native file made on Drive.
+    kind: Literal["docx", "xlsx", "pptx", "document", "spreadsheet", "presentation"]
+    name: str | None = Field(default=None, max_length=255)
+
+
+class NewFileOut(BaseModel):
+    path: str | None  # account path of a new Office file
+    google_url: str | None  # where a new Google file opens
     syncs: dict[int, str]

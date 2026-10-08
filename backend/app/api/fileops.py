@@ -16,14 +16,28 @@ from app.api.files import clean_path, get_scope
 from app.auth.deps import AuthContext, get_db, require_user
 from app.core.clock import utcnow
 from app.core.pathsafe import UnsafePath
-from app.models.enums import Trigger
-from app.schemas.files import DeleteIn, MkdirIn, MoveIn, OpOut, RenameIn, UploadOut
+from app.models.enums import AccountStatus, Trigger
+from app.schemas.files import (
+    DeleteIn,
+    MkdirIn,
+    MoveIn,
+    NewFileIn,
+    NewFileOut,
+    OpOut,
+    RenameIn,
+    UploadOut,
+)
+from app.services.catalog.model import EXPORT_EXT, CatalogEntry, google_url
+from app.services.drive_api.client import DEFAULT_NAMES
+from app.services.drive_api.tokens import DriveApiError, DriveAuthError
 from app.services.files import moves, ops
-from app.services.files.scope import Scope, join_rel, pair_for
+from app.services.files.names import validate_name
+from app.services.files.scope import Scope, join_rel, pair_for, to_pair_rel
 from app.services.files.upload import new_temp, plan_target, publish, save_stream
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files")
+OFFICE_KINDS = ("docx", "xlsx", "pptx")
 
 
 def refuse_when_disabled(request: Request) -> None:
@@ -247,3 +261,63 @@ async def upload(
         if final is not None:  # also after a late cancel: the file is in place
             syncs = after_change(request, scope, [join_rel(dir_rel, final)])
     return UploadOut(path=join_rel(dir_rel, final), size=size, syncs=syncs)
+
+
+@router.post("/new", response_model=NewFileOut)
+async def new_file(
+    body: NewFileIn,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    refuse_when_disabled(request)
+    state = request.app.state
+    scope = get_scope(request, db, body.account_id)
+    folder = clean_path(body.path)
+    if body.kind in OFFICE_KINDS:
+        templates = state.settings.office_templates_dir
+        rel = await run_op(ops.new_office_file, scope, templates, folder, body.kind, body.name)
+        return NewFileOut(path=rel, google_url=None, syncs=after_change(request, scope, [rel]))
+
+    # A Google Doc/Sheet/Slides is made on Drive itself; bisync never copies those files.
+    await run_op(ops.require_folder, scope, folder)  # not hidden, exists, no symlink
+    pair = pair_for(scope.pairs, folder)
+    if pair is None:
+        raise HTTPException(
+            409, "Google Docs, Sheets and Slides can only be made in a synced folder."
+        )
+    if scope.account.status != AccountStatus.CONNECTED:
+        raise HTTPException(409, "Reconnect this Google account first (Settings, Accounts).")
+    prel = to_pair_rel(pair, folder)
+    catalog = await asyncio.to_thread(state.catalog.load, pair.id)
+    # The ID comes from this pair's own Drive listing, so it is always inside the pair's root.
+    parent_id = catalog.folder_id(prel) if catalog else None
+    if parent_id is None:
+        raise HTTPException(409, "This folder isn't on Google Drive yet. Sync it, then try again.")
+    try:
+        name = validate_name(body.name) if body.name else DEFAULT_NAMES[body.kind]
+    except UnsafePath as e:
+        raise HTTPException(422, str(e)) from e
+    try:
+        created = await state.drive_api.create_native(
+            scope.account.remote_name, body.kind, name, parent_id
+        )
+    except DriveAuthError as e:
+        await state.accounts.mark_needs_reauth(scope.account.id, str(e))
+        raise HTTPException(409, "This Google account needs to be reconnected.") from e
+    except DriveApiError as e:
+        raise HTTPException(502, str(e)) from e
+    entry = CatalogEntry(
+        path=join_rel(prel, created.name + EXPORT_EXT[body.kind]),
+        is_dir=False,
+        size=0,
+        mtime=utcnow(),
+        id=created.id,
+        mime=created.mime,
+        native=body.kind,
+    )
+    # Show it right away; the full listing that follows confirms it.
+    await asyncio.to_thread(state.catalog.store.upsert, pair.id, entry)
+    state.catalog.request_refresh(pair.id)
+    state.bus.publish("files", {"account_id": scope.account.id})
+    return NewFileOut(path=None, google_url=google_url(entry), syncs={})

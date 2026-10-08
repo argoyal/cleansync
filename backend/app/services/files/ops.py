@@ -13,7 +13,7 @@ from pathlib import Path
 from app.core.pathsafe import safe_join
 from app.models import SyncPair
 from app.paths import Layout
-from app.services.files.names import validate_name
+from app.services.files.names import free_name, validate_name
 from app.services.files.scope import (
     Scope,
     is_hidden,
@@ -248,3 +248,44 @@ def delete_to_recovery(layout: Layout, scope: Scope, rels: list[str], when: date
             ) from e
         kept.append(str(dest.relative_to(layout.backups_dir)))
     return kept
+
+
+OFFICE_DEFAULT_NAMES = {
+    "docx": "Untitled document",
+    "xlsx": "Untitled spreadsheet",
+    "pptx": "Untitled presentation",
+}
+
+
+def require_folder(scope: Scope, rel: str) -> Path:
+    """The folder on disk, or 404 when it is missing, hidden or reached through a symlink."""
+    return _folder(scope, rel)
+
+
+def new_office_file(
+    scope: Scope, templates: Path, folder_rel: str, kind: str, name: str | None
+) -> str:
+    """Copy a generated blank Office file into the folder; the next sync uploads it."""
+    from app.services.files.upload import _copy_beside, _place  # upload imports this module
+
+    template = templates / f"blank.{kind}"
+    if not template.is_file():
+        raise FileOpError("the blank Office files are missing from this installation", 500)
+    folder = _folder(scope, folder_rel)
+    base = validate_name(name) if name else OFFICE_DEFAULT_NAMES[kind]
+    if not base.lower().endswith(f".{kind}"):
+        base = validate_name(f"{base}.{kind}")
+    # Copy to a hidden file beside the target, then place that: never a link to the template,
+    # and never over something already there.
+    hidden = _copy_beside(template, folder)
+    try:
+        for _ in range(1000):
+            final = free_name(folder, base)
+            try:
+                _place(hidden, folder / final)
+            except FileExistsError:
+                continue  # someone took that name a moment ago
+            return join_rel(folder_rel, final)
+        raise FileOpError("could not find a free name", 409)
+    finally:
+        hidden.unlink(missing_ok=True)

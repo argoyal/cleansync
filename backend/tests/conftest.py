@@ -32,8 +32,17 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture(scope="session")
+def office_templates(tmp_path_factory) -> Path:
+    from scripts.make_office_templates import make
+
+    out = tmp_path_factory.mktemp("office")
+    make(out)
+    return out
+
+
 @pytest.fixture
-def settings(tmp_path: Path, fake_rclone) -> Settings:
+def settings(tmp_path: Path, fake_rclone, office_templates) -> Settings:
     passcmd = tmp_path / "print-pass"
     passcmd.write_text('#!/bin/sh\nprintf "%s" "$RCLONE_CONFIG_PASS"\n')
     passcmd.chmod(0o755)
@@ -46,6 +55,7 @@ def settings(tmp_path: Path, fake_rclone) -> Settings:
         google_client_secret="csecret",
         rclone_binary=fake_rclone.binary,
         rclone_password_command=str(passcmd),
+        office_templates_dir=office_templates,
     )
 
 
