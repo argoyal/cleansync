@@ -783,3 +783,17 @@ async def test_drive_calls_are_bounded_and_rclone_is_stopped(drive_mover, fake_r
         await drive_mover.move(type("A", (), {"id": 1})(), "gd_1:a", "gd_1:b")
     assert e.value.status == 504
     assert time.monotonic() - started < 15
+
+
+async def test_cancel_in_the_same_tick_as_thread_completion_still_counts(monkeypatch):
+    import asyncio
+
+    from app.services.files import moves
+
+    async def cancel_after_done(task):
+        await task  # the thread is finished ...
+        raise asyncio.CancelledError()  # ... and the cancel lands in that same tick
+
+    monkeypatch.setattr(moves.asyncio, "shield", cancel_after_done)
+    result, error, cancelled = await moves.finish_in_thread(lambda: "ok")
+    assert (result, error, cancelled) == ("ok", None, True)

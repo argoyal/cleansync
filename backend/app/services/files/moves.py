@@ -227,6 +227,7 @@ async def finish_in_thread(fn, *args):
             break
         except asyncio.CancelledError:
             if task.done():
+                cancelled = True  # a cancel in the same tick as the thread ending still counts
                 break
             cancelled = True  # wait on; the caller re-raises once the thread is done
         except Exception:
