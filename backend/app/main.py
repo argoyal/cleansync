@@ -1,13 +1,14 @@
 from fastapi import FastAPI
 from sqlalchemy.orm import sessionmaker
 
-from app.api import auth, health
+from app.api import auth, events, health
 from app.auth.bootstrap import ensure_admin
 from app.auth.ratelimit import LoginLimiter
 from app.config import Settings
 from app.database.engine import integrity_ok, make_engine
 from app.database.migrate import run_migrations
 from app.paths import Layout
+from app.services.events.bus import EventBus
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -25,6 +26,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     with app.state.session_factory() as db:
         ensure_admin(db, settings, layout)
     app.state.login_limiter = LoginLimiter()
+    app.state.bus = EventBus()
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(events.router)
     return app
