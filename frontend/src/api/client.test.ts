@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { json, mockApi } from "../test/utils";
-import { api, ApiError, AUTH_EVENT, encodePath, friendlyError, setCsrfToken } from "./client";
+import { api, ApiError, AUTH_EVENT, csrfHeaders, encodePath, friendlyError, setCsrfToken } from "./client";
 
 describe("api client", () => {
   it("sends the CSRF token on changes only", async () => {
@@ -64,6 +64,40 @@ describe("api client", () => {
 
   it("encodes each path part", () => {
     expect(encodePath("Work/a b#1?.txt")).toBe("Work/a%20b%231%3F.txt");
-    expect(vi.isMockFunction(fetch)).toBe(false);
+  });
+
+  it("does not treat a wrong current password as a lost session", async () => {
+    const seen: string[] = [];
+    const listener = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener(AUTH_EVENT, listener);
+    mockApi({ "POST /api/auth/change-password": () => json(401, { detail: "current_password_wrong" }) });
+    await expect(api("/api/auth/change-password", { method: "POST", body: {} })).rejects.toMatchObject({
+      status: 401,
+      detail: "current_password_wrong",
+    });
+    window.removeEventListener(AUTH_EVENT, listener);
+    expect(seen).toEqual([]);
+  });
+
+  it("explains network failures and leaves aborts alone", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await expect(api("/api/x")).rejects.toMatchObject({
+      detail: "Can't reach DriveSync. Check your connection and try again.",
+    });
+    const abort = new DOMException("aborted", "AbortError");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(abort));
+    await expect(api("/api/x")).rejects.toBe(abort);
+  });
+
+  it("refuses a success answer that is not JSON", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>oops</html>", { status: 200 })));
+    await expect(api("/api/x")).rejects.toEqual(new ApiError(200, "Unexpected response from the server"));
+  });
+
+  it("gives direct fetch calls (uploads) the CSRF header", () => {
+    setCsrfToken("tok-9");
+    expect(csrfHeaders()).toEqual({ "X-CSRF-Token": "tok-9" });
+    setCsrfToken("");
+    expect(csrfHeaders()).toEqual({});
   });
 });

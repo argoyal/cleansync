@@ -22,6 +22,16 @@ export function getCsrfToken(): string {
   return csrfToken;
 }
 
+/** Forget the token (on logout or a lost session). */
+export function clearCsrfToken(): void {
+  csrfToken = "";
+}
+
+/** For code that calls fetch directly (uploads): the header every change must carry. */
+export function csrfHeaders(): Record<string, string> {
+  return csrfToken ? { "X-CSRF-Token": csrfToken } : {};
+}
+
 export type AuthSignal = "login" | "change-password";
 export const AUTH_EVENT = "ds:auth";
 
@@ -50,27 +60,37 @@ export async function api<T>(
   const headers: Record<string, string> = { Accept: "application/json" };
   if (init.body !== undefined) headers["Content-Type"] = "application/json";
   if (method !== "GET" && csrfToken) headers["X-CSRF-Token"] = csrfToken;
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
-    credentials: "same-origin",
-    signal: init.signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      headers,
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      credentials: "same-origin",
+      signal: init.signal,
+    });
+  } catch (e) {
+    if (e instanceof TypeError) throw new ApiError(0, "Can't reach DriveSync. Check your connection and try again.");
+    throw e;
+  }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   let body: unknown;
+  let parsed = true;
   try {
     body = text ? JSON.parse(text) : undefined;
   } catch {
     body = undefined;
+    parsed = false;
   }
   if (!res.ok) {
     const { detail, partial } = detailOf(body, res.status);
-    if (res.status === 401 && !path.startsWith("/api/auth/login")) signal("login");
+    // Only a lost session sends people to the login page; a wrong current password is a 401 too.
+    if (res.status === 401 && (detail === "not_logged_in" || detail === "session_expired")) signal("login");
     if (res.status === 403 && detail === "password_change_required") signal("change-password");
     throw new ApiError(res.status, detail, partial);
   }
+  if (!parsed) throw new ApiError(res.status, "Unexpected response from the server");
   return body as T;
 }
 

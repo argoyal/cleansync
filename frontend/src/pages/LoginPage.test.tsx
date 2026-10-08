@@ -63,14 +63,64 @@ describe("password change", () => {
   });
 });
 
+const tree = (
+  <Routes>
+    <Route element={<RequireAuth />}>
+      <Route path="/drive" element={<p>files</p>} />
+    </Route>
+  </Routes>
+);
+
+describe("password change errors", () => {
+  it("keeps the form and says the current password is wrong", async () => {
+    mockApi({
+      ...HEALTH,
+      "GET /api/auth/me": { username: "admin", must_change_password: true, csrf_token: "a" },
+      "POST /api/auth/change-password": () => json(401, { detail: "current_password_wrong" }),
+    });
+    renderApp(<ChangePasswordPage />, { route: "/change-password", path: "/change-password" });
+    await userEvent.type(screen.getByLabelText("Current password"), "wrong-one-here");
+    await userEvent.type(screen.getByLabelText(/^New password(?! again)/), "a much better passphrase");
+    await userEvent.type(screen.getByLabelText("New password again"), "a much better passphrase");
+    await userEvent.click(screen.getByRole("button", { name: "Save password" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The current password is wrong.");
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/change-password");
+  });
+
+  it("marks a short password invalid and links the hint", async () => {
+    mockApi({ ...HEALTH, "GET /api/auth/me": { username: "admin", must_change_password: true, csrf_token: "a" } });
+    renderApp(<ChangePasswordPage />, { route: "/change-password", path: "/change-password" });
+    const field = screen.getByLabelText(/^New password(?! again)/);
+    await userEvent.type(field, "short");
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("alert")).toHaveTextContent("Use at least 12 characters.");
+    const hint = document.getElementById(field.getAttribute("aria-describedby") ?? "");
+    expect(hint).toHaveTextContent("At least 12 characters");
+    expect(hint?.closest("label")).toBeNull();
+  });
+
+  it("has a hidden username field for password managers", async () => {
+    mockApi({ ...HEALTH, "GET /api/auth/me": { username: "admin", must_change_password: true, csrf_token: "a" } });
+    renderApp(<ChangePasswordPage />, { route: "/change-password", path: "/change-password" });
+    await waitFor(() => expect(document.querySelector('input[autocomplete="username"]')).toHaveValue("admin"));
+  });
+});
+
+describe("login redirect", () => {
+  it("sends an already logged-in person on", async () => {
+    mockApi({ ...HEALTH, "GET /api/auth/me": { username: "admin", must_change_password: false, csrf_token: "x" } });
+    renderApp(<LoginPage />, { route: "/login", path: "/login" });
+    await waitFor(() => expect(screen.getAllByTestId("location")[0].textContent).toBe("/"));
+  });
+});
+
 describe("RequireAuth", () => {
-  const tree = (
-    <Routes>
-      <Route element={<RequireAuth />}>
-        <Route path="/drive" element={<p>files</p>} />
-      </Route>
-    </Routes>
-  );
+  it("shows a retry panel when /me fails for another reason", async () => {
+    mockApi({ "GET /api/auth/me": () => json(500, { detail: "boom" }) });
+    renderApp(tree, { route: "/drive" });
+    expect(await screen.findByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/drive");
+  });
 
   it("sends logged-out people to the login page", async () => {
     mockApi({ "GET /api/auth/me": () => json(401, { detail: "not_logged_in" }) });

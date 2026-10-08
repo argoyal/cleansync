@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { api, friendlyError, setCsrfToken } from "../api/client";
-import { useHealth } from "../api/queries";
+import { useHealth, useMe } from "../api/queries";
 import type { Me } from "../api/types";
 import { Icon } from "../components/Icon";
 import { Button, Field, inputClass, Notice } from "../components/ui";
@@ -42,6 +42,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const qc = useQueryClient();
+  const me = useMe();
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const login = useMutation({
@@ -53,6 +54,10 @@ export function LoginPage() {
       navigate(me.must_change_password ? "/change-password" : from || "/", { replace: true });
     },
   });
+  if (me.data && !login.isPending) {
+    const from = (location.state as { from?: string } | null)?.from;
+    return <Navigate to={me.data.must_change_password ? "/change-password" : from || "/"} replace />;
+  }
   const submit = (e: FormEvent) => {
     e.preventDefault();
     login.mutate();

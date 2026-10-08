@@ -1,4 +1,13 @@
-import { type ButtonHTMLAttributes, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type ButtonHTMLAttributes,
+  cloneElement,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+  useEffect, useLayoutEffect, useId,
+  useRef,
+  useState,
+} from "react";
 
 import { Icon, type IconName } from "./Icon";
 
@@ -204,12 +213,23 @@ function MenuButton({
 }
 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: ReactNode }) {
+  const hintId = useId();
+  const control =
+    hint && isValidElement(children)
+      ? cloneElement(children as ReactElement<{ "aria-describedby"?: string }>, { "aria-describedby": hintId })
+      : children;
   return (
-    <label className="block">
-      <span className="mb-1 block text-table font-medium text-ink-2">{label}</span>
-      {children}
-      {hint && <span className="mt-1 block text-meta text-ink-2">{hint}</span>}
-    </label>
+    <div>
+      <label className="block">
+        <span className="mb-1 block text-table font-medium text-ink-2">{label}</span>
+        {control}
+      </label>
+      {hint && (
+        <span id={hintId} className="mt-1 block text-meta text-ink-2">
+          {hint}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -217,17 +237,18 @@ export const inputClass =
   "h-10 w-full rounded-ctl border border-line bg-surface px-3 text-body text-ink placeholder:text-ink-2/70 focus:border-accent focus:outline-none";
 
 export function Bar({ value, tone = "accent", label }: { value: number; tone?: "accent" | "run" | "warn" | "err"; label: string }) {
+  const pct = Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0;
   const color = { accent: "bg-accent", run: "bg-run", warn: "bg-warn", err: "bg-err" }[tone];
   return (
     <div
       role="progressbar"
       aria-label={label}
-      aria-valuenow={Math.round(value)}
+      aria-valuenow={Math.round(pct)}
       aria-valuemin={0}
       aria-valuemax={100}
       className="h-1.5 w-full overflow-hidden rounded-full bg-sunken"
     >
-      <div className={`h-full rounded-full ${color}`} style={{ width: `${value}%` }} />
+      <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
     </div>
   );
 }

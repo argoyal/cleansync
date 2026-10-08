@@ -13,6 +13,7 @@ export const MIN_PASSWORD = 12;
 /** The form on its own: used on the forced first-login page and in Settings, Security. */
 export function PasswordForm({ onDone, submitLabel = "Change password" }: { onDone: () => void; submitLabel?: string }) {
   const qc = useQueryClient();
+  const username = useMe().data?.username ?? "";
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [again, setAgain] = useState("");
@@ -40,16 +41,27 @@ export function PasswordForm({ onDone, submitLabel = "Change password" }: { onDo
   };
   return (
     <form onSubmit={submit} className="space-y-4">
+      {/* Lets password managers tie the new password to the right login. */}
+      <input
+        type="text"
+        name="username"
+        autoComplete="username"
+        value={username}
+        readOnly
+        tabIndex={-1}
+        aria-hidden="true"
+        className="sr-only"
+      />
       <Field label="Current password">
         <input className={inputClass} type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
       </Field>
       <Field label="New password" hint={`At least ${MIN_PASSWORD} characters. A short sentence works well.`}>
-        <input className={inputClass} type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
+        <input className={inputClass} type="password" autoComplete="new-password" value={next} aria-invalid={next.length > 0 && next.length < MIN_PASSWORD} onChange={(e) => setNext(e.target.value)} />
       </Field>
       <Field label="New password again">
-        <input className={inputClass} type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} />
+        <input className={inputClass} type="password" autoComplete="new-password" value={again} aria-invalid={again.length > 0 && next !== again} onChange={(e) => setAgain(e.target.value)} />
       </Field>
-      {problem && <p className="text-table text-err">{problem}</p>}
+      {problem && <p role="alert" className="text-table text-err">{problem}</p>}
       {change.isError && <Notice tone="err">{friendlyError(change.error)}</Notice>}
       <Button tone="primary" type="submit" disabled={change.isPending || !current || !next || next !== again || !!problem}>
         {submitLabel}
