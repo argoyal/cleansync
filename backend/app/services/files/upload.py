@@ -9,7 +9,7 @@ import errno
 import os
 import shutil
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from app.core.pathsafe import safe_join
@@ -26,13 +26,8 @@ def plan_target(
     scope: Scope,
     folder_rel: str,
     relative_name: str,
-    *,
-    before_create: Callable[[str], None] | None = None,
 ) -> tuple[Path, str, str]:
-    """(folder on disk, its account path, file name); creates sub-folders of a folder upload.
-
-    before_create(dir_rel) runs once the names are checked and before any folder is made,
-    so a refusal (a busy pair) leaves nothing behind."""
+    """(folder on disk, its account path, file name); creates sub-folders of a folder upload."""
     parts = relative_name.split("/")
     if len(parts) > MAX_DEPTH:
         raise FileOpError("that folder is nested too deeply", 422)
@@ -42,11 +37,6 @@ def plan_target(
     folder = safe_join(scope.root, folder_rel)
     if not folder.is_dir() or resolves_to_hidden(scope.root, folder):
         raise FileOpError("folder not found", 404)
-    dir_rel = folder_rel
-    for part in parts[:-1]:
-        dir_rel = join_rel(dir_rel, part)
-    if before_create is not None:
-        before_create(dir_rel)
     dir_rel = folder_rel
     for part in parts[:-1]:
         dir_rel = join_rel(dir_rel, part)
@@ -89,31 +79,49 @@ async def save_stream(stream: AsyncIterator[bytes], tmp: Path) -> int:
     return total
 
 
+def _copy_beside(tmp: Path, folder: Path) -> Path:
+    """Copy tmp into the destination folder under a short hidden name (other disk)."""
+    hidden = folder / f".drivesync-upload-{uuid.uuid4().hex}"
+    try:
+        shutil.copyfile(tmp, hidden)
+        shutil.copystat(tmp, hidden)
+    except BaseException:
+        hidden.unlink(missing_ok=True)
+        raise
+    return hidden
+
+
 def publish(tmp: Path, folder: Path, name: str) -> str:
     """Move the finished upload into the folder under a free name; never overwrites."""
-    for _ in range(1000):
-        final = free_name(folder, name)
-        dest = folder / final
-        try:
-            os.link(tmp, dest)  # fails if dest appeared meanwhile, unlike a rename
-        except FileExistsError:
-            continue
-        except OSError as e:
-            if e.errno == errno.EXDEV:  # storage/ is on another disk than app/data
-                hidden = folder / f".{final}.drivesync-upload"
-                shutil.copyfile(tmp, hidden)
-                shutil.copystat(tmp, hidden)
-                os.replace(hidden, dest)
-                tmp.unlink(missing_ok=True)
-                return final
-            # A filesystem without hard links (some Windows mounts): rename instead.
-            if dest.exists():
+    hidden: Path | None = None
+    try:
+        for _ in range(1000):
+            final = free_name(folder, name)
+            dest = folder / final
+            source = hidden or tmp
+            try:
+                os.link(source, dest)  # fails if dest appeared meanwhile, unlike a rename
+            except FileExistsError:
                 continue
-            os.replace(tmp, dest)
+            except OSError as e:
+                if e.errno == errno.EXDEV and hidden is None:
+                    # storage/ is on another disk than app/data: copy beside the target,
+                    # then link from there (same disk), still never replacing anything.
+                    hidden = _copy_beside(tmp, folder)
+                    continue
+                if e.errno == errno.EXDEV:
+                    raise
+                # A filesystem without hard links (some Windows mounts): rename instead.
+                if dest.exists():
+                    continue
+                os.replace(tmp, dest)
+                return final
+            tmp.unlink(missing_ok=True)
             return final
-        tmp.unlink(missing_ok=True)
-        return final
-    raise FileOpError("could not find a free name for the upload", 409)
+        raise FileOpError("could not find a free name for the upload", 409)
+    finally:
+        if hidden is not None:
+            hidden.unlink(missing_ok=True)
 
 
 def clear_uploads(layout: Layout) -> int:

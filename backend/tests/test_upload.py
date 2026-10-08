@@ -1,5 +1,6 @@
 import errno
 import os
+from pathlib import Path
 
 import pytest
 
@@ -144,17 +145,92 @@ def test_leftover_temp_files_are_cleared_at_startup(layout):
     assert os.path.isdir(layout.uploads_dir)
 
 
-def test_upload_into_a_busy_pair_is_refused_and_creates_nothing(auth_client, env, stub_queue):
+def test_upload_during_a_running_sync_succeeds_and_marks_it_dirty(auth_client, env, stub_queue):
     acc, root, pair = env
     stub_queue.running.add(pair.id)
+    stub_queue.answer = "dirty"
     r = _upload(auth_client, acc, "New/a.txt", b"x")
-    assert r.status_code == 409
-    assert not (root / "New").exists()
+    assert r.status_code == 200, r.text
+    assert r.json()["syncs"] == {str(pair.id): "dirty"}
+    assert (root / "New" / "a.txt").read_bytes() == b"x"
 
 
 def test_upload_through_a_symlink_to_a_hidden_folder_is_refused(auth_client, env):
     acc, root, _ = env
     (root / "RCLONE_TEST").mkdir()
     (root / "sneaky").symlink_to(root / "RCLONE_TEST")
-    assert _upload(auth_client, acc, "a.txt", b"x", path="sneaky").status_code in (404, 422)
+    assert _upload(auth_client, acc, "a.txt", b"x", path="sneaky").status_code == 404
     assert list((root / "RCLONE_TEST").iterdir()) == []
+
+
+def test_cross_disk_publish_copies_beside_then_links(tmp_path, monkeypatch):
+    folder = tmp_path / "f"
+    folder.mkdir()
+    (folder / "a.txt").write_text("keep")
+    tmp = tmp_path / "t.part"
+    tmp.write_text("new")
+    real = os.link
+    calls = []
+
+    def link(src, dst):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real(src, dst)
+
+    monkeypatch.setattr(up.os, "link", link)
+    assert up.publish(tmp, folder, "a.txt") == "a (1).txt"
+    assert (folder / "a.txt").read_text() == "keep"
+    assert (folder / "a (1).txt").read_text() == "new"
+    assert not tmp.exists()
+    assert sorted(p.name for p in folder.iterdir()) == ["a (1).txt", "a.txt"]
+
+
+def test_cross_disk_copy_failure_leaves_no_hidden_file(tmp_path, monkeypatch):
+    folder = tmp_path / "f"
+    folder.mkdir()
+    tmp = tmp_path / "t.part"
+    tmp.write_text("new")
+
+    def link(src, dst):
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    def boom(src, dst):
+        Path(dst).write_text("partial")
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(up.os, "link", link)
+    monkeypatch.setattr(up.shutil, "copyfile", boom)
+    with pytest.raises(OSError):
+        up.publish(tmp, folder, "a.txt")
+    assert list(folder.iterdir()) == []
+
+
+def test_not_enough_free_disk_is_refused_before_streaming(auth_client, app, env, monkeypatch):
+    acc, root, _ = env
+    monkeypatch.setattr(
+        "app.api.fileops.shutil.disk_usage",
+        lambda p: type("U", (), {"free": 10})(),
+    )
+    r = _upload(auth_client, acc, "a.bin", b"data")
+    assert r.status_code == 507
+    assert not (root / "a.bin").exists()
+    assert list(app.state.layout.uploads_dir.iterdir()) == []
+
+
+def test_client_disconnect_cleans_the_temp_file(auth_client, app, env):
+    from starlette.requests import ClientDisconnect
+
+    acc, root, _ = env
+
+    def body():
+        yield b"some bytes"
+        raise ClientDisconnect()
+
+    try:
+        r = _upload(auth_client, acc, "gone.bin", body())
+        assert r.status_code == 400
+    except ClientDisconnect:
+        pass  # the test client re-raises it once the server has cleaned up
+    assert not (root / "gone.bin").exists()
+    assert list(app.state.layout.uploads_dir.iterdir()) == []

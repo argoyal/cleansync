@@ -5,6 +5,7 @@ import asyncio
 import errno
 import logging
 import os
+import shutil
 from collections.abc import Iterable
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -190,6 +191,7 @@ async def delete(
 
 
 MAX_MTIME_MS = 4_102_444_800_000  # year 2100
+DISK_RESERVE_BYTES = 1024**3  # keep 1 GiB free for the database, logs and temp files
 
 
 @router.post("/upload", response_model=UploadOut)
@@ -209,41 +211,39 @@ async def upload(
     """
     refuse_when_disabled(request)
     scope = get_scope(request, db, account_id)
-    queue = request.app.state.queue
-
-    def check(dir_rel: str) -> None:
-        moves.check_pairs(queue, moves.touched_pairs(scope, [dir_rel]))
-
-    folder, dir_rel, leaf = await run_op(
-        lambda: plan_target(scope, clean_path(path), name, before_create=check)
-    )
-    pair_ids = moves.touched_pairs(scope, [dir_rel])
-    tmp = new_temp(request.app.state.layout)
+    # Adding a whole new file is safe while a sync runs (it appears atomically and the
+    # follow-up sync is marked dirty), so unlike moves and deletes there is no busy check.
+    folder, dir_rel, leaf = await run_op(plan_target, scope, clean_path(path), name)
+    layout = request.app.state.layout
+    tmp = new_temp(layout)
     expected = request.headers.get("content-length")
-
-    async def publish_held() -> str:
-        moves.check_pairs(queue, pair_ids)  # it may have become busy during the upload
-        with moves.hold_pairs(queue, pair_ids):
-            # Held until the thread is done, even if the request is cancelled.
-            final, error, cancelled = await moves.finish_in_thread(publish, tmp, folder, leaf)
+    length = int(expected) if expected is not None and expected.isdigit() else None
+    if length is not None:
+        free = await asyncio.to_thread(lambda: shutil.disk_usage(layout.uploads_dir).free)
+        if free < length + DISK_RESERVE_BYTES:
+            raise HTTPException(507, "the server doesn't have enough free disk space for this file")
+    final: str | None = None
+    try:
+        size = await save_stream(request.stream(), tmp)
+        if length is not None and size != length:
+            raise HTTPException(400, "the upload was cut off; try again")
+        if mtime_ms is not None and 0 < mtime_ms < MAX_MTIME_MS:
+            ns = mtime_ms * 1_000_000
+            await asyncio.to_thread(os.utime, tmp, ns=(ns, ns))  # keep "modified"
+        # Finish the thread even if the request is cancelled: the file may already be placed.
+        placed, error, cancelled = await moves.finish_in_thread(publish, tmp, folder, leaf)
+        if error is None:
+            final = placed
         if cancelled:
             raise asyncio.CancelledError()
         if error is not None:
-            raise error
-        return final
-
-    try:
-        size = await save_stream(request.stream(), tmp)
-        if expected is not None and expected.isdigit() and size != int(expected):
-            raise HTTPException(400, "the upload was cut off; try again")
-        if mtime_ms is not None and 0 < mtime_ms < MAX_MTIME_MS:
-            os.utime(tmp, ns=(mtime_ms * 1_000_000, mtime_ms * 1_000_000))  # keep "modified"
-        final = await guarded(publish_held())
+            raise _http(error) from error
     except ClientDisconnect:
         raise HTTPException(400, "the upload was cancelled") from None
     except OSError as e:
         raise os_error(e) from e
     finally:
-        tmp.unlink(missing_ok=True)
-    rel = join_rel(dir_rel, final)
-    return UploadOut(path=rel, size=size, syncs=after_change(request, scope, [rel]))
+        await asyncio.shield(asyncio.to_thread(tmp.unlink, missing_ok=True))
+        if final is not None:  # also after a late cancel: the file is in place
+            syncs = after_change(request, scope, [join_rel(dir_rel, final)])
+    return UploadOut(path=join_rel(dir_rel, final), size=size, syncs=syncs)
