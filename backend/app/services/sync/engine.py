@@ -89,7 +89,11 @@ class SyncEngine:
         )
         db.add(job)
         db.commit()
-        job.log_path = str(self.layout.job_log(job.id))
+        log_path = self.layout.job_log(job.id)
+        # A fresh file per job: never append to a log left behind under the same name.
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("", encoding="utf-8")
+        job.log_path = str(log_path)
         db.commit()
         self.bus.publish(
             "job", {"pair_id": pair.id, "job_id": job.id, "kind": kind, "state": job.state}

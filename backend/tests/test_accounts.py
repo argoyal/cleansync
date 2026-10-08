@@ -220,3 +220,40 @@ def test_startup_encrypts_existing_plain_config(app, fake_rclone):
     with TestClient(app):
         pass
     assert any(c[4:7] == ["config", "encryption", "set"] for c in fake_rclone.calls())
+
+
+# I2: the scheduler and watcher must follow account status changes.
+@respx.mock
+def test_reconnect_resumes_scheduling(auth_client, app, make_account, make_pair, db):
+    acc = make_account()
+    acc.status = "NEEDS_REAUTH"
+    db.commit()
+    pair = make_pair(acc, initialized=True, schedule_interval_s=300)
+    sched = app.state.scheduler
+    sched.reload()
+    assert sched.aps.get_job(f"pair-{pair.id}") is None
+    _mock_google()
+    url = auth_client.post(f"/api/accounts/{acc.id}/reconnect").json()["auth_url"]
+    state = parse_qs(urlparse(url).query)["state"][0]
+    r = auth_client.get(f"/api/oauth/callback?state={state}&code=a", follow_redirects=False)
+    assert r.headers["location"].startswith("/?connected=")
+    assert sched.aps.get_job(f"pair-{pair.id}") is not None
+
+
+def test_disconnect_and_needs_reauth_stop_scheduling(auth_client, app, make_account, make_pair):
+
+    acc = make_account()
+    p1 = make_pair(acc, initialized=True, schedule_interval_s=300)
+    other = make_account("bob@example.com")
+    p2 = make_pair(other, initialized=True, schedule_interval_s=300)
+    sched = app.state.scheduler
+    sched.reload()
+    assert sched.aps.get_job(f"pair-{p1.id}") and sched.aps.get_job(f"pair-{p2.id}")
+    auth_client.post(f"/api/accounts/{acc.id}/disconnect")
+    assert sched.aps.get_job(f"pair-{p1.id}") is None
+
+    async def expire():
+        await app.state.accounts.mark_needs_reauth(other.id, "expired")
+
+    auth_client.portal.call(expire)
+    assert sched.aps.get_job(f"pair-{p2.id}") is None

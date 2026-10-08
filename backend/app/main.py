@@ -125,6 +125,8 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         accounts=app.state.accounts,
         layout=layout,
     )
+    # Reconnecting, disconnecting or losing a Google login changes which pairs can run.
+    app.state.accounts.on_change = _on_change
     app.state.watcher = LocalWatcher(
         session_factory=session_factory,
         layout=layout,

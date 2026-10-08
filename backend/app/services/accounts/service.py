@@ -50,6 +50,7 @@ class AccountService:
         http_factory: Callable[[], httpx.AsyncClient] = lambda: httpx.AsyncClient(timeout=30),
         runner=run_rclone,
         clock=utcnow,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         self.settings = settings
         self.layout = layout
@@ -60,6 +61,16 @@ class AccountService:
         self.runner = runner
         self.clock = clock
         self.states = OAuthStates()
+        # Called after an account's status changes, so the scheduler and watcher follow it.
+        self.on_change = on_change
+
+    def _changed(self) -> None:
+        if self.on_change is None:
+            return
+        try:
+            self.on_change()
+        except Exception:  # never fail an account change over a schedule reload
+            logger.exception("reloading the schedule after an account change failed")
 
     def _secrets(self, *extra: str) -> list[str]:
         return [self.env.config_pass, self.settings.google_client_secret, *extra]
@@ -169,6 +180,7 @@ class AccountService:
                 account_id=acc.id,
             )
             self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
+            self._changed()
             return acc
 
     async def disconnect(self, account_id: int) -> Account:
@@ -189,6 +201,7 @@ class AccountService:
                 account_id=acc.id,
             )
             self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
+            self._changed()
             return acc
 
     async def mark_needs_reauth(self, account_id: int, reason: str) -> None:
@@ -207,6 +220,7 @@ class AccountService:
                 account_id=acc.id,
             )
             self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
+        self._changed()
 
     async def refresh_quota(self, account_id: int) -> Account:
         out: list[str] = []

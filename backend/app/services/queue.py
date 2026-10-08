@@ -46,6 +46,10 @@ class SyncQueue:
     def is_running(self, pair_id: int) -> bool:
         return pair_id in self._running
 
+    def is_busy(self, pair_id: int) -> bool:
+        """Running, or queued and waiting for a free slot."""
+        return pair_id in self._running or pair_id in self._pending
+
     def finished_at(self, pair_id: int) -> float | None:
         return self._finished.get(pair_id)
 

@@ -10,6 +10,8 @@ from app.models.enums import ConflictState, Direction, JobState, PairStatus
 
 class SyncPair(Base):
     __tablename__ = "sync_pairs"
+    # Ids name files on disk (workdir, filters, previews); a deleted pair's id is never reused.
+    __table_args__ = {"sqlite_autoincrement": True}
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
     name: Mapped[str] = mapped_column(String(128))
@@ -41,6 +43,8 @@ class SyncPair(Base):
 
 class SyncJob(Base):
     __tablename__ = "sync_jobs"
+    # Ids name job log files; a deleted job's id is never reused.
+    __table_args__ = {"sqlite_autoincrement": True}
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     pair_id: Mapped[int] = mapped_column(
         ForeignKey("sync_pairs.id", ondelete="CASCADE"), index=True

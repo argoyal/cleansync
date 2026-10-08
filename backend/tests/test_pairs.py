@@ -138,3 +138,52 @@ def test_google_exports_folder_reserved(auth_client, make_account):
     acc = make_account()
     assert _create(auth_client, acc.id, local_subpath=".google-exports").status_code == 422
     assert _create(auth_client, acc.id, local_subpath=".google-exports/x").status_code == 422
+
+
+# I3: deleting a pair must not leave state that a later pair could pick up.
+def test_deleted_pair_id_is_never_reused_and_previews_are_removed(auth_client, app, make_account):
+    acc = make_account()
+    pid = _create(auth_client, acc.id, local_subpath="A", remote_path="A").json()["id"]
+    previews = app.state.layout.previews_dir
+    for name in (f"{pid}.json", f"{pid}-different.txt", f"{pid}-initial-different.txt"):
+        (previews / name).write_text("{}")
+    (previews / f"{pid}0.json").write_text("{}")  # another pair's preview stays
+    assert auth_client.delete(f"/api/sync-pairs/{pid}").status_code == 204
+    assert sorted(p.name for p in previews.iterdir()) == [f"{pid}0.json"]
+    new_id = _create(auth_client, acc.id, local_subpath="A", remote_path="A").json()["id"]
+    assert new_id != pid
+    assert app.state.initial.load_preview(new_id) is None
+
+
+def test_job_ids_are_never_reused(db, make_account, make_pair):
+    from app.models import SyncJob
+
+    acc = make_account()
+    pair = make_pair(acc)
+    job = SyncJob(pair_id=pair.id, kind="BISYNC", trigger="MANUAL")
+    db.add(job)
+    db.commit()
+    old = job.id
+    db.delete(job)
+    db.commit()
+    again = SyncJob(pair_id=pair.id, kind="BISYNC", trigger="MANUAL")
+    db.add(again)
+    db.commit()
+    assert again.id > old
+
+
+def test_delete_is_refused_while_the_pair_is_running_or_queued(auth_client, app, make_account):
+    acc = make_account()
+    pid = _create(auth_client, acc.id).json()["id"]
+    queue = app.state.queue
+    queue._running.add(pid)
+    try:
+        assert auth_client.delete(f"/api/sync-pairs/{pid}").status_code == 409
+    finally:
+        queue._running.discard(pid)
+    queue._pending[pid] = ("sync", "MANUAL")
+    try:
+        assert auth_client.delete(f"/api/sync-pairs/{pid}").status_code == 409
+    finally:
+        queue._pending.pop(pid)
+    assert auth_client.delete(f"/api/sync-pairs/{pid}").status_code == 204

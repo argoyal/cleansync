@@ -81,6 +81,9 @@ def delete(
     db: Session = Depends(get_db),
 ):
     pair, _ = load_pair(db, pair_id)
+    queue = getattr(request.app.state, "queue", None)
+    if queue is not None and queue.is_busy(pair_id):
+        raise HTTPException(409, "this pair is syncing or queued; try again when it finishes")
     delete_pair(db, request.app.state.layout, pair)
     _reload_schedule(request)
     return Response(status_code=204)

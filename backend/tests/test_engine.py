@@ -714,3 +714,13 @@ async def test_one_way_backup_moves_count_as_planned_deletes(
     assert (job.state, job.planned_deletions) == ("BLOCKED", 1)
     planned = db.scalars(select(PlannedChange).where(PlannedChange.job_id == job.id)).all()
     assert [(p.side, p.action, p.path) for p in planned] == [("local", "delete", "old.txt")]
+
+
+async def test_each_job_starts_a_fresh_log_file(sync_engine, make_account, make_pair, db, layout):
+    acc, pair = _ready_pair(make_account, make_pair)
+    stale = layout.job_log(1)
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("left over from an older job\n")
+    job = sync_engine.start_job(db, pair, "DRY_RUN", "MANUAL")
+    assert job.id == 1
+    assert open(job.log_path).read() == ""
