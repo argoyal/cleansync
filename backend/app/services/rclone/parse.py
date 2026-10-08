@@ -15,6 +15,12 @@ _BOTH = re.compile(r"^-\s+WARNING\s+New or changed in both paths\s+-\s+(.+)$")
 _PREFIX = re.compile(r"^\{path[12]/\}")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _RENAME = re.compile(r"^-\s+(Path1|Path2)\s+Renaming (?:Path1|Path2) copy\s+-\s+(.+)$")
+# After "New or changed in both paths", rclone may find both sides equal (or a folder) and leave
+# them alone: then it is not a conflict (e.g. a folder DriveSync renamed on both sides).
+_SETTLED = re.compile(
+    r"^(?:Files are equal! Skipping|This is a directory, not a file\. Skipping equality check "
+    r"and will not rename): (.+)$"
+)
 _SUCCESS = "Bisync successful"
 _ROOTS = re.compile(r'^Synching Path1 "(.*)" with Path2 "(.*)"$')
 _CHECK = re.compile(r"^([=+\-*!]) (.+)$")
@@ -148,6 +154,13 @@ class Counters:
         if b:
             self._last_conflict = self._rel(b.group(1))
             self.conflict_paths.append(self._last_conflict)
+            return
+        settled = _SETTLED.match(text)
+        if settled:
+            path = self._rel(settled.group(1))
+            self.conflict_paths = [p for p in self.conflict_paths if p != path]
+            if self._last_conflict == path:
+                self._last_conflict = None
             return
         rn = _RENAME.match(text)
         if rn and self._last_conflict is not None:
