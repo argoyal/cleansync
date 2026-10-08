@@ -35,10 +35,17 @@ export function NewMenu() {
         method: "POST",
         body: { account_id: accountId, path: folder, kind },
       }),
-    onSuccess: (out, { tab }) => {
+    onSuccess: (out, { tab, kind }) => {
       invalidate();
-      if (out.google_url && tab) {
-        tab.location.href = out.google_url;
+      const url = out.google_url;
+      if (url && tab) {
+        tab.location.href = url;
+      } else if (url) {
+        // The browser blocked the tab opened during the click: offer a link instead.
+        const what = { document: "Google Doc", spreadsheet: "Google Sheet", presentation: "Google Slides file" }[kind as string] ?? "Google file";
+        toast(`Your new ${what} is ready.`, {
+          action: { label: "Open it", run: () => window.open(url, "_blank", "noopener") },
+        });
       } else {
         tab?.close();
         toast(`Created ${out.path?.split("/").pop()}. It reaches Google Drive with the next sync.`);
@@ -92,7 +99,12 @@ export function NewMenu() {
   ];
 
   const picked = (list: FileList | null) => {
-    if (accountId !== null && list && list.length) uploads.add(Array.from(list), accountId, folder);
+    if (accountId === null || !list) return;
+    if (list.length === 0) {
+      toast("That folder is empty, so there is nothing to upload.");
+      return;
+    }
+    uploads.add(Array.from(list), accountId, folder);
   };
 
   return (
@@ -120,7 +132,7 @@ export function NewMenu() {
         {...{ webkitdirectory: "" }}
         onChange={(e) => (picked(e.target.files), (e.target.value = ""))}
       />
-      {menu && <Menu label="New" items={items} x={menu.x} y={menu.y} onClose={() => setMenu(null)} />}
+      {menu && <Menu label="New" opener={button.current} items={items} x={menu.x} y={menu.y} onClose={() => setMenu(null)} />}
       {newFolder && accountId !== null && (
         <NewFolderDialog accountId={accountId} folder={folder} onClose={() => setNewFolder(false)} />
       )}

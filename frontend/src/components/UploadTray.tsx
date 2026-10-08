@@ -8,6 +8,14 @@ import { Bar, IconButton } from "./ui";
 
 const STATE_TEXT = { waiting: "Waiting", sending: "Uploading", done: "Uploaded", failed: "Failed", cancelled: "Cancelled" };
 
+function outcome(list: { state: string }[]): string {
+  const failed = list.filter((u) => u.state === "failed").length;
+  const cancelled = list.filter((u) => u.state === "cancelled").length;
+  if (!failed && !cancelled) return "All uploads done";
+  const parts = [failed && `${failed} failed`, cancelled && `${cancelled} cancelled`].filter(Boolean);
+  return `Finished: ${parts.join(", ")}`;
+}
+
 /** Bottom-right panel with every upload of this session. */
 export function UploadTray() {
   const list = useUploads();
@@ -21,7 +29,9 @@ export function UploadTray() {
       className="fixed bottom-4 right-4 z-40 w-[min(360px,calc(100vw-2rem))] rounded-card border border-line bg-surface shadow-float"
     >
       <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
-        <h2 className="flex-1 font-semibold">{active ? `Uploading ${active} ${active === 1 ? "item" : "items"}` : "Uploads done"}</h2>
+        <h2 aria-live="polite" className="flex-1 font-semibold">
+          {active ? `Uploading ${active} ${active === 1 ? "item" : "items"}` : outcome(list)}
+        </h2>
         {!active && <IconButton icon="close" label="Close uploads" onClick={() => uploads.clearFinished()} />}
       </header>
       <ul className="max-h-64 overflow-y-auto px-4 py-2">
@@ -31,13 +41,17 @@ export function UploadTray() {
               <Icon name="upload_file" className="text-ink-2" />
               <span className="min-w-0 flex-1 truncate">{u.name}</span>
               {(u.state === "waiting" || u.state === "sending") && (
-                <button type="button" className="text-meta font-semibold text-accent" onClick={() => uploads.cancel(u.id)}>
+                <button
+                  type="button"
+                  aria-label={`Cancel upload of ${u.name}`}
+                  className="text-meta font-semibold text-accent"
+                  onClick={() => uploads.cancel(u.id)}>
                   Cancel
                 </button>
               )}
             </div>
             {u.state === "sending" && <Bar tone="run" label={`${u.name} upload`} value={percent(u.sent, u.size)} />}
-            <p className={`mt-0.5 text-meta ${u.state === "failed" ? "text-err" : "text-ink-2"}`}>
+            <p role={u.state === "failed" ? "alert" : undefined} className={`mt-0.5 text-meta ${u.state === "failed" ? "text-err" : "text-ink-2"}`}>
               {u.state === "failed"
                 ? u.error
                 : u.savedAs

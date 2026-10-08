@@ -1,8 +1,8 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { setCsrfToken } from "../api/client";
+import { AUTH_EVENT, setCsrfToken } from "../api/client";
 import { sendFile, setSender, uploads } from "../hooks/uploads";
 import { ACCOUNT, mockApi, renderApp } from "../test/utils";
 import { NewMenu } from "./NewMenu";
@@ -15,14 +15,14 @@ afterEach(() => {
 
 function setup(extra: Record<string, unknown> = {}) {
   const api = mockApi({ "GET /api/accounts": [ACCOUNT], ...extra });
-  renderApp(
+  const view = renderApp(
     <>
       <NewMenu />
       <UploadTray />
     </>,
     { withAccount: true, route: "/drive?path=Work", path: "/drive" },
   );
-  return api;
+  return { ...api, client: view.client };
 }
 
 async function openMenu() {
@@ -108,7 +108,7 @@ describe("+ New", () => {
       finish[1]();
       finish[2]();
     });
-    expect(screen.getByRole("region", { name: "Uploads" })).toHaveTextContent("Uploads done");
+    expect(screen.getByRole("region", { name: "Uploads" })).toHaveTextContent("All uploads done");
   });
 
   it("shows why an upload failed and lets the person cancel one", async () => {
@@ -119,7 +119,7 @@ describe("+ New", () => {
     setup();
     await userEvent.upload(screen.getByLabelText("Files to upload"), [new File(["x"], "bad.bin"), new File(["y"], "slow.bin")]);
     expect(await screen.findByText("the server disk is full")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel upload of slow.bin" }));
     expect(screen.getByText(/Cancelled/)).toBeInTheDocument();
   });
 
@@ -150,5 +150,130 @@ describe("+ New", () => {
     setCsrfToken("tok");
     sendFile({ file: new File(["x"], "a.txt"), accountId: 1, folder: "Work", relative: "a.txt" }, () => undefined);
     expect(sent["X-CSRF-Token"]).toBe("tok");
+  });
+
+  it("offers a link when the browser blocks the new Google tab", async () => {
+    const open = vi.fn().mockReturnValueOnce(null).mockReturnValue({});
+    vi.stubGlobal("open", open);
+    setup({ "POST /api/files/new": { path: null, google_url: "https://docs.google.com/document/d/N1/edit", syncs: {} } });
+    await userEvent.click(within(await openMenu()).getByRole("menuitem", { name: "Google Docs" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Blank Google Doc" }));
+    expect(await screen.findByText("Your new Google Doc is ready.")).toBeInTheDocument();
+    expect(screen.queryByText(/Created/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Open it" }));
+    expect(open).toHaveBeenLastCalledWith("https://docs.google.com/document/d/N1/edit", "_blank", "noopener");
+  });
+
+  it("aborts a request in flight and drops a queued one without starting it", async () => {
+    const abort = vi.fn();
+    const started: string[] = [];
+    setSender((job) => {
+      started.push(job.relative);
+      return { xhr: { abort } as unknown as XMLHttpRequest, done: new Promise<void>(() => undefined) };
+    });
+    setup();
+    await userEvent.upload(screen.getByLabelText("Files to upload"), ["a", "b", "c"].map((n) => new File(["x"], n)));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel upload of c" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel upload of a" }));
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(started).toEqual(["a", "b"]);
+    expect(screen.getByRole("region", { name: "Uploads" })).toHaveTextContent("Uploading 1 item");
+  });
+
+  it("uses the folder-relative path as the upload name", async () => {
+    const started: string[] = [];
+    setSender((job) => {
+      started.push(job.relative);
+      return { xhr: { abort: vi.fn() } as unknown as XMLHttpRequest, done: new Promise<void>(() => undefined) };
+    });
+    setup();
+    const f = new File(["x"], "p.jpg");
+    Object.defineProperty(f, "webkitRelativePath", { value: "Trip/day 1/p.jpg" });
+    await userEvent.upload(screen.getByLabelText("Folder to upload"), [f]);
+    expect(started).toEqual(["Trip/day 1/p.jpg"]);
+    expect(screen.getByText("Trip/day 1/p.jpg")).toBeInTheDocument();
+  });
+
+  it("says a picked folder is empty", async () => {
+    setup();
+    await waitFor(() => expect(screen.getByRole("button", { name: "New" })).toBeEnabled());
+    fireEvent.change(screen.getByLabelText("Folder to upload"), { target: { files: [] } });
+    expect(await screen.findByText(/folder is empty/)).toBeInTheDocument();
+  });
+
+  it("frees the slot when the sender throws and summarises the outcome", async () => {
+    setSender((job) => {
+      if (job.relative === "bad") throw new Error("could not start");
+      return { xhr: { abort: vi.fn() } as unknown as XMLHttpRequest, done: Promise.resolve() };
+    });
+    setup();
+    await userEvent.upload(screen.getByLabelText("Files to upload"), ["bad", "ok1", "ok2"].map((n) => new File(["x"], n)));
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not start");
+    await waitFor(() => expect(screen.getByRole("region", { name: "Uploads" })).toHaveTextContent("Finished: 1 failed"));
+  });
+
+  it("refreshes the list once when the queue drains, not per file", async () => {
+    setSender(() => ({ xhr: { abort: vi.fn() } as unknown as XMLHttpRequest, done: Promise.resolve() }));
+    const { client } = setup();
+    await waitFor(() => expect(screen.getByRole("button", { name: "New" })).toBeEnabled());
+    const refresh = vi.spyOn(client, "invalidateQueries");
+    const before = refresh.mock.calls.length;
+    await act(async () => uploads.add(["a", "b", "c"].map((n) => new File(["x"], n)), 1, "Work"));
+    await waitFor(() => expect(screen.getByRole("region", { name: "Uploads" })).toHaveTextContent("All uploads done"));
+    // One refresh per file-list query key, once, not once per file.
+    const per = refresh.mock.calls.length - before;
+    expect(per).toBeGreaterThan(0);
+    expect(per).toBeLessThanOrEqual(6);
+  });
+});
+
+describe("the real upload request", () => {
+  function fakeXhr(status: number, body: unknown) {
+    const sent: Record<string, string> = {};
+    class FakeXhr {
+      upload = {} as XMLHttpRequest["upload"];
+      status = status;
+      responseText = JSON.stringify(body);
+      onload: () => void = () => undefined;
+      onerror: () => void = () => undefined;
+      onabort: () => void = () => undefined;
+      open() {}
+      setRequestHeader(k: string, v: string) {
+        sent[k] = v;
+      }
+      send() {
+        queueMicrotask(() => this.onload());
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", FakeXhr);
+    return sent;
+  }
+  const job = () => ({ file: new File(["x"], "a.txt"), accountId: 1, folder: "", relative: "a.txt" });
+
+  it.each([
+    [409, "That name can't be used on Windows."],
+    [503, "Syncing is switched off."],
+    [507, "the server doesn't have enough free disk space for this file"],
+    [422, "Field required"],
+  ])("shows the server's message for %i", async (status, detail) => {
+    fakeXhr(status, { detail: status === 422 ? [{ msg: detail }] : detail });
+    await expect(sendFile(job(), () => undefined).done).rejects.toThrow(detail);
+  });
+
+  it("sends the CSRF header on a request that completes", async () => {
+    setCsrfToken("tok2");
+    const sent = fakeXhr(200, { path: "a.txt" });
+    await expect(sendFile(job(), () => undefined).done).resolves.toBe("a.txt");
+    expect(sent["X-CSRF-Token"]).toBe("tok2");
+  });
+
+  it("signals a lost session like the rest of the app", async () => {
+    const seen: unknown[] = [];
+    const on = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener(AUTH_EVENT, on);
+    fakeXhr(401, { detail: "session_expired" });
+    await expect(sendFile(job(), () => undefined).done).rejects.toThrow();
+    window.removeEventListener(AUTH_EVENT, on);
+    expect(seen).toEqual(["login"]);
   });
 });

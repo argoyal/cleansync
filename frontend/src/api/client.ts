@@ -39,7 +39,14 @@ function signal(kind: AuthSignal): void {
   window.dispatchEvent(new CustomEvent<AuthSignal>(AUTH_EVENT, { detail: kind }));
 }
 
-function detailOf(body: unknown, status: number): { detail: string; partial?: PartialResult } {
+/** A lost session or a forced password change sends people to the right page (also used by uploads). */
+export function reportAuthProblem(status: number, detail: string): void {
+  // Only a lost session sends people to the login page; a wrong current password is a 401 too.
+  if (status === 401 && (detail === "not_logged_in" || detail === "session_expired")) signal("login");
+  if (status === 403 && detail === "password_change_required") signal("change-password");
+}
+
+export function detailOf(body: unknown, status: number): { detail: string; partial?: PartialResult } {
   if (body && typeof body === "object" && "detail" in body) {
     const d = (body as { detail: unknown }).detail;
     if (typeof d === "string") return { detail: d };
@@ -85,9 +92,7 @@ export async function api<T>(
   }
   if (!res.ok) {
     const { detail, partial } = detailOf(body, res.status);
-    // Only a lost session sends people to the login page; a wrong current password is a 401 too.
-    if (res.status === 401 && (detail === "not_logged_in" || detail === "session_expired")) signal("login");
-    if (res.status === 403 && detail === "password_change_required") signal("change-password");
+    reportAuthProblem(res.status, detail);
     throw new ApiError(res.status, detail, partial);
   }
   if (!parsed) throw new ApiError(res.status, "Unexpected response from the server");

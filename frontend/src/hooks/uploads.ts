@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-import { csrfHeaders, query } from "../api/client";
+import { csrfHeaders, detailOf, query, reportAuthProblem } from "../api/client";
 
 export type Upload = {
   id: number;
@@ -21,6 +21,19 @@ let snapshot: Upload[] = [];
 const listeners = new Set<() => void>();
 let nextId = 1;
 let onFinished: () => void = () => undefined;
+const REFRESH_EVERY_MS = 5000;
+let lastRefresh = 0;
+let unrefreshed = false;
+
+/** Refresh the file list once when the queue drains, and now and then during a long batch. */
+function refreshList(drained: boolean) {
+  if (!unrefreshed) return;
+  if (drained || Date.now() - lastRefresh >= REFRESH_EVERY_MS) {
+    unrefreshed = false;
+    lastRefresh = Date.now();
+    onFinished();
+  }
+}
 
 function emit() {
   snapshot = jobs.map((j) => ({ ...j.upload }));
@@ -46,12 +59,14 @@ export function sendFile(
           return resolve();
         }
       }
-      let detail = `Upload failed (${xhr.status})`;
+      let body: unknown;
       try {
-        detail = JSON.parse(xhr.responseText).detail ?? detail;
+        body = JSON.parse(xhr.responseText);
       } catch {
-        // keep the generic text
+        body = undefined;
       }
+      const { detail } = detailOf(body, xhr.status);
+      reportAuthProblem(xhr.status, detail);
       reject(new Error(detail));
     };
     xhr.onerror = () => reject(new Error("The connection dropped"));
@@ -73,12 +88,20 @@ export function setSender(fn: typeof sendFile): void {
 function pump() {
   while (jobs.filter((j) => j.upload.state === "sending").length < PARALLEL) {
     const next = jobs.find((j) => j.upload.state === "waiting");
-    if (!next) return;
+    if (!next) break;
     next.upload.state = "sending";
-    const { xhr, done } = sender(next, (sent) => {
-      next.upload.sent = sent;
-      emit();
-    });
+    let started: ReturnType<typeof sendFile>;
+    try {
+      started = sender(next, (sent) => {
+        next.upload.sent = sent;
+        emit();
+      });
+    } catch (e) {
+      next.upload.state = "failed";
+      next.upload.error = e instanceof Error ? e.message : "The upload could not start";
+      continue;
+    }
+    const { xhr, done } = started;
     next.xhr = xhr;
     emit();
     done
@@ -89,7 +112,7 @@ function pump() {
         if (got && got !== sent) next.upload.savedAs = got;
         next.upload.state = "done";
         next.upload.sent = next.upload.size;
-        onFinished();
+        unrefreshed = true;
       })
       .catch((e: Error) => {
         if (next.upload.state === "cancelled") return;
@@ -99,13 +122,16 @@ function pump() {
       .finally(() => {
         emit();
         pump();
+        refreshList(!jobs.some((j) => j.upload.state === "waiting" || j.upload.state === "sending"));
       });
   }
+  emit();
 }
 
 export const uploads = {
   /** Files from a file picker; for a folder picker each file carries webkitRelativePath. */
   add(files: File[], accountId: number, folder: string) {
+    if (!jobs.some((j) => j.upload.state === "waiting" || j.upload.state === "sending")) lastRefresh = Date.now();
     for (const file of files) {
       const relative = file.webkitRelativePath || file.name;
       jobs.push({
@@ -121,11 +147,12 @@ export const uploads = {
   },
   cancel(id: number) {
     const job = jobs.find((j) => j.upload.id === id);
-    if (!job) return;
+    if (!job || (job.upload.state !== "waiting" && job.upload.state !== "sending")) return;
     job.upload.state = "cancelled";
     job.xhr?.abort();
     emit();
     pump();
+    refreshList(!jobs.some((j) => j.upload.state === "waiting" || j.upload.state === "sending"));
   },
   clearFinished() {
     jobs = jobs.filter((j) => j.upload.state === "waiting" || j.upload.state === "sending");
@@ -146,6 +173,8 @@ export const uploads = {
   get: () => snapshot,
   reset() {
     jobs = [];
+    unrefreshed = false;
+    lastRefresh = 0;
     emit();
   },
 };
