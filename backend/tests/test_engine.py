@@ -724,3 +724,122 @@ async def test_each_job_starts_a_fresh_log_file(sync_engine, make_account, make_
     job = sync_engine.start_job(db, pair, "DRY_RUN", "MANUAL")
     assert job.id == 1
     assert open(job.log_path).read() == ""
+
+
+# ---- residual fixes: an override never outlives the blocked plan it approved --------------
+
+
+@pytest.fixture
+def initial(sync_engine):
+    from app.services.sync.initial import InitialSync
+
+    return InitialSync(sync_engine)
+
+
+def _plain_real_calls(fake_rclone):
+    """Real bisync runs, leaving out dry runs and safe-resync merges."""
+    return [c for c in _real_calls(fake_rclone) if "--resync" not in c]
+
+
+async def _block_then_approve(sync_engine, fake_rclone, db, pair, n=5):
+    from app.services.sync.filters import refresh_pair_filters
+
+    refresh_pair_filters(db, sync_engine.layout, pair)  # filters already in place: no resync
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(n)))
+    await sync_engine.run_pair(pair.id, "MANUAL")  # blocked: n planned
+    db.refresh(pair)
+    assert pair.attention_reason == "BLOCKED"
+    pair.override_next = True
+    db.commit()
+
+
+async def _expect_next_scheduled_plan_blocked(sync_engine, fake_rclone, db, pair, n=3):
+    fake_rclone.plan_file.write_text("{}")
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(n)))
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    assert _plain_real_calls(fake_rclone) == []
+    last = _jobs(db, pair.id)[-1]
+    assert (last.kind, last.state, last.override_used) == ("DRY_RUN", "BLOCKED", False)
+    db.refresh(pair)
+    assert pair.override_next is False
+
+
+async def test_override_does_not_survive_a_safe_resync_after_a_filter_change(
+    initial, sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=1)
+    await _block_then_approve(sync_engine, fake_rclone, db, pair)
+    pair.needs_resync = True  # the user changed the filters before the approved run started
+    db.commit()
+    fake_rclone.plan_file.write_text("{}")
+    fake_rclone.on("check", stdout=["= a"], exit=0)
+    await sync_engine.run_pair(pair.id, "MANUAL")  # runs a safe resync, never reaches the gate
+    db.refresh(pair)
+    assert (pair.status, pair.attention_reason, pair.override_next) == ("HEALTHY", None, False)
+    await _expect_next_scheduled_plan_blocked(sync_engine, fake_rclone, db, pair)
+
+
+@pytest.mark.parametrize("stranded_by", ["paused", "schedule_skip"])
+async def test_an_override_stranded_without_a_run_does_not_outlive_the_block(
+    initial, sync_engine, make_account, make_pair, fake_rclone, db, stranded_by
+):
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=1)
+    await _block_then_approve(sync_engine, fake_rclone, db, pair)
+    if stranded_by == "paused":
+        pair.paused, pair.status = True, "PAUSED"
+        db.commit()
+        assert await sync_engine.run_pair(pair.id, "MANUAL") is None
+        pair.paused, pair.status = False, "ATTENTION"  # resumed, still blocked
+        db.commit()
+    else:
+        assert await sync_engine.run_pair(pair.id, "SCHEDULE") is None
+    db.refresh(pair)
+    assert pair.override_next is True  # never ran: still waiting for the approved run
+    fake_rclone.plan_file.write_text("{}")
+    fake_rclone.on("check", stdout=["= a"], exit=0)
+    await initial.safe_resync(pair.id, "MANUAL")  # the user picks a safe resync instead
+    db.refresh(pair)
+    assert (pair.status, pair.attention_reason, pair.override_next) == ("HEALTHY", None, False)
+    await _expect_next_scheduled_plan_blocked(sync_engine, fake_rclone, db, pair)
+
+
+async def test_override_is_ignored_when_the_pair_is_not_blocked(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=1)
+    await _block_then_approve(sync_engine, fake_rclone, db, pair)
+    # Left behind by some path that cleared the block without going through set_status.
+    pair.status, pair.attention_reason = "HEALTHY", None
+    db.commit()
+    await _expect_next_scheduled_plan_blocked(sync_engine, fake_rclone, db, pair)
+
+
+async def test_override_only_approves_the_latest_dry_run(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    # Blocked at 20, then a 5-delete plan passes the dry run but the real run hits the cap:
+    # the pair is BLOCKED again with a newer, non-blocked dry run. The old 20 approves nothing.
+    acc, pair = _ready_pair(make_account, make_pair, direction="LOCAL_TO_REMOTE", max_deletions=10)
+    many = [skipped_delete(f"f{i}.txt") for i in range(20)]
+    fake_rclone.on("sync", match=["--dry-run"], stderr=splan(*many))
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    fake_rclone.plan_file.write_text("{}")
+    fake_rclone.on("sync", match=["--dry-run"], stderr=splan(*many[:5]))
+    fake_rclone.on(
+        "sync",
+        not_match=["--dry-run"],
+        exit=7,
+        stderr=[jl("--max-delete threshold reached", level="error")],
+    )
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    db.refresh(pair)
+    assert pair.attention_reason == "BLOCKED"
+    pair.override_next = True
+    db.commit()
+    real_before = len(_real_calls(fake_rclone, "sync"))
+    fake_rclone.plan_file.write_text("{}")
+    fake_rclone.on("sync", match=["--dry-run"], stderr=splan(*many[:15]))
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    assert len(_real_calls(fake_rclone, "sync")) == real_before
+    last = _jobs(db, pair.id)[-1]
+    assert (last.kind, last.state, last.planned_deletions) == ("DRY_RUN", "BLOCKED", 15)

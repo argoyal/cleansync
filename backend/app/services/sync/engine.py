@@ -131,6 +131,9 @@ class SyncEngine:
             status = PairStatus.PAUSED
         pair.status = status
         pair.attention_reason = reason
+        if reason != AttentionReason.BLOCKED:
+            # "Override once" approves one blocked plan; once the block is gone, so is it.
+            pair.override_next = False
         db.commit()
         self.bus.publish("pair", {"pair_id": pair.id, "status": status, "reason": reason})
 
@@ -306,18 +309,22 @@ class SyncEngine:
         )
 
     def _approved_deletions(self, db: Session, pair: SyncPair, current_job_id: int) -> int | None:
-        """planned_deletions of the plan the user last reviewed (latest BLOCKED dry run)."""
-        return db.scalar(
-            select(SyncJob.planned_deletions)
+        """planned_deletions of the plan the user reviewed: the pair's latest dry run before
+        this one, and only if that dry run is BLOCKED. Any newer dry run means the reviewed
+        plan is out of date, so nothing is approved."""
+        latest = db.execute(
+            select(SyncJob.state, SyncJob.planned_deletions)
             .where(
                 SyncJob.pair_id == pair.id,
                 SyncJob.kind == JobKind.DRY_RUN,
-                SyncJob.state == JobState.BLOCKED,
                 SyncJob.id != current_job_id,
             )
             .order_by(SyncJob.id.desc())
             .limit(1)
-        )
+        ).first()
+        if latest is None or latest.state != JobState.BLOCKED:
+            return None
+        return latest.planned_deletions
 
     def _block(
         self, db: Session, pair: SyncPair, account: Account, dry: SyncJob, planned, res, n: int
@@ -370,7 +377,10 @@ class SyncEngine:
     ) -> int:
         # An "override once" belongs to this attempt only, whatever its outcome: consume it
         # before rclone runs, so a failed attempt can't leave it for a later, unreviewed plan.
-        override_requested = bool(pair.override_next)
+        # It only counts while the pair is still blocked on the plan it approved.
+        override_requested = (
+            bool(pair.override_next) and pair.attention_reason == AttentionReason.BLOCKED
+        )
         pair.override_next = False
         self.set_status(db, pair, PairStatus.RUNNING)
         pair.last_sync_at = self.clock()
