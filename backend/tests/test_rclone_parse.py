@@ -213,3 +213,60 @@ def test_counters_read_conflict_variant_names_from_rename_lines():
 def test_delete_brakes_are_their_own_failure_class(msg):
     assert classify_failure(1, [msg]) == Failure.TOO_MANY_DELETES
     assert classify_failure(7, [msg]) == Failure.TOO_MANY_DELETES
+
+
+def test_same_change_on_both_sides_is_not_a_conflict():
+    # rclone warns "New or changed in both paths", then finds both sides equal (or a folder)
+    # and leaves them alone: e.g. after DriveSync renamed a folder on both sides.
+    c = Counters()
+    c.feed(parse_line(jl('Synching Path1 "/l/p1/" with Path2 "gd:Docs/"')))
+    for path in ("New", "New/a.txt", "both.txt"):
+        c.feed(parse_line(jl(f"- WARNING  New or changed in both paths       - {path}")))
+        if path == "New":
+            c.feed(
+                parse_line(
+                    jl(
+                        "This is a directory, not a file. Skipping equality check and will not "
+                        "rename: New"
+                    )
+                )
+            )
+        elif path == "New/a.txt":
+            c.feed(parse_line(jl("Files are equal! Skipping: New/a.txt")))
+    c.feed(
+        parse_line(jl("- Path1    Renaming Path1 copy                - /l/p1/both.conflict1.txt"))
+    )
+    c.feed(
+        parse_line(jl("- Path2    Renaming Path2 copy                - gd:Docs/both.conflict2.txt"))
+    )
+    assert c.conflict_paths == ["both.txt"]
+    assert c.conflict_variants == {"both.txt": ("both.conflict1.txt", "both.conflict2.txt")}
+
+
+def test_equal_files_with_different_times_are_not_a_conflict():
+    # Real rclone 1.7x sequence: the warning, then this INFO line with the path as its object
+    # (JSON log), then a queued copy that only updates the modification time.
+    c = Counters()
+    c.feed(parse_line(jl('Synching Path1 "/l/p1/" with Path2 "gd:Docs/"')))
+    c.feed(parse_line(jl("- WARNING  New or changed in both paths       - s.txt", level="notice")))
+    c.feed(
+        parse_line(
+            jl(
+                "Files are equal but will copy anyway to update modtime (will not rename)",
+                object="s.txt",
+                objectType="string",
+            )
+        )
+    )
+    c.feed(parse_line(jl("- Path1    Queue copy to Path2       - gd:Docs/s.txt", level="notice")))
+    assert c.conflict_paths == []
+    # Plain text form: "s.txt: Files are equal but will copy anyway ..."
+    c = Counters()
+    c.feed(parse_line(jl("- WARNING  New or changed in both paths       - t.txt")))
+    c.feed(
+        parse_line(
+            "2026/10/08 17:36:18 INFO  : t.txt: Files are equal but will copy anyway to update "
+            "modtime (will not rename)"
+        )
+    )
+    assert c.conflict_paths == []

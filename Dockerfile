@@ -1,4 +1,11 @@
 # syntax=docker/dockerfile:1.7
+FROM --platform=$BUILDPLATFORM node:22-slim AS web
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.12-slim AS rclone
 ARG TARGETARCH
 # keep in sync with the RCLONE_PIN_VERSION env in .github/workflows/ci.yml
@@ -23,21 +30,37 @@ WORKDIR /app/backend
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev
 
+# Blank .docx/.xlsx/.pptx for "+ New", made from scratch at build time (spec §16).
+FROM --platform=$BUILDPLATFORM python:3.12-slim AS templates
+RUN pip install --no-cache-dir uv==0.11.32
+WORKDIR /app/backend
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN uv sync --frozen --only-group templates
+COPY backend/scripts/make_office_templates.py scripts/
+RUN .venv/bin/python scripts/make_office_templates.py /out/office
+
 FROM python:3.12-slim
 LABEL org.opencontainers.image.source="https://github.com/argoyal/drivesync" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
       org.opencontainers.image.description="Two-way Google Drive sync for your own server"
 COPY --from=rclone /out/rclone /usr/local/bin/rclone
+# pdftoppm makes the PDF previews
+RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=deps /app/backend/.venv /app/backend/.venv
 COPY backend/ /app/backend/
 COPY docker/ /app/docker/
+COPY --from=templates /out/office /app/backend/app/resources/office
+COPY --from=web /app/frontend/dist /app/frontend/dist
 RUN chmod 755 /app/docker/print-rclone-pass && mkdir -p /drivesync && chown 1000:1000 /drivesync
 ENV PATH=/app/backend/.venv/bin:$PATH \
     HOME=/tmp \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    DRIVESYNC_ROOT=/drivesync
+    DRIVESYNC_ROOT=/drivesync \
+    FRONTEND_DIR=/app/frontend/dist \
+    OFFICE_TEMPLATES_DIR=/app/backend/app/resources/office
 USER 1000:1000
 WORKDIR /app/backend
 EXPOSE 8080

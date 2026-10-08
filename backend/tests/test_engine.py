@@ -574,10 +574,24 @@ async def test_bisync_dry_run_lets_drivesync_count_and_real_run_keeps_the_brake(
 ):
     # I1: bisync's own 50% brake must not stop the dry run, or nothing is stored to review.
     acc, pair = _ready_pair(make_account, make_pair)
-    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(2), deletes=2))
     await sync_engine.run_pair(pair.id, "SCHEDULE")
     calls = [c for c in fake_rclone.calls() if c[4] == "bisync"]
     assert [_max_delete(c) for c in calls] == ["100", "50"]
+
+
+async def test_a_plan_without_deletions_lifts_the_brake_for_the_real_run(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    # The dry run proved nothing is deleted (e.g. a big folder renamed on both sides, which
+    # bisync's brake counts as deletions), so the brake would only stop a harmless run.
+    acc, pair = _ready_pair(make_account, make_pair)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    calls = [c for c in fake_rclone.calls() if c[4] == "bisync"]
+    assert [_max_delete(c) for c in calls] == ["100", "100"]
+    db.refresh(pair)
+    assert pair.status == "HEALTHY"
 
 
 async def test_override_lifts_bisyncs_own_brake_for_that_run(

@@ -8,3 +8,15 @@
 - Local edits made while a sync is running are picked up by the next scheduled sync, because the file watcher ignores changes during a run.
 - On Windows-backed drives, names that differ only by letter case are treated as the same file, and change notifications may not arrive (the watcher shows "limited").
 - Characters that Windows does not allow in file names are still to be checked in end-to-end testing.
+- A two-way sync has no hard cap on the *number* of deletions between its dry run and its real run: bisync only offers a percentage brake (50%). Files deleted in the seconds between the check and the run are therefore not limited by the count you approved; they still go to Drive's trash, or to the local backup folder when backups are on.
+- The first time you browse a folder right after a sync, an item can still show its status from before the sync for a moment. It corrects itself within about a minute.
+- Folders are listed in one piece, not page by page. A folder with a huge number of items (tens of thousands) can be slow to open.
+- On disks that ignore letter case (Windows, some network shares), two names that differ only by case are shown as two items, even though the disk treats them as the same file.
+- Renaming or moving an item in DriveSync is done on Drive too, as a real rename, so the Drive file keeps its ID and sharing.
+- Changing only the letter case of a folder name (for example `photos` to `Photos`) can fail on case-insensitive storage. If it does, nothing changes and you see an error.
+- A development build that was made without the Office template generator cannot create blank Word, Excel or PowerPoint files (the container image always includes them).
+- Google Docs, Sheets and Slides are recognised in the Drive listing by their Google file type or their missing size; this is still to be confirmed against a real Drive.
+
+## After an upgrade that changes the sync rules
+
+When a new version changes the list of files that never sync (for example, the version that started skipping `.drivesync-upload-*` upload copies), every two-way folder runs one automatic safe resync on its next sync. A safe resync merges both sides and never deletes. The catch: a file you deleted on one side, whose deletion had not synced yet, comes back on that side instead of being deleted on the other. Delete it again after the resync.

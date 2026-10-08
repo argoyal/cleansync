@@ -15,6 +15,15 @@ _BOTH = re.compile(r"^-\s+WARNING\s+New or changed in both paths\s+-\s+(.+)$")
 _PREFIX = re.compile(r"^\{path[12]/\}")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _RENAME = re.compile(r"^-\s+(Path1|Path2)\s+Renaming (?:Path1|Path2) copy\s+-\s+(.+)$")
+# After "New or changed in both paths", rclone may find both sides equal (or a folder) and leave
+# them alone: then it is not a conflict (e.g. a folder DriveSync renamed on both sides).
+_SETTLED = re.compile(
+    r"^(?:Files are equal! Skipping|This is a directory, not a file\. Skipping equality check "
+    r"and will not rename): (.+)$"
+)
+# Same content, different modification times: rclone only copies the time across. rclone puts
+# the path in the JSON "object" field, or before a colon in plain text.
+_EQUAL_TIMES = "Files are equal but will copy anyway to update modtime (will not rename)"
 _SUCCESS = "Bisync successful"
 _ROOTS = re.compile(r'^Synching Path1 "(.*)" with Path2 "(.*)"$')
 _CHECK = re.compile(r"^([=+\-*!]) (.+)$")
@@ -148,6 +157,21 @@ class Counters:
         if b:
             self._last_conflict = self._rel(b.group(1))
             self.conflict_paths.append(self._last_conflict)
+            return
+        settled = _SETTLED.match(text)
+        equal_times = settled is None and text.endswith(_EQUAL_TIMES)
+        if settled or equal_times:
+            if settled:
+                path = self._rel(settled.group(1))
+            elif text != _EQUAL_TIMES:  # plain text: "<path>: Files are equal but ..."
+                path = self._rel(
+                    text[: -len(_EQUAL_TIMES)].rstrip().removesuffix(":").split(": ")[-1]
+                )
+            else:
+                path = self._rel(line.path_obj or self._last_conflict or "")
+            self.conflict_paths = [p for p in self.conflict_paths if p != path]
+            if self._last_conflict == path:
+                self._last_conflict = None
             return
         rn = _RENAME.match(text)
         if rn and self._last_conflict is not None:

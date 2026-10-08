@@ -536,3 +536,378 @@ async def test_real_engine_brake_then_override_once(tmp_path):
         assert (remote_dir / "f7.txt").exists()
     finally:
         eng.dispose()
+
+
+async def test_real_lsjson_metadata_listing_parses_into_a_catalog(tmp_path):
+    import json as _json
+
+    from app.services.catalog.model import parse_item
+
+    root = tmp_path / "drive"
+    (root / "Work" / "Deep").mkdir(parents=True)
+    (root / "Work" / "a b [1].txt").write_text("hello")
+    (root / "top.pdf").write_bytes(b"%PDF-1.4")
+    conf = tmp_path / "rclone.conf"
+    conf.write_text(f"[al]\ntype = alias\nremote = {root}\n")
+    env = c.RcloneEnv(
+        binary="rclone", config_file=conf, cache_dir=tmp_path / "cache", config_pass=""
+    )
+    lines: list[str] = []
+    res = await run_rclone(
+        c.lsjson_args(
+            env, "al:", recursive=True, fast_list=True, metadata=True, show_all_gdocs=True
+        ),
+        env.env(),
+        log_path=None,
+        on_stdout=lines.append,
+    )
+    assert res.exit_code == 0, res.error_tail
+    # One item per line: the catalog parses the listing line by line, never as one blob.
+    items = [_json.loads(ln.rstrip(",")) for ln in lines if ln.startswith("{")]
+    entries = {e.path: e for e in map(parse_item, items)}
+    assert set(entries) == {"Work", "Work/Deep", "Work/a b [1].txt", "top.pdf"}
+    assert entries["Work"].is_dir and entries["Work/a b [1].txt"].size == 5
+    assert entries["top.pdf"].mime == "application/pdf"
+    assert all(e.id is None and e.native is None for e in entries.values())
+
+    out: list[str] = []
+    res = await run_rclone(
+        c.lsjson_args(env, "al:Work", stat=True), env.env(), log_path=None, on_stdout=out.append
+    )
+    assert res.exit_code == 0 and _json.loads("\n".join(out))["IsDir"] is True
+
+    res = await run_rclone(c.lsjson_args(env, "al:Nope", recursive=True), env.env(), log_path=None)
+    assert res.exit_code != 0
+    assert any("directory not found" in ln.lower() for ln in res.error_tail), res.error_tail
+
+
+async def test_real_config_dump_reads_an_encrypted_config(tmp_path):
+    import json as _json
+
+    passcmd = tmp_path / "pass.sh"
+    passcmd.write_text('#!/bin/sh\nprintf "%s" "$RCLONE_CONFIG_PASS"\n')
+    passcmd.chmod(0o755)
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=tmp_path / "rclone.conf",
+        cache_dir=tmp_path / "cache",
+        config_pass="a-long-test-passphrase",
+        password_command=str(passcmd),
+    )
+    res = await run_rclone(
+        c.config_create_alias_args(env, "local_1", tmp_path), env.env(), log_path=None
+    )
+    assert res.exit_code == 0, res.error_tail
+    from app.services.rclone.setup import ensure_config_encrypted
+
+    assert await ensure_config_encrypted(env) is True
+    out: list[str] = []
+    res = await run_rclone(c.config_dump_args(env), env.env(), log_path=None, on_stdout=out.append)
+    assert res.exit_code == 0, res.error_tail
+    assert _json.loads("\n".join(out))["local_1"]["type"] == "alias"
+
+
+@pytest.mark.parametrize("others", [6, 0])  # 0: the renamed folder is most of the pair
+async def test_real_rename_on_both_sides_leaves_the_next_sync_nothing_to_do(tmp_path, others):
+    """A folder renamed through DriveSync moves on Drive and on disk; bisync then sees the same
+    change on both sides: nothing to copy, nothing to delete, no conflicts. Even when the folder
+    holds more than half the pair's files (bisync's 50% brake counts the old paths)."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, Conflict, SyncJob, SyncPair
+    from app.paths import Layout
+    from app.services.catalog.service import CatalogService
+    from app.services.events.bus import EventBus
+    from app.services.files import ops
+    from app.services.files.moves import DriveMover, prepare_moves, run_moves
+    from app.services.files.scope import load_scope
+    from app.services.queue import SyncQueue
+    from app.services.sync.engine import SyncEngine
+    from app.services.sync.filters import refresh_pair_filters
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            raise AssertionError("no login problem expected")
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text("[gd_alice]\ntype = local\n")  # stands in for Google Drive
+    remote_dir = tmp_path / "drive"
+    bus = EventBus()
+    engine = SyncEngine(
+        layout=layout, session_factory=sf, bus=bus, rclone_env=env, accounts=_Accounts()
+    )
+    catalog = CatalogService(
+        layout=layout, session_factory=sf, bus=bus, rclone_env=env, accounts=_Accounts()
+    )
+    drive = DriveMover(layout=layout, env=env, accounts=_Accounts())
+
+    async def never(*a):
+        raise AssertionError("the queue must not run anything here")
+
+    queue = SyncQueue(never)
+    try:
+        with sf() as db:
+            acc = Account(email="alice@example.com", remote_name="gd_alice")
+            db.add(acc)
+            db.commit()
+            pair = SyncPair(
+                account_id=acc.id,
+                name="Docs",
+                local_subpath="",
+                remote_path=str(remote_dir),
+                initialized=True,
+                status="HEALTHY",
+                max_deletions=10,
+            )
+            db.add(pair)
+            db.commit()
+            refresh_pair_filters(db, layout, pair)
+            local_dir = layout.account_dir(acc.email)
+            for d in (local_dir, remote_dir):
+                (d / "Old" / "sub").mkdir(parents=True, exist_ok=True)
+                (d / "RCLONE_TEST").write_text("x")
+                (d / "Old" / "a.txt").write_text("alpha")
+                (d / "Old" / "sub" / "b.txt").write_text("beta")
+                for i in range(others):
+                    (d / f"f{i}.txt").write_text("x")
+            seed = await run_rclone(
+                c.bisync_args(env, engine.bisync_target(acc, pair), dry_run=False, resync=True),
+                env.env(),
+                log_path=None,
+            )
+            assert seed.exit_code == 0, seed.error_tail
+            pair_id = pair.id
+        listing = await catalog.refresh(pair_id)
+        assert listing is not None and "Old/sub/b.txt" in listing.files
+
+        with sf() as db:
+            scope = load_scope(db, layout, acc.id)
+        step = ops.plan_rename(scope, "Old", "New")
+        plan = await prepare_moves(scope, [step], queue=queue, catalog=catalog, drive=drive)
+        assert plan.drive_pairs == {pair_id}
+        assert await run_moves(plan, queue=queue, drive=drive) == ["New"]
+        for side in (local_dir, remote_dir):
+            assert not (side / "Old").exists()
+            assert (side / "New" / "a.txt").read_text() == "alpha"
+            assert (side / "New" / "sub" / "b.txt").read_text() == "beta"
+
+        # A plain dry run (bisync's 50% brake lifted, as the engine's dry run does).
+        with sf() as db:
+            target = engine.bisync_target(db.get(Account, acc.id), db.get(SyncPair, pair_id))
+        counters = Counters()
+        res = await run_rclone(
+            c.bisync_args(env, target, dry_run=True, max_delete_percent=100),
+            env.env(),
+            log_path=tmp_path / "dry.log",
+            on_line=counters.feed,
+        )
+        assert res.exit_code == 0, res.error_tail
+        assert counters.bisync_successful, (tmp_path / "dry.log").read_text()
+        assert counters.planned == [], counters.planned
+        assert (counters.deletions, counters.uploaded, counters.downloaded) == (0, 0, 0)
+        assert int(counters.final_stats["deletes"]) == 0
+        assert int(counters.final_stats["transfers"]) == 0
+
+        # The real cycle through the engine: dry run, gate, real run.
+        await engine.run_pair(pair_id, "APP")
+        with sf() as db:
+            jobs = db.scalars(select(SyncJob).order_by(SyncJob.id)).all()
+            assert [(j.kind, j.state) for j in jobs] == [
+                ("DRY_RUN", "SUCCESS"),
+                ("BISYNC", "SUCCESS"),
+            ], [j.error_message for j in jobs]
+            assert jobs[0].planned_deletions == 0
+            assert jobs[1].files_changed == 0 and jobs[1].conflicts == 0
+            assert db.scalars(select(Conflict)).all() == []
+            assert db.get(SyncPair, pair_id).status == "HEALTHY"
+        for side in (local_dir, remote_dir):
+            assert sorted(p.name for p in side.iterdir() if p.name != "RCLONE_TEST") == [
+                "New",
+                *[f"f{i}.txt" for i in range(others)],
+            ]
+    finally:
+        await queue.stop()
+        eng.dispose()
+
+
+async def test_real_stat_of_a_missing_path_reaches_the_error_tail(tmp_path):
+    conf = tmp_path / "rclone.conf"
+    conf.write_text("[gd_t]\ntype = local\n")
+    env = c.RcloneEnv(
+        binary="rclone", config_file=conf, cache_dir=tmp_path / "cache", config_pass=""
+    )
+    res = await run_rclone(
+        c.lsjson_args(env, f"gd_t:{tmp_path}/nope", stat=True), env.env(), log_path=None
+    )
+    assert res.exit_code == 3
+    assert any("not found" in ln.lower() for ln in res.error_tail), res.error_tail
+
+
+async def test_real_catalog_of_a_missing_drive_folder_is_an_empty_listing(tmp_path):
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, SyncPair
+    from app.paths import Layout
+    from app.services.catalog.service import CatalogService
+    from app.services.events.bus import EventBus
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            raise AssertionError("no login problem expected")
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text("[gd_alice]\ntype = local\n")
+    try:
+        with sf() as db:
+            acc = Account(email="alice@example.com", remote_name="gd_alice")
+            db.add(acc)
+            db.commit()
+            pair = SyncPair(
+                account_id=acc.id,
+                name="Docs",
+                local_subpath="",
+                remote_path=str(tmp_path / "not-created-yet"),
+            )
+            db.add(pair)
+            db.commit()
+            pair_id = pair.id
+        catalog = CatalogService(
+            layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=_Accounts()
+        )
+        listing = await catalog.refresh(pair_id)
+        assert listing is not None, catalog.last_error
+        assert listing.files == {}
+    finally:
+        eng.dispose()
+
+
+async def test_real_same_new_file_on_both_sides_with_different_times_is_no_conflict(tmp_path):
+    from sqlalchemy import select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, Conflict, SyncJob, SyncPair
+    from app.paths import Layout
+    from app.services.events.bus import EventBus
+    from app.services.sync.engine import SyncEngine
+    from app.services.sync.filters import refresh_pair_filters
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            raise AssertionError("no login problem expected")
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text("[gd_alice]\ntype = local\n")
+    remote_dir = tmp_path / "drive"
+    engine = SyncEngine(
+        layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=_Accounts()
+    )
+    try:
+        with sf() as db:
+            acc = Account(email="alice@example.com", remote_name="gd_alice")
+            db.add(acc)
+            db.commit()
+            pair = SyncPair(
+                account_id=acc.id,
+                name="Docs",
+                local_subpath="",
+                remote_path=str(remote_dir),
+                initialized=True,
+                status="HEALTHY",
+            )
+            db.add(pair)
+            db.commit()
+            refresh_pair_filters(db, layout, pair)
+            local_dir = layout.account_dir(acc.email)
+            for d in (local_dir, remote_dir):
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "RCLONE_TEST").write_text("x")
+                (d / "keep.txt").write_text("k")
+            seed = await run_rclone(
+                c.bisync_args(env, engine.bisync_target(acc, pair), dry_run=False, resync=True),
+                env.env(),
+                log_path=None,
+            )
+            assert seed.exit_code == 0, seed.error_tail
+            pair_id = pair.id
+        (local_dir / "s.txt").write_text("same")
+        (remote_dir / "s.txt").write_text("same")
+        os.utime(remote_dir / "s.txt", (1_600_000_000, 1_600_000_000))
+        await engine.run_pair(pair_id, "MANUAL")
+        with sf() as db:
+            jobs = db.scalars(select(SyncJob).order_by(SyncJob.id)).all()
+            assert [(j.kind, j.state) for j in jobs] == [
+                ("DRY_RUN", "SUCCESS"),
+                ("BISYNC", "SUCCESS"),
+            ], [j.error_message for j in jobs]
+            assert jobs[1].conflicts == 0
+            assert db.scalars(select(Conflict)).all() == []
+            assert db.get(SyncPair, pair_id).status == "HEALTHY"
+        assert sorted(p.name for p in local_dir.iterdir()) == ["RCLONE_TEST", "keep.txt", "s.txt"]
+    finally:
+        eng.dispose()
+
+
+async def test_real_upload_temp_files_never_sync_at_any_depth(tmp_path):
+    from app.services.sync.filters import render_filters
+
+    env, t, p1, p2 = _setup(tmp_path)
+    t.filters_file.write_text(render_filters([]))
+    res, _ = await _run(env, t, tmp_path, dry_run=False, resync=True)
+    assert res.exit_code == 0, res.error_tail
+    (p1 / "sub" / "deeper").mkdir(parents=True)
+    for rel in (
+        ".drivesync-upload-root",
+        "sub/.drivesync-upload-a",
+        "sub/deeper/.drivesync-upload-b",
+    ):
+        (p1 / rel).write_text("half")
+    (p1 / "sub" / "deeper" / "real.txt").write_text("r")
+    res, _ = await _run(env, t, tmp_path, dry_run=False)
+    assert res.exit_code == 0, res.error_tail
+    assert (p2 / "sub" / "deeper" / "real.txt").exists()
+    assert not list(p2.rglob(".drivesync-upload-*"))
+    # One-way sync (remote to local) must not delete them either: they are excluded.
+    res = await run_rclone(
+        c.sync_args(env, str(p2), str(p1), t.filters_file, None, dry_run=False),
+        env.env(),
+        log_path=None,
+    )
+    assert res.exit_code == 0, res.error_tail
+    assert len(list(p1.rglob(".drivesync-upload-*"))) == 3

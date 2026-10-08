@@ -41,7 +41,8 @@ _WAITING_FOR_USER = {
     AttentionReason.ACCESS_CHECK,
     AttentionReason.NEEDS_RESYNC,
 }
-_AUTOMATIC_TRIGGERS = {Trigger.SCHEDULE, Trigger.WATCHER, Trigger.RECOVERY}
+# File actions in the UI count as automatic: like a local edit, they wait for the user's review.
+_AUTOMATIC_TRIGGERS = {Trigger.SCHEDULE, Trigger.WATCHER, Trigger.RECOVERY, Trigger.APP}
 
 
 def backoff(fail_count: int) -> timedelta:
@@ -493,7 +494,10 @@ class SyncEngine:
                     },
                 )
 
-        # bisync's 50% brake stays on for the real run, unless the user approved this plan.
+        # bisync's 50% brake stays on for the real run, unless the user approved this plan or
+        # the dry run planned no deletions at all. The brake counts every path missing since
+        # the last run, so a folder renamed on both sides trips it although nothing is deleted.
+        lift_brake = override_used or (bidirectional and deletions == 0)
         res = await self.run(
             self._args(
                 account,
@@ -501,7 +505,7 @@ class SyncEngine:
                 dry_run=False,
                 bidirectional=bidirectional,
                 max_delete=cap,
-                max_delete_percent=100 if override_used else 50,
+                max_delete_percent=100 if lift_brake else 50,
             ),
             job,
             on_real,

@@ -69,6 +69,7 @@ async def oauth_callback(request: Request, state: str = "", code: str = "", erro
         logger.exception("connecting a Google account failed")
         msg = "Connecting the Google account failed; see the logs."
         return RedirectResponse(f"/?oauth_error={quote(msg)}", 303)
+    request.app.state.catalog.refresh_account(acc.id)  # a reconnect may have missed changes
     return RedirectResponse(f"/?connected={acc.id}", 303)
 
 

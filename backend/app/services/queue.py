@@ -1,7 +1,8 @@
 import asyncio
+import contextlib
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 
 log = logging.getLogger(__name__)
 Handler = Callable[[int, str, str], Awaitable[object]]
@@ -54,6 +55,23 @@ class SyncQueue:
     def is_busy(self, pair_id: int) -> bool:
         """Running, or queued and waiting for a free slot."""
         return pair_id in self._running or pair_id in self._pending
+
+    @contextlib.contextmanager
+    def hold(self, pair_id: int) -> Iterator[None]:
+        """Keep jobs for an idle pair from starting while the app changes its files.
+
+        The pair counts as running meanwhile: a sync asked for during the hold runs right after.
+        """
+        if self.is_busy(pair_id):
+            raise RuntimeError(f"pair {pair_id} is busy")
+        self._running.add(pair_id)
+        try:
+            yield
+        finally:
+            self._running.discard(pair_id)
+            again = self._dirty.pop(pair_id, None)
+            if again is not None:
+                self.request(pair_id, again)
 
     def finished_at(self, pair_id: int) -> float | None:
         return self._finished.get(pair_id)

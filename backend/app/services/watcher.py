@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 _IGNORED_NAMES = {"RCLONE_TEST"}
 _IGNORED_DIRS = {".google-exports"}
 _IGNORED_SUFFIXES = (".partial",)
+_IGNORED_PREFIXES = (".drivesync-upload-",)  # an upload being placed; excluded from syncs
 _AFTER_JOB_QUIET_S = 2.0  # rclone's late filesystem events after a job ends
 
 
@@ -29,6 +30,7 @@ def should_ignore(rel_path: str) -> bool:
         p.name in _IGNORED_NAMES
         or any(part in _IGNORED_DIRS for part in p.parts)
         or p.name.endswith(_IGNORED_SUFFIXES)
+        or p.name.startswith(_IGNORED_PREFIXES)  # case-sensitive, like the sync filter
     )
 
 

@@ -6,3 +6,7 @@ backend/.venv
 frontend/node_modules
 drivesync-data
 .env
+frontend/dist
+frontend/test-results
+frontend/playwright-report
+backend/app/resources/office

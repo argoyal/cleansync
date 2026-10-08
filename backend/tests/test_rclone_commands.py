@@ -407,3 +407,71 @@ def test_one_way_sync_max_delete_is_emitted():
 def test_one_way_sync_max_delete_rejects_bad_values(bad):
     with pytest.raises(ValueError):
         c.sync_args(ENV, "/l", "gd_1:Docs", T.filters_file, None, dry_run=False, max_delete=bad)
+
+
+# --- Plan 2: catalog listing, saved-login dump, local pretend accounts ------------------
+
+
+def test_lsjson_catalog_flags():
+    args = c.lsjson_args(
+        ENV, "gd_1:Docs", recursive=True, fast_list=True, metadata=True, show_all_gdocs=True
+    )
+    assert args[5:7] == ["lsjson", "gd_1:Docs"]
+    for flag in ("--recursive", "--fast-list", "--metadata", "--drive-show-all-gdocs"):
+        assert flag in args
+    assert "--stat" not in args
+    assert args[-1] == NO_PROMPT
+
+
+def test_lsjson_stat_flag():
+    args = c.lsjson_args(ENV, "gd_1:Docs", stat=True)
+    assert "--stat" in args and "--metadata" not in args
+
+
+def test_config_dump_args():
+    assert c.config_dump_args(ENV)[5:] == ["config", "dump", NO_PROMPT]
+
+
+def test_config_create_alias_args():
+    args = c.config_create_alias_args(ENV, "local_1", Path("/srv/pretend drive"))
+    assert args[5:] == [
+        "config",
+        "create",
+        "local_1",
+        "alias",
+        "remote",
+        "/srv/pretend drive",
+        "--non-interactive",
+        NO_PROMPT,
+    ]
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: c.config_create_alias_args(ENV, "bad name", Path("/x")),
+        lambda: c.config_create_alias_args(ENV, "ok", Path("relative/dir")),
+    ],
+)
+def test_config_create_alias_args_guards(call):
+    with pytest.raises(UnsafeArgument):
+        call()
+
+
+def test_moveto_carries_trash_flag_and_needs_remote_targets():
+    args = c.moveto_args(ENV, "gd_1:Docs/Old", "gd_1:Docs/New")
+    assert args[5:8] == ["moveto", "gd_1:Docs/Old", "gd_1:Docs/New"]
+    assert args[5] in c.DELETE_CAPABLE
+    assert c.TRASH_FLAG in args
+    assert args[-1] == NO_PROMPT and args.count(NO_PROMPT) == 1
+    for bad in ("/local/path", "-rf", "Docs/Old"):
+        with pytest.raises(c.UnsafeArgument):
+            c.moveto_args(ENV, bad, "gd_1:x")
+        with pytest.raises(c.UnsafeArgument):
+            c.moveto_args(ENV, "gd_1:x", bad)
+
+
+@pytest.mark.parametrize("bad", ["/srv/a\nroot = x", "/srv/a\rb", "/srv/a\x00b", "/srv/a\tb"])
+def test_config_create_alias_rejects_control_characters_in_the_folder(bad):
+    with pytest.raises(UnsafeArgument):
+        c.config_create_alias_args(ENV, "local_1", Path(bad))

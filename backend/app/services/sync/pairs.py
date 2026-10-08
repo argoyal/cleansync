@@ -13,6 +13,7 @@ from app.models.enums import PairStatus
 from app.paths import Layout
 from app.schemas.pairs import PairCreate, PairOut, PairUpdate
 from app.services.app_settings import get_setting
+from app.services.catalog.store import CatalogStore
 from app.services.rclone.commands import remote_target
 from app.services.sync.filters import refresh_pair_filters
 
@@ -118,9 +119,10 @@ def update_pair(db: Session, pair: SyncPair, data: PairUpdate) -> SyncPair:
     return pair
 
 
-def delete_pair(db: Session, layout: Layout, pair: SyncPair) -> None:
+def delete_pair(db: Session, layout: Layout, store: CatalogStore, pair: SyncPair) -> None:
     shutil.rmtree(layout.pair_workdir(pair.id), ignore_errors=True)
     layout.pair_filters(pair.id).unlink(missing_ok=True)
+    store.delete(pair.id)
     # First-sync previews: "<id>.json" and "<id>-*.txt" (not "<id>0.json" of another pair).
     for f in (
         layout.previews_dir / f"{pair.id}.json",

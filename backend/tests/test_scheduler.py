@@ -134,3 +134,10 @@ async def test_daily_maintenance_prunes_logs_and_isolates_failures(
     monkeypatch.setattr("app.services.scheduler.prune_backups", boom)
     _sched(session_factory, layout, StubQueue()).daily_maintenance()
     assert not old.exists()  # log pruning still ran after the backup prune failed
+
+
+async def test_daily_maintenance_trims_the_preview_cache(session_factory, layout, monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.services.scheduler.prune_thumbs", lambda d: calls.append(d) or 0)
+    _sched(session_factory, layout, StubQueue()).daily_maintenance()
+    assert calls == [layout.thumbs_dir]

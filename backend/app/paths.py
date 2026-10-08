@@ -65,6 +65,11 @@ class Layout:
         return self.data / "thumbs"
 
     @property
+    def uploads_dir(self) -> Path:
+        # Same disk as storage/, so a finished upload is moved into place, not copied.
+        return self.data / "uploads"
+
+    @property
     def logs_dir(self) -> Path:
         return self.data / "logs"
 
@@ -91,6 +96,7 @@ class Layout:
             self.previews_dir,
             self.backups_dir,
             self.thumbs_dir,
+            self.uploads_dir,
             self.jobs_log_dir,
             self.storage,
         ):

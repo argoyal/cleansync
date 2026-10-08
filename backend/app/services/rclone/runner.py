@@ -12,6 +12,7 @@ from app.services.rclone.parse import LogLine, parse_line
 
 _ERROR_LEVELS = {"error", "critical"}
 _PLAIN_ERROR = re.compile(r"error|fatal|critical", re.IGNORECASE)
+_PLAIN_FAILED = re.compile(r"\bNOTICE\s*: Failed to ")
 _MAX_LINE = 64 * 1024
 _TRUNCATED = "...[truncated]"
 _STOP_GRACE_S = 30
@@ -88,7 +89,11 @@ def _is_error(line: LogLine) -> bool:
         return True
     if line.raw.lstrip().startswith("{"):
         return line.level == "notice" and line.msg.startswith("Failed to ")
-    return bool(_PLAIN_ERROR.search(line.msg)) or line.msg.startswith("Error:")
+    return (
+        bool(_PLAIN_ERROR.search(line.msg))
+        or line.msg.startswith("Error:")
+        or bool(_PLAIN_FAILED.search(line.msg))
+    )
 
 
 async def run_rclone(

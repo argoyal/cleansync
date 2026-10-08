@@ -176,3 +176,11 @@ async def test_runner_passes_unmasked_text_for_counting_but_masks_the_log(fake_r
     assert counters.planned == [("remote", "delete", "token=abc.txt")]
     assert "token=abc.txt" not in log.read_text()
     assert "token=abc.txt" not in seen[0].msg
+
+
+async def test_runner_plain_text_failed_to_notice_reaches_error_tail(fake_rclone):
+    # Commands run without --use-json-log (e.g. lsjson) print this as plain text.
+    line = "2026/10/08 17:22:48 NOTICE: Failed to lsjson: directory not found"
+    fake_rclone.on("lsjson", stderr=[line, "2026/10/08 17:22:48 NOTICE: all good"], exit=3)
+    result = await run_rclone([fake_rclone.binary, "lsjson"], fake_rclone.env(), log_path=None)
+    assert result.error_tail == [line]

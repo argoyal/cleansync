@@ -8,3 +8,6 @@ dist/
 .env
 /data/
 /drivesync-data/
+backend/app/resources/office/
+frontend/test-results/
+frontend/playwright-report/

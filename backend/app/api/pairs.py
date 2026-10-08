@@ -45,6 +45,8 @@ def create(
     except PairError as e:
         raise HTTPException(422, str(e)) from e
     _reload_schedule(request)
+    # List the Drive side now, so the browser can show what the first sync will bring.
+    request.app.state.catalog.request_refresh(pair.id)
     return to_out(request.app.state.layout, db.get(Account, pair.account_id), pair)
 
 
@@ -84,7 +86,11 @@ def delete(
     queue = getattr(request.app.state, "queue", None)
     if queue is not None and queue.is_busy(pair_id):
         raise HTTPException(409, "this pair is syncing or queued; try again when it finishes")
-    delete_pair(db, request.app.state.layout, pair)
+    delete_pair(db, request.app.state.layout, request.app.state.catalog_store, pair)
+    request.app.state.catalog.forget(pair_id)
+    indexes = getattr(request.app.state, "indexes", None)
+    if indexes is not None:
+        indexes.forget(pair_id)
     _reload_schedule(request)
     return Response(status_code=204)
 
@@ -179,11 +185,19 @@ async def override_once(
     pair.override_next = True
     db.commit()
     try:
-        return _queue(request, pair_id, "MANUAL")
+        out = _queue(request, pair_id, "MANUAL")
     except HTTPException:
         pair.override_next = False  # nothing was queued: don't leave an approval lying around
         db.commit()
         raise
+    if out["result"] != "queued":
+        # "dirty" / "already_queued": the approval would wait for a later run nobody reviewed.
+        pair.override_next = False
+        db.commit()
+        raise HTTPException(
+            409, "a sync is already waiting for this pair; try again when it has run"
+        )
+    return out
 
 
 @router.post("/{pair_id}/preview", status_code=202)

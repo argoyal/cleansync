@@ -1,0 +1,291 @@
+"""Per-item sync status for the browser (spec §8).
+
+A PairIndex is built from one walk of the pair's folder compared with its Drive listing.
+It is cached per pair and rebuilt when the listing changes, after a job or file action,
+or after a minute (to notice edits made outside DriveSync). Open conflicts and the
+"running" state are laid over it at request time, so they are always current.
+"""
+
+import asyncio
+import logging
+import os
+import time
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models import Account, Conflict, SyncPair
+from app.models.enums import ConflictState
+from app.paths import Layout
+from app.services.catalog.model import Catalog, CatalogEntry
+from app.services.files.scope import is_hidden, is_hidden_name, parent_rel
+from app.services.sync.pairs import pair_local_dir
+
+log = logging.getLogger(__name__)
+
+# Least to most serious. "native", "offloaded" and "unsynced" never make a folder worse.
+STATUS_ORDER = ("synced", "unknown", "upload", "download", "syncing", "conflict")
+SEVERITY = {s: i for i, s in enumerate(STATUS_ORDER)}
+MTIME_SLACK_S = 2.0
+
+
+def worst(statuses: Iterable[str]) -> str:
+    best = "synced"
+    for s in statuses:
+        if SEVERITY.get(s, -1) > SEVERITY[best]:
+            best = s
+    return best
+
+
+@dataclass(frozen=True, slots=True)
+class LocalEntry:
+    size: int
+    mtime: float
+    is_dir: bool
+
+
+@dataclass
+class PairIndex:
+    pair_id: int
+    catalog_key: datetime | None  # refreshed_at of the listing it was compared with
+    local: dict[str, LocalEntry]
+    status: dict[str, str]  # only items that are not "synced"; pair paths
+    dir_worst: dict[str, str]  # folder -> most serious status inside it ("" = pair folder)
+    total_bytes: int
+
+    @property
+    def has_catalog(self) -> bool:
+        return self.catalog_key is not None
+
+    def item_status(self, rel: str) -> str:
+        return self.status.get(rel, "synced" if self.has_catalog else "unknown")
+
+    def folder_status(self, rel: str) -> str:
+        return worst((self.item_status(rel), self.dir_worst.get(rel, "synced")))
+
+    def overall(self) -> str:
+        return self.folder_status("")
+
+
+def _walk(local_dir: Path) -> dict[str, LocalEntry]:
+    found: dict[str, LocalEntry] = {}
+    stack = [("", local_dir)]
+    while stack:
+        rel_dir, folder = stack.pop()
+        try:
+            it = os.scandir(folder)
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                if is_hidden_name(e.name):
+                    continue
+                try:
+                    if e.is_symlink():  # rclone skips links; so does DriveSync
+                        continue
+                    st = e.stat(follow_symlinks=False)
+                    is_dir = e.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                rel = f"{rel_dir}/{e.name}" if rel_dir else e.name
+                found[rel] = LocalEntry(0 if is_dir else st.st_size, st.st_mtime, is_dir)
+                if is_dir:
+                    stack.append((rel, Path(e.path)))
+    return found
+
+
+def compare(lf: LocalEntry, ent: CatalogEntry | None) -> str:
+    """Where one local item stands against its Drive entry: synced, upload or download."""
+    if ent is None or ent.is_dir != lf.is_dir:
+        return "upload"
+    if lf.is_dir:
+        return "synced"
+    remote_ts = ent.mtime.timestamp() if ent.mtime else None
+    close = remote_ts is not None and abs(remote_ts - lf.mtime) <= MTIME_SLACK_S
+    if ent.size == lf.size and close:
+        return "synced"
+    newer_here = remote_ts is None or lf.mtime > remote_ts
+    return "upload" if newer_here else "download"
+
+
+def build_index(pair_id: int, local_dir: Path, catalog: Catalog | None) -> PairIndex:
+    local = _walk(local_dir)
+    status: dict[str, str] = {}
+    if catalog is not None:
+        files = catalog.files
+        for rel, lf in local.items():
+            st = compare(lf, files.get(rel))
+            if st != "synced":
+                status[rel] = st
+        for rel in files:
+            if rel not in local and not is_hidden(rel):
+                status[rel] = "download"
+    dir_worst: dict[str, str] = {}
+    for rel, st in status.items():
+        parent = parent_rel(rel)
+        while True:
+            current = dir_worst.get(parent)
+            # Every folder above an entry was raised when that entry was added, so stop here.
+            if current is not None and SEVERITY[current] >= SEVERITY[st]:
+                break
+            dir_worst[parent] = st
+            if parent == "":
+                break
+            parent = parent_rel(parent)
+    total = sum(e.size for e in local.values())
+    key = catalog.refreshed_at if catalog is not None else None
+    return PairIndex(pair_id, key, local, status, dir_worst, total)
+
+
+def has_pending_changes(
+    item: Path, prel: str, catalog: Catalog | None, conflicts: set[str] = frozenset()
+) -> bool:
+    """Whether anything at or under one pair path waits to sync: an upload, a download or an
+    open conflict. Walks the disk now (not the cached index), so it is never out of date."""
+
+    def under(rel: str) -> bool:
+        return rel == prel or rel.startswith(prel + "/")
+
+    if any(under(c) for c in conflicts):
+        return True
+    if catalog is None or prel not in catalog.files:
+        # Nothing to compare with: the listing is older than this item (Drive confirmed it
+        # has it), so its statuses are unknown rather than pending.
+        return False
+    st = item.lstat()
+    is_dir = item.is_dir() and not item.is_symlink()
+    local = {prel: LocalEntry(0 if is_dir else st.st_size, st.st_mtime, is_dir)}
+    if is_dir:
+        local.update({f"{prel}/{rel}": e for rel, e in _walk(item).items()})
+    files = catalog.files
+    if any(compare(lf, files.get(rel)) != "synced" for rel, lf in local.items()):
+        return True
+    return any(under(rel) and rel not in local and not is_hidden(rel) for rel in files)
+
+
+@dataclass
+class Overlay:
+    """Live facts laid over a cached index: open conflicts and a running sync."""
+
+    conflicts: set[str] = field(default_factory=set)
+    conflict_dirs: set[str] = field(default_factory=set)
+    running: bool = False
+
+    def apply(self, rel: str, status: str, is_dir: bool) -> str:
+        if rel in self.conflicts or (is_dir and rel in self.conflict_dirs):
+            return "conflict"
+        if self.running and status in ("upload", "download"):
+            return "syncing"
+        return status
+
+
+def load_overlay(db: Session, pair_id: int, running: bool) -> Overlay:
+    rows = db.execute(
+        select(Conflict.path, Conflict.local_variant, Conflict.remote_variant).where(
+            Conflict.pair_id == pair_id, Conflict.state == ConflictState.OPEN
+        )
+    ).all()
+    paths = {p for row in rows for p in row if p}
+    dirs: set[str] = set()
+    for p in paths:
+        parent = parent_rel(p)
+        while parent not in dirs:
+            dirs.add(parent)
+            if parent == "":
+                break
+            parent = parent_rel(parent)
+    return Overlay(conflicts=paths, conflict_dirs=dirs, running=running)
+
+
+class StatusIndexes:
+    """Cached per-pair indexes. A stale index is still served while one background
+    rebuild per pair runs (walking a slow drive can take a while); a request only
+    waits when the pair has no index at all."""
+
+    def __init__(
+        self,
+        *,
+        layout: Layout,
+        catalog,
+        ttl_s: float = 60.0,
+        clock=time.monotonic,
+    ) -> None:
+        self.layout = layout
+        self.catalog = catalog
+        self.ttl_s = ttl_s
+        self.clock = clock
+        self._cache: dict[int, tuple[float, int, PairIndex]] = {}
+        self._gen: dict[int, int] = {}
+        self._building: dict[int, asyncio.Task] = {}
+        self._served_stale: set[int] = set()
+        # Called with the pair when a rebuild finishes that a request had to answer around with
+        # the old statuses, so open tabs can ask again.
+        self.on_refreshed: Callable[[SyncPair], None] | None = None
+
+    def invalidate(self, pair_id: int | None = None) -> None:
+        """Mark cached statuses stale (one pair, or all). Safe from any thread."""
+        ids = [pair_id] if pair_id is not None else list(set(self._gen) | set(self._cache))
+        for pid in ids:
+            self._gen[pid] = self._gen.get(pid, 0) + 1
+
+    def forget(self, pair_id: int) -> None:
+        """Drop everything about a pair that no longer exists."""
+        self._gen.pop(pair_id, None)
+        self._cache.pop(pair_id, None)
+        self._served_stale.discard(pair_id)
+
+    def _fresh(self, pair_id: int, catalog_key: datetime | None) -> PairIndex | None:
+        hit = self._cache.get(pair_id)
+        if hit is None:
+            return None
+        built_at, gen, index = hit
+        if gen != self._gen.get(pair_id, 0) or index.catalog_key != catalog_key:
+            return None
+        if self.clock() - built_at > self.ttl_s:
+            return None
+        return index
+
+    async def _rebuild(self, pair: SyncPair, local_dir: Path, catalog: Catalog | None) -> None:
+        pid = pair.id
+        gen = self._gen.get(pid, 0)
+        try:
+            index = await asyncio.to_thread(build_index, pid, local_dir, catalog)
+            self._cache[pid] = (self.clock(), gen, index)
+        finally:
+            self._building.pop(pid, None)
+        if pid in self._served_stale:
+            self._served_stale.discard(pid)
+            if self.on_refreshed is not None:
+                try:
+                    self.on_refreshed(pair)
+                except Exception:
+                    log.exception("telling open tabs about new statuses failed")
+
+    async def get(self, pair: SyncPair, account: Account) -> tuple[PairIndex, Catalog | None]:
+        """The pair's index and the Drive listing it should be shown with."""
+        catalog = await asyncio.to_thread(self.catalog.load, pair.id)
+        key = catalog.refreshed_at if catalog is not None else None
+        index = self._fresh(pair.id, key)
+        if index is not None:
+            return index, catalog
+        task = self._building.get(pair.id)
+        if task is None:
+            local_dir = pair_local_dir(self.layout, account, pair)
+            task = asyncio.ensure_future(self._rebuild(pair, local_dir, catalog))
+            self._building[pair.id] = task
+            task.add_done_callback(_log_failure)
+        stale = self._cache.get(pair.id)
+        if stale is not None:
+            self._served_stale.add(pair.id)
+            return stale[2], catalog
+        await asyncio.shield(task)
+        return self._cache[pair.id][2], catalog
+
+
+def _log_failure(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        log.warning("status index rebuild failed: %r", task.exception())

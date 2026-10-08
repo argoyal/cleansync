@@ -2,6 +2,7 @@ import json
 import logging
 import secrets
 from collections.abc import Callable
+from pathlib import Path
 
 import httpx
 from sqlalchemy import select
@@ -24,6 +25,7 @@ from app.services.events.bus import EventBus, record_event
 from app.services.rclone.commands import (
     RcloneEnv,
     about_args,
+    config_create_alias_args,
     config_create_args,
     config_delete_args,
 )
@@ -36,6 +38,23 @@ logger = logging.getLogger(__name__)
 
 class AccountError(Exception):
     pass
+
+
+def check_local_folder(layout: Layout, env: RcloneEnv, folder: Path) -> Path:
+    """Resolve a pretend-account folder and refuse anything that touches the app's own folders.
+
+    Nothing is created. Also runs the rclone argument guard (control characters etc.).
+    """
+    folder = folder.resolve()
+    own = [layout.root.resolve(), (layout.root / "app").resolve(), layout.data.resolve()]
+    own.append(layout.storage.resolve())
+    for p in own:
+        if folder == p or (folder.is_relative_to(p) and p != layout.root.resolve()):
+            raise AccountError("That folder is inside the app's own folders; pick another one.")
+        if p.is_relative_to(folder):
+            raise AccountError("That folder contains the app's own folders; pick another one.")
+    config_create_alias_args(env, "local_check", folder)  # raises UnsafeArgument if unsafe
+    return folder
 
 
 class AccountService:
@@ -51,6 +70,7 @@ class AccountService:
         runner=run_rclone,
         clock=utcnow,
         on_change: Callable[[], None] | None = None,
+        on_login_changed: Callable[[str], None] | None = None,
     ) -> None:
         self.settings = settings
         self.layout = layout
@@ -63,6 +83,12 @@ class AccountService:
         self.states = OAuthStates()
         # Called after an account's status changes, so the scheduler and watcher follow it.
         self.on_change = on_change
+        # Called with the remote name whenever its saved login is replaced, removed or flagged.
+        self.on_login_changed = on_login_changed
+
+    def _login_changed(self, remote_name: str) -> None:
+        if self.on_login_changed is not None:
+            self.on_login_changed(remote_name)
 
     def _changed(self) -> None:
         if self.on_change is None:
@@ -164,6 +190,7 @@ class AccountService:
             if acc is None:
                 acc = Account(email=email, remote_name=name)
                 db.add(acc)
+            self._login_changed(name)
             acc.status = AccountStatus.CONNECTED
             acc.quota_total = about["quota_total"]
             acc.quota_used = about["quota_used"]
@@ -183,6 +210,55 @@ class AccountService:
             self._changed()
             return acc
 
+    async def add_local_account(self, email: str, folder: Path) -> Account:
+        """Dev/CI only: a pretend Google account whose Drive is a local folder (alias remote).
+
+        Refused unless DRIVESYNC_ALLOW_LOCAL_ACCOUNTS is on. `folder` must come from the
+        operator's command line or app-owned paths, never from a web request.
+        """
+        if not self.settings.allow_local_accounts:
+            raise AccountError(
+                "Local pretend accounts are for development only. "
+                "Set DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 to allow one."
+            )
+        email = email_dirname(email)
+        folder = check_local_folder(self.layout, self.env, folder)
+        with self.session_factory() as db:
+            if db.scalar(select(Account).where(Account.email == email)) is not None:
+                raise AccountError(f"{email} is already connected")
+            name = f"local_{secrets.token_hex(3)}"
+            while db.scalar(select(Account).where(Account.remote_name == name)) is not None:
+                name = f"local_{secrets.token_hex(3)}"
+            folder.mkdir(parents=True, exist_ok=True)
+            res = await self._rclone(config_create_alias_args(self.env, name, folder))
+            if res.exit_code != 0:
+                raise AccountError("rclone could not save the remote: " + "; ".join(res.error_tail))
+            await ensure_config_encrypted(self.env, self.runner)
+            acc = Account(
+                email=email,
+                remote_name=name,
+                status=AccountStatus.CONNECTED,
+                connected_at=self.clock(),
+                last_checked_at=self.clock(),
+            )
+            db.add(acc)
+            self._login_changed(name)
+            db.commit()
+            self.layout.account_dir(email).mkdir(parents=True, exist_ok=True)
+            logger.warning(
+                "added PRETEND local account %s (folder %s); development only", email, folder
+            )
+            record_event(
+                db,
+                self.bus,
+                kind="account_connected",
+                message=f"Added pretend local account {email}",
+                account_id=acc.id,
+            )
+            self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
+            self._changed()
+            return acc
+
     async def disconnect(self, account_id: int) -> Account:
         with self.session_factory() as db:
             acc = db.get(Account, account_id)
@@ -191,6 +267,7 @@ class AccountService:
             res = await self._rclone(config_delete_args(self.env, acc.remote_name))
             if res.exit_code != 0:
                 raise AccountError("Could not remove the saved Google login; see the logs.")
+            self._login_changed(acc.remote_name)
             acc.status = AccountStatus.DISCONNECTED
             db.commit()
             record_event(
@@ -207,7 +284,10 @@ class AccountService:
     async def mark_needs_reauth(self, account_id: int, reason: str) -> None:
         with self.session_factory() as db:
             acc = db.get(Account, account_id)
-            if acc is None or acc.status == AccountStatus.NEEDS_REAUTH:
+            if acc is None:
+                return
+            self._login_changed(acc.remote_name)
+            if acc.status == AccountStatus.NEEDS_REAUTH:
                 return
             acc.status = AccountStatus.NEEDS_REAUTH
             db.commit()

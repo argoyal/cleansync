@@ -1,3 +1,4 @@
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,9 @@ _ENV_VARS = (
     "APP_NAME",
     "LOG_LEVEL",
     "TZ",
+    "FRONTEND_DIR",
+    "OFFICE_TEMPLATES_DIR",
+    "DRIVESYNC_ALLOW_LOCAL_ACCOUNTS",
 )
 
 
@@ -29,8 +33,17 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture(scope="session")
+def office_templates(tmp_path_factory) -> Path:
+    from scripts.make_office_templates import make
+
+    out = tmp_path_factory.mktemp("office")
+    make(out)
+    return out
+
+
 @pytest.fixture
-def settings(tmp_path: Path, fake_rclone) -> Settings:
+def settings(tmp_path: Path, fake_rclone, office_templates) -> Settings:
     passcmd = tmp_path / "print-pass"
     passcmd.write_text('#!/bin/sh\nprintf "%s" "$RCLONE_CONFIG_PASS"\n')
     passcmd.chmod(0o755)
@@ -43,6 +56,8 @@ def settings(tmp_path: Path, fake_rclone) -> Settings:
         google_client_secret="csecret",
         rclone_binary=fake_rclone.binary,
         rclone_password_command=str(passcmd),
+        office_templates_dir=office_templates,
+        frontend_dir=tmp_path / "no-frontend",  # a locally built web app must not change API tests
     )
 
 
@@ -162,3 +177,71 @@ def sync_engine(layout, session_factory, settings, fake_rclone) -> SyncEngine:
     return SyncEngine(
         layout=layout, session_factory=session_factory, bus=bus, rclone_env=env, accounts=accounts
     )
+
+
+from app.services.catalog.service import CatalogService
+
+
+@pytest.fixture
+def catalog_service(sync_engine) -> CatalogService:
+    return CatalogService(
+        layout=sync_engine.layout,
+        session_factory=sync_engine.session_factory,
+        bus=sync_engine.bus,
+        rclone_env=sync_engine.env,
+        accounts=sync_engine.accounts,
+    )
+
+
+class StubQueue:
+    """Stands in for SyncQueue in API tests: records requests, never runs anything."""
+
+    def __init__(self):
+        self.requests: list[tuple[int, str, str]] = []
+        self.answer = "queued"
+        self.running: set[int] = set()
+        self.held: list[int] = []
+        self.disabled_reason: str | None = None
+
+    def request(self, pair_id, trigger, action="sync"):
+        self.requests.append((pair_id, trigger, action))
+        return self.answer
+
+    def is_running(self, pair_id):
+        return pair_id in self.running
+
+    def is_busy(self, pair_id):
+        return pair_id in self.running
+
+    def add_finish_listener(self, listener):
+        pass
+
+    @contextlib.contextmanager
+    def hold(self, pair_id):
+        self.held.append(pair_id)
+        yield
+
+    async def stop(self):
+        pass
+
+
+@pytest.fixture
+def stub_queue(app) -> StubQueue:
+    q = StubQueue()
+    app.state.queue = q
+    # API tests check the follow-up sync right away; tests/test_file_changes.py covers the
+    # debounce that real runs use.
+    app.state.file_changes.sync_delay_s = 0
+    return q
+
+
+@pytest.fixture
+def save_catalog(app):
+    """Write a pair's Drive listing as if rclone had just listed it."""
+    from app.core.clock import utcnow
+    from app.services.catalog.model import Catalog, CatalogEntry
+
+    def _save(pair_id: int, entries: list[CatalogEntry], root_id: str | None = "root"):
+        app.state.catalog.store.save(Catalog.build(pair_id, utcnow(), root_id, entries))
+
+    return _save

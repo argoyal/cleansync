@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* DriveSync's own palette: cool porcelain neutrals, one plum accent that never collides
+   with the status colours (green healthy, yellow attention, red error, blue running,
+   gray paused). Values are "R G B" so Tailwind can add opacity. */
+:root {
+  color-scheme: light;
+  --bg: 245 246 248;
+  --surface: 255 255 255;
+  --sunken: 236 238 242;
+  --ink: 29 34 48;
+  --ink-2: 90 97 114;
+  --line: 220 223 230;
+  --accent: 91 63 166;
+  --accent-ink: 255 255 255;
+  --accent-soft: 238 233 248;
+  --ok: 30 127 79;
+  --warn: 156 100 0;
+  --warn-soft: 255 243 209;
+  --err: 194 54 47;
+  --err-soft: 253 232 230;
+  --run: 37 99 201;
+  --run-soft: 228 238 252;
+  --paused: 122 128 144;
+  --shadow: 20 24 36;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: 20 22 28;
+    --surface: 27 30 38;
+    --sunken: 34 38 49;
+    --ink: 231 233 239;
+    --ink-2: 160 166 181;
+    --line: 46 51 64;
+    --accent: 180 156 255;
+    --accent-ink: 24 18 42;
+    --accent-soft: 44 37 70;
+    --ok: 76 195 138;
+    --warn: 242 193 78;
+    --warn-soft: 58 47 20;
+    --err: 255 107 97;
+    --err-soft: 66 30 30;
+    --run: 110 168 255;
+    --run-soft: 27 42 70;
+    --paused: 140 147 163;
+    --shadow: 0 0 0;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg font-sans text-body text-ink antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 2px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes ds-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: ds-spin 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.api.pairs import load_pair
 from app.auth.deps import AuthContext, get_db, require_user
-from app.models import Account, PlannedChange, SyncJob, SyncPair
-from app.models.enums import AccountStatus, JobKind, JobState, PairStatus
+from app.models import Account, Conflict, PlannedChange, SyncJob, SyncPair
+from app.models.enums import AccountStatus, ConflictState, JobKind, JobState, PairStatus
 from app.schemas.jobs import JobOut
 from app.services.logs import tail_lines
 
@@ -27,6 +27,7 @@ def status(ctx: AuthContext = Depends(require_user), db: Session = Depends(get_d
         "attention": count(SyncPair, SyncPair.status.in_([PairStatus.ATTENTION, PairStatus.ERROR])),
         "running": count(SyncPair, SyncPair.status == PairStatus.RUNNING),
         "paused": count(SyncPair, SyncPair.status == PairStatus.PAUSED),
+        "conflicts": count(Conflict, Conflict.state == ConflictState.OPEN),
     }
 
 
