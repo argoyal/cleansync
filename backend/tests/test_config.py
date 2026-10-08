@@ -89,3 +89,18 @@ def test_no_temp_files_left_behind(tmp_path):
     f = tmp_path / "session_secret"
     resolve_secret("", f)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["session_secret"]
+
+
+def test_secret_created_when_hard_links_are_unsupported(tmp_path, monkeypatch):
+    import errno
+
+    def no_links(src, dst, *args, **kwargs):
+        raise OSError(errno.EPERM, "hard links not supported here")
+
+    monkeypatch.setattr(os, "link", no_links)
+    f = tmp_path / "secrets" / "session_secret"
+    first = resolve_secret("", f)
+    assert len(first) >= 48
+    assert resolve_secret("", f) == first
+    assert stat.S_IMODE(os.stat(f).st_mode) == 0o600
+    assert sorted(p.name for p in f.parent.iterdir()) == ["session_secret"]

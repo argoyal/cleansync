@@ -36,6 +36,14 @@ def resolve_secret(value: str, file: Path) -> str:
                 os.link(tmp, file)
             except FileExistsError:
                 continue  # another process published first; read theirs
+            except OSError:
+                # Some filesystems (Windows drive mounts, some Docker binds) refuse hard links.
+                # Another process may have published meanwhile: prefer its value.
+                if file.exists():
+                    saved = _read_saved(file)
+                    if saved:
+                        return saved
+                os.replace(tmp, file)
             return generated
         finally:
             tmp.unlink(missing_ok=True)
