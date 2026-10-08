@@ -110,7 +110,9 @@ export function Menu({
   y,
   onClose,
   label,
+  opener = null,
 }: {
+  opener?: HTMLElement | null;
   items: MenuItem[];
   x: number;
   y: number;
@@ -129,10 +131,9 @@ export function Menu({
       y: Math.max(8, Math.min(y, window.innerHeight - r.height - 8)),
     });
   }, [x, y]);
-  // Focus goes back to whatever had it before the menu opened (the ⋮ button or the tile).
-  const opener = useRef<HTMLElement | null>(null);
-  if (opener.current === null && typeof document !== "undefined") opener.current = document.activeElement as HTMLElement | null;
-  useDismiss(ref, onClose, true, opener as React.RefObject<HTMLElement>);
+  // Focus goes back to what opened the menu (the ⋮ button or the tile), captured each time it opens.
+  const returnTo = useRef<HTMLElement | null>(opener ?? (document.activeElement as HTMLElement | null));
+  useDismiss(ref, onClose, true, returnTo as React.RefObject<HTMLElement>);
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>("[role=menuitem]:not([disabled])")?.focus();
   }, []);

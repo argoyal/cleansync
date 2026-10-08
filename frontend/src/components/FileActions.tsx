@@ -34,10 +34,14 @@ export function useFileActions(accountId: number | null) {
   const toast = useToast();
   const [dialog, setDialog] = useState<DialogState>(null);
 
+  const qc = useQueryClient();
   const syncNow = (pairId: number | null) => {
     if (pairId === null) return;
     api(`/api/sync-pairs/${pairId}/sync`, { method: "POST" })
-      .then(() => toast("Sync started."))
+      .then(() => {
+        toast("Sync started.");
+        ["pairs", "status"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+      })
       .catch((e) => toast(friendlyError(e), { tone: "error" }));
   };
 
@@ -52,7 +56,10 @@ export function useFileActions(accountId: number | null) {
 
   const openInGoogle = (item: FileItem) => {
     if (item.google_url) {
-      window.open(item.google_url, "_blank", "noopener,noreferrer");
+      // Only ever open web links we expect; anything else is ignored.
+      if (item.google_url.startsWith("https://")) window.open(item.google_url, "_blank", "noopener,noreferrer");
+    } else if (item.native) {
+      toast("This Google file has no link yet. Try again after the next sync.");
     } else {
       toast("It opens in Google after the next sync.", {
         action: item.pair_id !== null ? { label: "Sync now", run: () => syncNow(item.pair_id) } : undefined,

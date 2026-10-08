@@ -106,13 +106,15 @@ export const usePreview = (pairId: number | null, waiting: boolean) =>
     retry: false,
     refetchInterval: (q) => (waiting && !q.state.data ? 2000 : false),
   });
-export const useRemoteFolders = (accountId: number, path: string) =>
+export const useRemoteFolders = (accountId: number, path: string, enabled = true) =>
   useQuery({
+    enabled,
     queryKey: ["remote-folders", accountId, path],
     queryFn: () => api<FolderEntry[]>(`/api/remote-browse${query({ account_id: accountId, path })}`),
   });
-export const useLocalFolders = (accountId: number, path: string) =>
+export const useLocalFolders = (accountId: number, path: string, enabled = true) =>
   useQuery({
+    enabled,
     queryKey: ["local-folders", accountId, path],
     queryFn: () => api<FolderEntry[]>(`/api/local-browse${query({ account_id: accountId, path })}`),
   });

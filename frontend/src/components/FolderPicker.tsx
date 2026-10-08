@@ -16,8 +16,8 @@ export function FolderPicker({
   onChange: (path: string) => void;
   rootLabel: string;
 }) {
-  const local = useLocalFolders(accountId, value);
-  const remote = useRemoteFolders(accountId, value);
+  const local = useLocalFolders(accountId, value, source === "local");
+  const remote = useRemoteFolders(accountId, value, source === "remote");
   const q = source === "local" ? local : remote;
   const crumbs = value ? value.split("/") : [];
   return (

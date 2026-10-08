@@ -204,3 +204,138 @@ describe("Menus and errors", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Names cannot contain a colon.");
   });
 });
+
+describe("Accessible tiles and keyboard", () => {
+  it("keeps the more button next to the tile, not inside it, and describes the status", async () => {
+    setup();
+    const tile = await screen.findByRole("button", { name: "incoming.pdf" });
+    const more = screen.getByRole("button", { name: "More actions for incoming.pdf" });
+    expect(tile).not.toContainElement(more);
+    expect(tile).toHaveAccessibleDescription("Waiting to download");
+  });
+
+  it("has one tab stop for the grid and moves with the arrow keys", async () => {
+    setup();
+    await screen.findByRole("button", { name: "Work" });
+    const stops = screen.getAllByRole("button").filter((b) => b.getAttribute("tabindex") === "0" && b.hasAttribute("data-nav"));
+    expect(stops).toHaveLength(1);
+    screen.getByRole("button", { name: "Work" }).focus();
+    expect(screen.getByRole("button", { name: "Work" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(screen.getByRole("button", { name: "photo.jpg" })).toHaveFocus();
+    await userEvent.keyboard("{End}");
+    expect(screen.getByRole("button", { name: "notes.conflict1.txt" })).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    expect(screen.getByRole("button", { name: "Work" })).toHaveFocus();
+  });
+
+  it("Enter opens, Space selects, and Delete asks to delete the focused item", async () => {
+    const { open } = setup();
+    await screen.findByRole("button", { name: "Work" });
+    screen.getByRole("button", { name: "Work" }).focus();
+    await userEvent.keyboard("{ArrowRight}");
+    await userEvent.keyboard(" ");
+    expect(screen.getByRole("button", { name: "photo.jpg" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.keyboard("{Enter}");
+    expect(open).toHaveBeenLastCalledWith("/files/1/photo.jpg", "_blank", "noopener,noreferrer");
+    await userEvent.keyboard("{Delete}");
+    expect(screen.getByRole("dialog", { name: 'Delete "photo.jpg"?' })).toBeInTheDocument();
+  });
+
+  it("Shift+F10 opens the item menu", async () => {
+    setup();
+    await screen.findByRole("button", { name: "Work" });
+    screen.getByRole("button", { name: "Work" }).focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    expect(screen.getByRole("menu", { name: "Actions for Work" })).toBeInTheDocument();
+  });
+
+  it("ignores the Delete key in a text box and in a menu", async () => {
+    setup();
+    await userEvent.click(await screen.findByText("photo.jpg"));
+    const box = document.createElement("input");
+    document.body.appendChild(box);
+    box.focus();
+    await userEvent.keyboard("{Delete}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    box.remove();
+    await userEvent.click(screen.getByRole("button", { name: "More actions for photo.jpg" }));
+    await userEvent.keyboard("{Delete}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("list rows have the same name, status and keyboard behaviour", async () => {
+    setup();
+    await userEvent.click(await screen.findByRole("button", { name: "Show as list" }));
+    const row = screen.getByRole("button", { name: "incoming.pdf" });
+    expect(row).toHaveAccessibleDescription("Waiting to download");
+    expect(row).not.toContainElement(screen.getByRole("button", { name: "More actions for incoming.pdf" }));
+    expect(screen.getByRole("table").querySelector("[aria-selected]")).toBeNull();
+  });
+});
+
+describe("Safer opening and URLs", () => {
+  it("opens only https Google links", async () => {
+    const { open } = setup("/drive", {
+      "GET /api/browse": browse("", [item({ name: "Bad.xlsx", path: "Bad.xlsx", google_url: "javascript:alert(1)" })]),
+    });
+    await userEvent.dblClick(await screen.findByText("Bad.xlsx"));
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("explains a Google file that has no link yet", async () => {
+    setup("/drive", { "GET /api/browse": browse("", [item({ name: "Doc", path: "Doc.docx", local: false, native: "document", status: "native" })]) });
+    await userEvent.dblClick(await screen.findByText("Doc"));
+    expect(screen.getByText("This Google file has no link yet. Try again after the next sync.")).toBeInTheDocument();
+  });
+
+  it("encodes #, ?, % and unicode in file and thumbnail addresses", async () => {
+    const name = "a#b?c%d é.jpg";
+    const { open } = setup("/drive", { "GET /api/browse": browse("", [item({ name, path: name, mime: "image/jpeg", thumb: true })]) });
+    const tile = await screen.findByRole("button", { name });
+    expect(tile.querySelector("img")?.getAttribute("src")).toBe("/api/thumbs/1/a%23b%3Fc%25d%20%C3%A9.jpg?v=2026-10-08T07%3A00%3A00Z");
+    await userEvent.dblClick(tile);
+    expect(open).toHaveBeenLastCalledWith("/files/1/a%23b%3Fc%25d%20%C3%A9.jpg", "_blank", "noopener,noreferrer");
+  });
+
+  it("Sync now also refreshes pairs and status", async () => {
+    mockApi({
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/browse": browse("", [item({ name: "New.docx", path: "New.docx", status: "upload", remote: false })]),
+      "POST /api/sync-pairs/7/sync": { result: "queued" },
+    });
+    vi.stubGlobal("open", vi.fn());
+    const { client } = renderApp(<DrivePage />, { route: "/drive", path: "/drive", withAccount: true });
+    const spy = vi.spyOn(client, "invalidateQueries");
+    await userEvent.dblClick(await screen.findByText("New.docx"));
+    await userEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    await waitFor(() => {
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey: string[] }).queryKey[0]);
+      expect(keys).toEqual(expect.arrayContaining(["pairs", "status"]));
+    });
+  });
+});
+
+describe("FolderPicker", () => {
+  it("asks only for the selected source", async () => {
+    const api = mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/local-browse": [], "GET /api/remote-browse": [] });
+    const { FolderPicker } = await import("../components/FolderPicker");
+    const { unmount } = renderApp(<FolderPicker source="local" accountId={1} value="" onChange={() => undefined} rootLabel="Here" />);
+    await screen.findByText("No folders inside. This one is selected.");
+    expect(api.calls.some((c) => c.path === "/api/remote-browse")).toBe(false);
+    unmount();
+    api.calls.length = 0;
+    renderApp(<FolderPicker source="remote" accountId={1} value="" onChange={() => undefined} rootLabel="There" />);
+    await screen.findByText("No folders inside. This one is selected.");
+    expect(api.calls.some((c) => c.path === "/api/local-browse")).toBe(false);
+  });
+});
+
+describe("Loading states", () => {
+  it("says Loading on Starred and Search", async () => {
+    const { StarredPage } = await import("./ListPages");
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/starred": () => new Promise(() => undefined) });
+    renderApp(<StarredPage />, { withAccount: true });
+    expect(await screen.findByText("Loading")).toBeInTheDocument();
+  });
+});

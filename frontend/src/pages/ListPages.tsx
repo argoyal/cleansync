@@ -63,6 +63,8 @@ export function HomePage() {
       </section>
       <section>
         <h2 className="mb-3 text-section font-semibold">Recently changed</h2>
+        {recent.isPending && <p className="text-ink-2">Loading</p>}
+        {recent.isError && <Notice tone="err">{friendlyError(recent.error)}</Notice>}
         {recent.data && recent.data.length === 0 && <p className="text-ink-2">No files yet.</p>}
         {recent.data && recent.data.length > 0 && <FileArea items={recent.data} view="grid" />}
       </section>
@@ -89,6 +91,7 @@ export function StarredPage() {
   const [view, setView] = useViewMode();
   return (
     <Page title="Starred" toggle={<ViewToggle view={view} onChange={setView} />}>
+      {starred.isPending && <p className="text-ink-2">Loading</p>}
       {starred.isError && <Notice tone="err">{friendlyError(starred.error)}</Notice>}
       {starred.data?.length === 0 && (
         <Empty icon="star" title="No starred files">
@@ -108,6 +111,7 @@ export function SearchPage() {
   return (
     <Page title={`Results for "${q}"`}>
       {q.trim().length < 2 && <p className="text-ink-2">Type at least 2 characters.</p>}
+      {results.isFetching && q.trim().length >= 2 && !results.data && <p className="text-ink-2">Loading</p>}
       {results.isError && <Notice tone="err">{friendlyError(results.error)}</Notice>}
       {results.data?.length === 0 && <Empty icon="search" title="No files match" />}
       {results.data && results.data.length > 0 && <FileArea items={results.data} view="list" showFolder />}

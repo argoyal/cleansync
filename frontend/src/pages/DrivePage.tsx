@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { friendlyError } from "../api/client";
@@ -47,18 +47,23 @@ export function FileArea({ items, showFolder = false, view }: { items: FileItem[
   const { accountId } = useCurrentAccount();
   const actions = useFileActions(accountId);
   const [selected, setSelected] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ item: FileItem; x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ item: FileItem; x: number; y: number; opener: HTMLElement | null } | null>(null);
+  // The Delete key listener is added once and reads the latest values from here.
+  const latest = useRef({ items, selected, askDelete: actions.askDelete });
+  latest.current = { items, selected, askDelete: actions.askDelete };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Delete" || !selected) return;
+      if (e.key !== "Delete") return;
       const target = e.target as HTMLElement;
-      if (target.closest("input, textarea, [role=dialog]")) return;
-      const item = items.find((i) => i.path === selected);
-      if (item?.local) actions.askDelete([item]);
+      if (target.closest("input, textarea, select, [contenteditable], [role=dialog], [role=menu]")) return;
+      const { items, selected, askDelete } = latest.current;
+      const path = target.closest<HTMLElement>("[data-path]")?.dataset.path ?? selected;
+      const item = items.find((i) => i.path === path);
+      if (item?.local) askDelete([item]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selected, items, actions]);
+  }, []);
   if (accountId === null) return null;
   return (
     <>
@@ -69,10 +74,20 @@ export function FileArea({ items, showFolder = false, view }: { items: FileItem[
         selected={selected}
         onSelect={setSelected}
         onOpen={actions.open}
-        onMenu={(item, x, y) => setMenu({ item, x, y })}
+        onMenu={(item, x, y) => setMenu({ item, x, y, opener: document.activeElement as HTMLElement | null })}
         showFolder={showFolder}
       />
-      {menu && <Menu label={`Actions for ${menu.item.name}`} items={actions.menuFor(menu.item)} x={menu.x} y={menu.y} onClose={() => setMenu(null)} />}
+      {menu && (
+        <Menu
+          key={`${menu.item.path}:${menu.x}:${menu.y}`}
+          label={`Actions for ${menu.item.name}`}
+          items={actions.menuFor(menu.item)}
+          x={menu.x}
+          y={menu.y}
+          opener={menu.opener}
+          onClose={() => setMenu(null)}
+        />
+      )}
       {actions.dialogs}
     </>
   );
