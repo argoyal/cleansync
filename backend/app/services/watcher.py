@@ -182,7 +182,15 @@ class LocalWatcher:
 
     def _from_thread(self, path: str) -> None:
         hit = self._match(path)
-        if hit is None or should_ignore(hit[1]) or self._loop is None or self._debouncer is None:
+        # An event on the watched folder itself (rel "") carries no file change. macOS replays
+        # the folder's own creation when a watch starts right after it was made.
+        if (
+            hit is None
+            or not hit[1]
+            or should_ignore(hit[1])
+            or self._loop is None
+            or self._debouncer is None
+        ):
             return
         try:
             self._loop.call_soon_threadsafe(self._debouncer.touch, hit[0])

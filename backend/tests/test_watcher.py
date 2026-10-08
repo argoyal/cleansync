@@ -2,8 +2,19 @@ import asyncio
 import time
 
 import pytest
+from watchdog.events import (
+    DirCreatedEvent,
+    DirDeletedEvent,
+    DirModifiedEvent,
+    FileClosedNoWriteEvent,
+    FileCreatedEvent,
+    FileDeletedEvent,
+    FileModifiedEvent,
+    FileMovedEvent,
+    FileOpenedEvent,
+)
 
-from app.services.watcher import Debouncer, LocalWatcher, self_test, should_ignore
+from app.services.watcher import Debouncer, LocalWatcher, _Handler, self_test, should_ignore
 
 
 class StubQueue:
@@ -124,9 +135,83 @@ async def test_events_right_after_a_job_are_ignored_but_later_ones_queue(
     assert q.requests == [(pair.id, "WATCHER")]
 
 
-async def test_ignored_files_and_dir_events_do_not_queue_but_real_file_does(
+def _no_observer_watcher(session_factory, layout, q, root, pair_id):
+    """A watcher fed by hand-made watchdog events: no OS timing involved."""
+    w = LocalWatcher(session_factory=session_factory, layout=layout, queue=q, debounce_s=0.05)
+    w._loop = asyncio.get_running_loop()
+    w._debouncer = Debouncer(0.05, w._fire, w._loop)
+    w._roots = {str(root): pair_id}
+    return w, _Handler(w._from_thread)
+
+
+async def _settle():
+    await asyncio.sleep(0.2)  # several debounce periods
+
+
+async def test_ignored_files_and_dir_events_do_not_queue(
     session_factory, layout, make_account, make_pair
 ):
+    acc = make_account()
+    pair = make_pair(acc, initialized=True)
+    root = layout.account_dir(acc.email)
+    q = StubQueue()
+    w, h = _no_observer_watcher(session_factory, layout, q, root, pair.id)
+    for event in (
+        FileCreatedEvent(str(root / "RCLONE_TEST")),
+        FileModifiedEvent(str(root / "sub" / "RCLONE_TEST")),
+        FileCreatedEvent(str(root / ".google-exports" / "a.docx")),
+        FileModifiedEvent(str(root / "movie.mp4.partial")),
+        FileMovedEvent(str(root / "a.partial"), str(root / "b.partial")),
+        DirModifiedEvent(str(root)),  # folder mtime changes
+        DirModifiedEvent(str(root / "sub")),
+        DirCreatedEvent(str(root)),  # macOS replays the watched folder's own creation
+        FileOpenedEvent(str(root / "real.txt")),
+        FileClosedNoWriteEvent(str(root / "real.txt")),
+        FileCreatedEvent(str(root.parent / "bob@example.com" / "outside.txt")),
+    ):
+        h.dispatch(event)
+    await _settle()
+    assert q.requests == []
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        lambda r: FileCreatedEvent(str(r / "real.txt")),
+        lambda r: FileModifiedEvent(str(r / "a" / "b.txt")),
+        lambda r: FileDeletedEvent(str(r / "gone.txt")),
+        lambda r: FileMovedEvent(str(r / "x.partial"), str(r / "x.mp4")),  # download finished
+        lambda r: DirCreatedEvent(str(r / "moved-in-folder")),
+        lambda r: DirDeletedEvent(str(r / "old-folder")),
+    ],
+)
+async def test_real_changes_queue_one_sync(session_factory, layout, make_account, make_pair, event):
+    acc = make_account()
+    pair = make_pair(acc, initialized=True)
+    root = layout.account_dir(acc.email)
+    q = StubQueue()
+    w, h = _no_observer_watcher(session_factory, layout, q, root, pair.id)
+    h.dispatch(event(root))
+    await _settle()
+    assert q.requests == [(pair.id, "WATCHER")]
+
+
+async def test_real_observer_queues_for_a_real_file_and_never_for_ignored_ones(
+    session_factory, layout, make_account, make_pair, monkeypatch
+):
+    # One end-to-end check with the OS watcher. Its timing is not exact (macOS FSEvents batches
+    # and delays events), so wait generously and check which paths were let through.
+    from app.services import watcher as mod
+
+    accepted: list[str] = []
+
+    def spy(rel_path):
+        ignored = should_ignore(rel_path)
+        if not ignored:
+            accepted.append(rel_path)
+        return ignored
+
+    monkeypatch.setattr(mod, "should_ignore", spy)
     acc = make_account()
     pair = make_pair(acc, initialized=True)
     q = StubQueue()
@@ -135,11 +220,15 @@ async def test_ignored_files_and_dir_events_do_not_queue_but_real_file_does(
         root = layout.account_dir(acc.email)
         (root / "RCLONE_TEST").write_text("x")
         (root / "movie.mp4.partial").write_text("x")
-        await asyncio.sleep(4.0)
-        assert q.requests == []
         (root / "real.txt").write_text("x")
-        await asyncio.sleep(4.0)
-        assert q.requests == [(pair.id, "WATCHER")]
+        for _ in range(100):  # up to 10 s
+            if q.requests:
+                break
+            await asyncio.sleep(0.1)
+        await asyncio.sleep(1.5)  # let any late events land
+        assert q.requests and set(q.requests) == {(pair.id, "WATCHER")}
+        assert "real.txt" in accepted
+        assert set(accepted) <= {"real.txt"}, accepted
     finally:
         w.stop()
 
