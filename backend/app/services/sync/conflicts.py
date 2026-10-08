@@ -167,7 +167,7 @@ def resolve_conflict(
         select(Conflict.id).where(Conflict.pair_id == pair.id, Conflict.state == ConflictState.OPEN)
     )
     if still_open is None and pair.attention_reason == AttentionReason.CONFLICTS:
-        pair.status = PairStatus.HEALTHY
+        pair.status = PairStatus.PAUSED if pair.paused else PairStatus.HEALTHY
         pair.attention_reason = None
         db.commit()
     return conflict

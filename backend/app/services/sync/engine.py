@@ -5,7 +5,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.clock import utcnow
+from app.core.clock import as_utc, utcnow
 from app.models import Account, Conflict, PlannedChange, SyncJob, SyncPair
 from app.models.enums import (
     AccountStatus,
@@ -122,10 +122,23 @@ class SyncEngine:
     def set_status(
         self, db: Session, pair: SyncPair, status: str, reason: str | None = None
     ) -> None:
+        if status != PairStatus.RUNNING and self._paused_now(db, pair):
+            # Paused while the job ran: stay PAUSED; resume shows the reason kept here.
+            status = PairStatus.PAUSED
         pair.status = status
         pair.attention_reason = reason
         db.commit()
         self.bus.publish("pair", {"pair_id": pair.id, "status": status, "reason": reason})
+
+    @staticmethod
+    def _paused_now(db: Session, pair: SyncPair) -> bool:
+        """Read 'paused' from the database: the API may have paused the pair mid-run."""
+        if pair.id is None:
+            return bool(pair.paused)
+        paused = db.scalar(select(SyncPair.paused).where(SyncPair.id == pair.id))
+        if paused is not None:
+            pair.paused = paused
+        return bool(paused)
 
     def bisync_target(self, account: Account, pair: SyncPair) -> BisyncTarget:
         backup = None
@@ -177,11 +190,19 @@ class SyncEngine:
             self.set_status(db, pair, PairStatus.ATTENTION, AttentionReason.NEEDS_RESYNC)
         elif failure == Failure.TOO_MANY_DELETES:
             # A brake, not a glitch: no retry backoff, the user has to look first.
-            pair.last_error = (
-                "rclone's safety brake stopped this sync because it would delete too many "
-                "files (bisync stops when more than 50% of the files on one side would be "
-                "deleted). Check both folders, then run the sync again yourself."
-            )
+            if pair.direction == Direction.BIDIRECTIONAL:
+                pair.last_error = (
+                    "rclone's safety brake stopped this sync because it would delete too many "
+                    "files (bisync stops when more than 50% of the files on one side would be "
+                    "deleted). Check both folders, then run the sync again yourself."
+                )
+            else:
+                pair.last_error = (
+                    "rclone stopped this sync because it reached the deletion cap for this "
+                    f"run (your limit is {pair.max_deletions}, or the number of deletions you "
+                    "approved). More files were deleted since the check before the sync. "
+                    "Check both folders, then run the sync again yourself."
+                )
             self.set_status(db, pair, PairStatus.ATTENTION, AttentionReason.BLOCKED)
         else:
             pair.fail_count += 1
@@ -207,8 +228,12 @@ class SyncEngine:
             account = db.get(Account, pair.account_id)
             if not is_eligible(pair, account):
                 return None
-            if trigger in _AUTOMATIC_TRIGGERS and pair.attention_reason in _WAITING_FOR_USER:
-                return None
+            if trigger in _AUTOMATIC_TRIGGERS:
+                if pair.attention_reason in _WAITING_FOR_USER:
+                    return None
+                # Timers, file changes and recovery wait out the retry backoff; manual runs don't.
+                if pair.next_retry_at is not None and self.clock() < as_utc(pair.next_retry_at):
+                    return None
             if refresh_pair_filters(db, self.layout, pair):
                 pair.needs_resync = True
                 db.commit()
@@ -255,9 +280,15 @@ class SyncEngine:
         dry_run: bool,
         bidirectional: bool,
         max_delete: int | None = None,
+        max_delete_percent: int = 50,
     ) -> list[str]:
         if bidirectional:
-            return bisync_args(self.env, self.bisync_target(account, pair), dry_run=dry_run)
+            return bisync_args(
+                self.env,
+                self.bisync_target(account, pair),
+                dry_run=dry_run,
+                max_delete_percent=max_delete_percent,
+            )
         local = str(pair_local_dir(self.layout, account, pair))
         remote = pair_remote(account, pair)
         filters = self.layout.pair_filters(pair.id)
@@ -333,6 +364,10 @@ class SyncEngine:
     async def _cycle(
         self, db: Session, pair: SyncPair, account: Account, trigger: str, *, bidirectional: bool
     ) -> int:
+        # An "override once" belongs to this attempt only, whatever its outcome: consume it
+        # before rclone runs, so a failed attempt can't leave it for a later, unreviewed plan.
+        override_requested = bool(pair.override_next)
+        pair.override_next = False
         self.set_status(db, pair, PairStatus.RUNNING)
         pair.last_sync_at = self.clock()
         db.commit()
@@ -347,8 +382,14 @@ class SyncEngine:
             if not bidirectional and count_dry_run_deletes(line):
                 one_way_deletes.append(line.path_obj or "")
 
+        # The dry run lifts bisync's own 50% brake: DriveSync's count gate below decides, and
+        # a blocked plan is stored for review. The real run keeps the brake (see below).
         res = await self.run(
-            self._args(account, pair, dry_run=True, bidirectional=bidirectional), dry, on_dry
+            self._args(
+                account, pair, dry_run=True, bidirectional=bidirectional, max_delete_percent=100
+            ),
+            dry,
+            on_dry,
         )
         failure = classify_failure(res.exit_code, res.error_tail)
         if failure is not None:
@@ -376,14 +417,12 @@ class SyncEngine:
         # 2. deletion gate
         over = deletions > pair.max_deletions
         override_used = False
-        if over and pair.override_next:
+        if over and override_requested:
             # The override approves the plan the user reviewed, not whatever comes next.
-            pair.override_next = False
             approved = self._approved_deletions(db, pair, dry.id)
             if approved is not None and deletions <= approved:
                 override_used = True
             else:
-                db.commit()
                 record_event(
                     db,
                     self.bus,
@@ -399,8 +438,6 @@ class SyncEngine:
         if over and not override_used:
             return self._block(db, pair, account, dry, planned.planned, res, deletions)
         self.finish_job(db, dry, JobState.SUCCESS, res)
-        pair.override_next = False
-        db.commit()
         # One-way sync has no bisync percentage brake, so cap the real run's deletes too.
         cap = None
         if not bidirectional:
@@ -431,8 +468,16 @@ class SyncEngine:
                     },
                 )
 
+        # bisync's 50% brake stays on for the real run, unless the user approved this plan.
         res = await self.run(
-            self._args(account, pair, dry_run=False, bidirectional=bidirectional, max_delete=cap),
+            self._args(
+                account,
+                pair,
+                dry_run=False,
+                bidirectional=bidirectional,
+                max_delete=cap,
+                max_delete_percent=100 if override_used else 50,
+            ),
             job,
             on_real,
         )

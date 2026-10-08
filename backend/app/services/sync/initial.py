@@ -11,7 +11,8 @@ from app.models.enums import AttentionReason, Direction, JobKind, JobState, Pair
 from app.services.events.bus import record_event
 from app.services.rclone.commands import bisync_args, check_args, remote_target, touch_args
 from app.services.rclone.errors import Failure, classify_failure
-from app.services.rclone.parse import parse_check_combined
+from app.services.rclone.parse import CheckSummary, parse_check_combined
+from app.services.rclone.runner import RunResult
 from app.services.sync.engine import SyncEngine
 from app.services.sync.filters import refresh_pair_filters
 from app.services.sync.pairs import pair_local_dir, pair_remote
@@ -55,6 +56,7 @@ class InitialSync:
         different_out.parent.mkdir(parents=True, exist_ok=True)
         only_local_all: list[str] = []
         only_remote_folded: set[str] = set()
+        summary = CheckSummary()
         with open(different_out, "w", encoding="utf-8") as diff_fh:
 
             def on_stdout(line: str) -> None:
@@ -81,6 +83,7 @@ class InitialSync:
                 ),
                 e.env.env(),
                 log_path=Path(job.log_path),
+                on_line=summary.feed,
                 on_stdout=on_stdout,
                 secrets=[e.env.config_pass],
             )
@@ -89,7 +92,23 @@ class InitialSync:
             for rel in only_local_all:
                 if rel.casefold() in only_remote_folded:
                     diff_fh.write(rel + "\n")
-        if res.exit_code not in (0, 1):
+        # Exit 1 also covers fatal errors (e.g. the remote can't be opened): only accept it as
+        # "differences found" when rclone's own summary matches the listing.
+        unexplained = res.exit_code == 1 and not summary.explains(
+            differences=counts["only_local"] + counts["only_remote"] + counts["different"],
+            errors=counts["errors"],
+        )
+        if res.exit_code not in (0, 1) or unexplained:
+            if unexplained:
+                res = RunResult(
+                    exit_code=res.exit_code,
+                    duration_s=res.duration_s,
+                    error_tail=[
+                        *res.error_tail,
+                        "rclone check reported problems besides file differences; "
+                        "nothing was changed",
+                    ],
+                )
             e.finish_job(db, job, JobState.FAILED, res)
             failure = classify_failure(res.exit_code, res.error_tail)
             if failure is not None:

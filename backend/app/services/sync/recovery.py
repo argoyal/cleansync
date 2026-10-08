@@ -21,7 +21,10 @@ def recover_interrupted(db: Session) -> list[int]:
         job.state = JobState.INTERRUPTED
         pair_ids.add(job.pair_id)
     for pair in db.scalars(select(SyncPair).where(SyncPair.status == PairStatus.RUNNING)):
-        pair.status = PairStatus.HEALTHY if pair.initialized else PairStatus.NEW
+        if pair.paused:
+            pair.status = PairStatus.PAUSED
+        else:
+            pair.status = PairStatus.HEALTHY if pair.initialized else PairStatus.NEW
         pair_ids.add(pair.id)
     db.commit()
     return sorted(pid for pid in pair_ids if (p := db.get(SyncPair, pid)) and p.initialized)

@@ -62,3 +62,13 @@ class FakeRclone:
 
     def env(self) -> dict[str, str]:
         return {"PATH": os.environ["PATH"]}
+
+
+def check_out(lines: list[str], *, extra_errors: int = 0) -> dict:
+    """Fake `rclone check --combined -` output: the lines plus rclone's closing summary."""
+    diffs = sum(1 for ln in lines if ln[:1] in "+-*")
+    errors = diffs + sum(1 for ln in lines if ln[:1] == "!") + extra_errors
+    stderr = [jl(f"{diffs} differences found", level="notice", object="drive")]
+    if errors:
+        stderr.append(jl(f"{errors} errors while checking", level="notice", object="drive"))
+    return {"stdout": list(lines), "stderr": stderr, "exit": 1 if errors else 0}

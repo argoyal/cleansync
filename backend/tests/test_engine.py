@@ -532,3 +532,185 @@ async def test_capped_planned_rows_keep_deletes_first(
     job = _jobs(db, pair.id)[0]
     planned = db.scalars(select(PlannedChange).where(PlannedChange.job_id == job.id)).all()
     assert [p.action for p in planned] == ["delete", "delete"]
+
+
+# ---- final review fixes -------------------------------------------------------------------
+
+
+def _transient():
+    return [jl("connection reset by peer", level="error")]
+
+
+async def test_override_is_used_up_even_when_the_dry_run_fails(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    # C1: an approval must not survive a failed attempt and apply to a later, unreviewed plan.
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=10)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(20)))
+    await sync_engine.run_pair(pair.id, "MANUAL")  # blocked: 20 planned
+    db.refresh(pair)
+    pair.override_next = True
+    db.commit()
+    fake_rclone.plan_file.write_text("{}")
+    fake_rclone.on("bisync", match=["--dry-run"], exit=5, stderr=_transient())
+    await sync_engine.run_pair(pair.id, "MANUAL")  # the approved run fails before the gate
+    db.refresh(pair)
+    assert pair.override_next is False
+    pair.next_retry_at = None  # the retry wait has passed
+    db.commit()
+    fake_rclone.plan_file.write_text("{}")
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(15)))
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    assert _real_calls(fake_rclone) == []
+    assert _jobs(db, pair.id)[-1].state == "BLOCKED"
+
+
+def _max_delete(call):
+    return call[call.index("--max-delete") + 1]
+
+
+async def test_bisync_dry_run_lets_drivesync_count_and_real_run_keeps_the_brake(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    # I1: bisync's own 50% brake must not stop the dry run, or nothing is stored to review.
+    acc, pair = _ready_pair(make_account, make_pair)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    calls = [c for c in fake_rclone.calls() if c[4] == "bisync"]
+    assert [_max_delete(c) for c in calls] == ["100", "50"]
+
+
+async def test_override_lifts_bisyncs_own_brake_for_that_run(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=1)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(5)))
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    db.refresh(pair)
+    pair.override_next = True
+    db.commit()
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    assert _max_delete(_real_calls(fake_rclone)[0]) == "100"
+
+
+async def test_one_way_max_delete_stop_explains_the_count_cap(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, direction="LOCAL_TO_REMOTE", max_deletions=3)
+    fake_rclone.on("sync", match=["--dry-run"], stderr=splan(skipped_delete("a.txt")))
+    fake_rclone.on(
+        "sync",
+        not_match=["--dry-run"],
+        exit=7,
+        stderr=[
+            jl("Fatal error received - not attempting retries", level="error"),
+            jl("--max-delete threshold reached", level="error"),
+        ],
+    )
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    db.refresh(pair)
+    assert (pair.status, pair.attention_reason) == ("ATTENTION", "BLOCKED")
+    assert "50%" not in pair.last_error
+    assert "3" in pair.last_error
+
+
+@pytest.mark.parametrize("trigger", ["SCHEDULE", "WATCHER", "RECOVERY"])
+async def test_automatic_triggers_wait_for_the_retry_backoff(
+    sync_engine, make_account, make_pair, fake_rclone, db, trigger
+):
+    # I8: the watcher (and recovery) must not bypass the retry wait the scheduler honours.
+    acc, pair = _ready_pair(make_account, make_pair)
+    pair.next_retry_at = utcnow() + timedelta(minutes=5)
+    pair.attention_reason = "FAILED"
+    db.commit()
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
+    assert await sync_engine.run_pair(pair.id, trigger) is None
+    assert fake_rclone.calls() == []
+
+
+async def test_manual_sync_ignores_the_retry_backoff(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair)
+    pair.next_retry_at = utcnow() + timedelta(minutes=5)
+    db.commit()
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
+    assert await sync_engine.run_pair(pair.id, "MANUAL") is not None
+
+
+async def test_automatic_trigger_runs_once_the_backoff_has_passed(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair)
+    pair.next_retry_at = utcnow() - timedelta(seconds=1)
+    db.commit()
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
+    assert await sync_engine.run_pair(pair.id, "WATCHER") is not None
+
+
+async def test_pausing_during_a_run_keeps_the_pair_paused(
+    sync_engine, make_account, make_pair, fake_rclone, db, session_factory
+):
+    # M2: the engine must not overwrite PAUSED with HEALTHY when the run finishes.
+    acc, pair = _ready_pair(make_account, make_pair)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
+    real_runner = sync_engine.runner
+
+    async def pausing_runner(args, *a, **kw):
+        if "--dry-run" not in args:
+            with session_factory() as other:
+                p = other.get(SyncPair, pair.id)
+                p.paused, p.status = True, "PAUSED"
+                other.commit()
+        return await real_runner(args, *a, **kw)
+
+    sync_engine.runner = pausing_runner
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    db.expire_all()
+    p = db.get(SyncPair, pair.id)
+    assert (p.status, p.paused) == ("PAUSED", True)
+    assert _jobs(db, pair.id)[-1].state == "SUCCESS"
+
+
+async def test_pausing_during_a_failing_run_keeps_paused_and_the_reason(
+    sync_engine, make_account, make_pair, fake_rclone, db, session_factory
+):
+    acc, pair = _ready_pair(make_account, make_pair)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
+    fake_rclone.on("bisync", not_match=["--dry-run"], exit=5, stderr=_transient())
+    real_runner = sync_engine.runner
+
+    async def pausing_runner(args, *a, **kw):
+        if "--dry-run" not in args:
+            with session_factory() as other:
+                p = other.get(SyncPair, pair.id)
+                p.paused, p.status = True, "PAUSED"
+                other.commit()
+        return await real_runner(args, *a, **kw)
+
+    sync_engine.runner = pausing_runner
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    db.expire_all()
+    p = db.get(SyncPair, pair.id)
+    assert (p.status, p.attention_reason) == ("PAUSED", "FAILED")
+
+
+async def test_one_way_backup_moves_count_as_planned_deletes(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    # I5: with a backup dir rclone words a dry-run delete as "move into backup dir".
+    acc, pair = _ready_pair(
+        make_account, make_pair, direction="REMOTE_TO_LOCAL", max_deletions=0, backups_enabled=True
+    )
+    moved = jl(
+        "Skipped move into backup dir as --dry-run is set (size 2)",
+        level="notice",
+        skipped="move into backup dir",
+        object="old.txt",
+    )
+    fake_rclone.on("sync", match=["--dry-run"], stderr=splan(moved, deletes=0))
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    job = _jobs(db, pair.id)[0]
+    assert (job.state, job.planned_deletions) == ("BLOCKED", 1)
+    planned = db.scalars(select(PlannedChange).where(PlannedChange.job_id == job.id)).all()
+    assert [(p.side, p.action, p.path) for p in planned] == [("local", "delete", "old.txt")]

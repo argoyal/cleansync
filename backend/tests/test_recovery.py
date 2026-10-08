@@ -95,3 +95,11 @@ def test_background_services_stay_off_when_disabled(settings):
     app = create_app(settings, start_background=False)
     with TestClient(app):
         assert not app.state.scheduler.aps.running
+
+
+def test_paused_pair_left_running_comes_back_paused(db, make_account, make_pair):
+    acc = make_account()
+    pair = make_pair(acc, initialized=True, paused=True, status="RUNNING")
+    recover_interrupted(db)
+    db.refresh(pair)
+    assert pair.status == "PAUSED"

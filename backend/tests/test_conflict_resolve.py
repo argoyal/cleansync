@@ -235,3 +235,13 @@ def test_resolve_api_409_while_pair_is_syncing(auth_client, app, setup):
 def test_bad_state_filter_is_422(auth_client, setup):
     _, pair, _, _ = setup
     assert auth_client.get(f"/api/sync-pairs/{pair.id}/conflicts?state=bogus").status_code == 422
+
+
+def test_resolving_the_last_conflict_of_a_paused_pair_keeps_it_paused(db, layout, setup):
+    # M2: resolution must not turn a paused pair HEALTHY.
+    acc, pair, c, root = setup
+    pair.paused, pair.status = True, "PAUSED"
+    db.commit()
+    _resolve(db, layout, setup, "keep_local")
+    db.refresh(pair)
+    assert (pair.status, pair.attention_reason) == ("PAUSED", None)

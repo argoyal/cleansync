@@ -160,11 +160,54 @@ class Counters:
             self.conflict_variants[self._last_conflict] = (local, remote)
 
 
+# With --backup-dir rclone moves a file away instead of deleting it, and says so.
+_DRY_RUN_DELETES = frozenset({"delete", "move into backup dir"})
+
+
 def count_dry_run_deletes(line: LogLine) -> bool:
     """A one-way dry-run delete, read from rclone's structured "skipped" field."""
-    return line.skipped == "delete"
+    return line.skipped in _DRY_RUN_DELETES
 
 
 def parse_check_combined(line: str) -> tuple[str, str] | None:
     m = _CHECK.match(line.rstrip("\n"))
     return (m.group(1), m.group(2)) if m else None
+
+
+_CHECK_DIFFERENCES = re.compile(r"^(\d+) differences found$")
+_CHECK_ERRORS = re.compile(r"^(\d+) errors while checking$")
+
+
+@dataclass
+class CheckSummary:
+    """rclone check's closing notices, used to tell "differences found" from a real failure.
+
+    rclone counts every "+", "-" and "*" line as a difference, and counts every difference and
+    every "!" line as an error; anything beyond that is an error the listing doesn't explain.
+    """
+
+    differences: int | None = None
+    errors: int = 0
+    fatal: bool = False
+
+    def feed(self, line: LogLine) -> None:
+        text = line.text
+        if line.level == "critical" or "Failed to create file system" in text:
+            self.fatal = True
+            return
+        m = _CHECK_DIFFERENCES.match(text)
+        if m:
+            self.differences = int(m.group(1))
+            return
+        m = _CHECK_ERRORS.match(text)
+        if m:
+            self.errors = int(m.group(1))
+
+    def explains(self, *, differences: int, errors: int) -> bool:
+        """True when the closing notices match what the --combined listing showed."""
+        return (
+            not self.fatal
+            and self.differences is not None
+            and self.differences == differences
+            and self.errors <= differences + errors
+        )

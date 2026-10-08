@@ -129,8 +129,14 @@ async def test_real_bisync_safety_brake_is_classified(tmp_path):
     await _run(env, t, tmp_path, dry_run=False, resync=True)
     for i in range(6):
         (p1 / f"f{i}.txt").unlink()
-    res, _ = await _run(env, t, tmp_path, dry_run=True)
+    # The engine's dry run lifts the brake (100%) so DriveSync can count and store the plan.
+    res, counters = await _run(env, t, tmp_path, dry_run=True, max_delete_percent=100)
+    assert res.exit_code == 0, res.error_tail
+    assert counters.bisync_successful and counters.deleted_remote == 6
+    # The real run keeps bisync's 50% brake.
+    res, _ = await _run(env, t, tmp_path, dry_run=False)
     assert classify_failure(res.exit_code, res.error_tail) == Failure.TOO_MANY_DELETES
+    assert (p2 / "f0.txt").exists()
 
 
 async def test_real_one_way_sync_max_delete_stops_extra_deletes(tmp_path):
@@ -320,3 +326,107 @@ async def test_real_first_sync_merges_without_deleting_and_backs_up():
         if eng is not None:
             eng.dispose()
         shutil.rmtree(root, ignore_errors=True)
+
+
+async def test_real_one_way_dry_run_with_backup_dir_counts_deletes(tmp_path):
+    # Drive -> local with backups: rclone says "move into backup dir", not "delete".
+    env, t, p1, p2 = _setup(tmp_path)
+    (p1 / "gone.txt").write_text("only local")
+    lines = []
+    res = await run_rclone(
+        c.sync_args(env, str(p2), str(p1), t.filters_file, tmp_path / "bk", dry_run=True),
+        env.env(),
+        log_path=None,
+        on_line=lines.append,
+    )
+    assert res.exit_code == 0, res.error_tail
+    deletes = [ln.obj for ln in lines if count_dry_run_deletes(ln)]
+    assert deletes == ["gone.txt"], [ln.raw for ln in lines]
+    assert (p1 / "gone.txt").exists()
+
+
+async def _real_check(env, local, remote, filters):
+    from app.services.rclone.parse import CheckSummary
+
+    out: list[str] = []
+    summary = CheckSummary()
+    res = await run_rclone(
+        c.check_args(env, local, remote, filters),
+        env.env(),
+        log_path=None,
+        on_line=summary.feed,
+        on_stdout=out.append,
+    )
+    parsed = [m for m in map(parse_check_combined, out) if m]
+    diffs = sum(1 for k, _ in parsed if k in "+-*")
+    bangs = sum(1 for k, _ in parsed if k == "!")
+    return res, summary.explains(differences=diffs, errors=bangs)
+
+
+async def test_real_check_differences_are_explained_by_the_summary(tmp_path):
+    env, t, p1, p2 = _filtered_dirs(tmp_path)
+    res, explained = await _real_check(env, p1, str(p2), t.filters_file)
+    assert res.exit_code == 1 and explained
+
+
+async def test_real_check_with_a_missing_remote_is_not_just_differences(tmp_path):
+    # Exit 1 too, but nothing was compared: the remote isn't in the config.
+    env, t, p1, p2 = _setup(tmp_path)
+    res, explained = await _real_check(env, p1, "gd_missing:Docs", t.filters_file)
+    assert res.exit_code == 1 and not explained
+
+
+async def test_real_check_with_a_new_remote_folder_lists_everything_as_local_only(tmp_path):
+    # A Drive folder that doesn't exist yet is an empty side, not an error.
+    env, t, p1, p2 = _setup(tmp_path)
+    res, explained = await _real_check(env, p1, str(tmp_path / "not-there"), t.filters_file)
+    assert res.exit_code == 1 and explained
+
+
+async def test_real_initial_preview_fails_for_a_missing_remote(tmp_path):
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, SyncJob, SyncPair
+    from app.paths import Layout
+    from app.services.events.bus import EventBus
+    from app.services.sync.engine import SyncEngine
+    from app.services.sync.initial import InitialSync
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            pass
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text("")
+    with sf() as db:
+        acc = Account(email="alice@example.com", remote_name="gd_missing")
+        db.add(acc)
+        db.commit()
+        layout.account_dir(acc.email).mkdir(parents=True, exist_ok=True)
+        pair = SyncPair(account_id=acc.id, name="Docs", local_subpath="", remote_path="Docs")
+        db.add(pair)
+        db.commit()
+        pair_id = pair.id
+    engine = SyncEngine(
+        layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=_Accounts()
+    )
+    initial = InitialSync(engine)
+    try:
+        job_id = await initial.preview(pair_id)
+        with sf() as db:
+            assert db.get(SyncJob, job_id).state == "FAILED"
+        assert initial.load_preview(pair_id) is None
+    finally:
+        eng.dispose()

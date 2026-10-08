@@ -2,7 +2,7 @@ import pytest
 
 from app.models import SyncJob
 from app.services.sync.initial import CONFIRM_PHRASE, InitialSync
-from tests.fake_rclone import jl
+from tests.fake_rclone import check_out, jl
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def _check_output():
 async def test_preview_counts_and_samples(initial, make_account, make_pair, fake_rclone):
     acc = make_account()
     pair = make_pair(acc)
-    fake_rclone.on("check", stdout=_check_output(), exit=1)
+    fake_rclone.on("check", **check_out(_check_output()))
     await initial.preview(pair.id)
     p = initial.load_preview(pair.id)
     assert (p["same"], p["only_local"], p["only_remote"], p["different"], p["errors"]) == (
@@ -74,7 +74,7 @@ async def test_initial_backs_up_markers_and_resyncs(
     (root / "both").mkdir()
     (root / "both" / "differ.xlsx").write_text("local version")
     (root / "other.docx").write_text("local other")
-    fake_rclone.on("check", stdout=_check_output(), exit=1)
+    fake_rclone.on("check", **check_out(_check_output()))
     await initial.preview(pair.id)
     job_id = await initial.run_initial(pair.id)
 
@@ -161,7 +161,7 @@ async def test_initial_uses_a_fresh_check_not_the_stale_preview(
     fake_rclone.on("check", stdout=["= a"], exit=0)
     await initial.preview(pair.id)
     fake_rclone.plan_file.write_text("{}")
-    fake_rclone.on("check", stdout=["* late.txt"], exit=1)
+    fake_rclone.on("check", **check_out(["* late.txt"]))
     await initial.run_initial(pair.id)
     copies = _backups(layout, acc, pair)
     assert [k.split("/", 1)[1] for k in copies] == ["late.txt"]
@@ -175,7 +175,7 @@ async def test_backup_folders_are_unique_per_job(
     acc = make_account()
     pair = make_pair(acc, initialized=True)
     (layout.account_dir(acc.email) / "x.txt").write_text("v1")
-    fake_rclone.on("check", stdout=["* x.txt"], exit=1)
+    fake_rclone.on("check", **check_out(["* x.txt"]))
     await initial.safe_resync(pair.id, "MANUAL")
     (layout.account_dir(acc.email) / "x.txt").write_text("v2")
     await initial.safe_resync(pair.id, "MANUAL")
@@ -189,7 +189,7 @@ async def test_backup_failure_fails_job_and_skips_resync(
     acc = make_account()
     pair = make_pair(acc, initialized=True)
     (layout.account_dir(acc.email) / "x.txt").write_text("v1")
-    fake_rclone.on("check", stdout=["* x.txt"], exit=1)
+    fake_rclone.on("check", **check_out(["* x.txt"]))
 
     def boom(*a, **k):
         raise OSError("disk full")
@@ -208,7 +208,7 @@ async def test_error_paths_are_backed_up_but_resync_is_refused(
     acc = make_account()
     pair = make_pair(acc, initialized=True)
     (layout.account_dir(acc.email) / "bad.txt").write_text("v")
-    fake_rclone.on("check", stdout=["! bad.txt", "! other.txt"], exit=1)
+    fake_rclone.on("check", **check_out(["! bad.txt", "! other.txt"]))
     job_id = await initial.safe_resync(pair.id, "MANUAL")
     job = db.get(SyncJob, job_id)
     db.refresh(job)
@@ -222,7 +222,7 @@ async def test_error_paths_are_backed_up_but_resync_is_refused(
 async def test_error_paths_are_in_the_backup_list(initial, make_account, make_pair, fake_rclone):
     acc = make_account()
     pair = make_pair(acc)
-    fake_rclone.on("check", stdout=["! bad.txt", "* d.txt"], exit=1)
+    fake_rclone.on("check", **check_out(["! bad.txt", "* d.txt"]))
     await initial.preview(pair.id)
     f = initial._different_file(pair.id)
     assert f.read_text().splitlines() == ["bad.txt", "d.txt"]
@@ -235,7 +235,7 @@ async def test_case_clash_local_only_file_is_backed_up(
     pair = make_pair(acc, initialized=True)
     (layout.account_dir(acc.email) / "Report.TXT").write_text("local")
     (layout.account_dir(acc.email) / "plain.txt").write_text("p")
-    fake_rclone.on("check", stdout=["+ Report.TXT", "- report.txt", "+ plain.txt"], exit=1)
+    fake_rclone.on("check", **check_out(["+ Report.TXT", "- report.txt", "+ plain.txt"]))
     await initial.safe_resync(pair.id, "MANUAL")
     assert [k.split("/", 1)[1] for k in _backups(layout, acc, pair)] == ["Report.TXT"]
 
@@ -279,3 +279,58 @@ async def test_failed_initial_does_not_back_off_and_says_rerun_preview(
     db.refresh(pair)
     assert pair.fail_count == 0 and pair.next_retry_at is None
     assert "preview" in pair.last_error
+
+
+# I4: exit 1 from `rclone check` only means "differences found" when the output says exactly that.
+@pytest.mark.parametrize(
+    "output",
+    [
+        # the remote could not even be opened
+        {
+            "stdout": [],
+            "stderr": [
+                jl(
+                    'Failed to create file system for "gd_x:": didn\'t find section in config',
+                    level="critical",
+                )
+            ],
+            "exit": 1,
+        },
+        # no closing summary at all
+        {"stdout": ["+ a.txt"], "stderr": [], "exit": 1},
+        # the summary counts more differences than the listing showed
+        {
+            "stdout": ["+ a.txt"],
+            "stderr": [jl("5 differences found", level="notice")],
+            "exit": 1,
+        },
+        # errors the listing does not explain (e.g. a folder that could not be read)
+        check_out(["+ a.txt"], extra_errors=1),
+    ],
+)
+async def test_check_exit_1_that_is_not_just_differences_fails(
+    initial, make_account, make_pair, fake_rclone, db, output
+):
+    acc = make_account()
+    pair = make_pair(acc)
+    fake_rclone.on("check", **output)
+    job_id = await initial.preview(pair.id)
+    assert db.get(SyncJob, job_id).state == "FAILED"
+    assert initial.load_preview(pair.id) is None
+    db.refresh(pair)
+    assert pair.status == "ERROR" and pair.last_error
+
+
+async def test_initial_refuses_to_resync_when_the_fresh_check_is_unexplained(
+    initial, make_account, make_pair, fake_rclone, db
+):
+    acc = make_account()
+    pair = make_pair(acc)
+    fake_rclone.on("check", **check_out(["+ a.txt"]))
+    await initial.preview(pair.id)
+    fake_rclone.plan_file.write_text("{}")
+    fake_rclone.on("check", **check_out(["+ a.txt"], extra_errors=2))
+    await initial.run_initial(pair.id)
+    assert [c for c in fake_rclone.calls() if c[4] == "bisync"] == []
+    db.refresh(pair)
+    assert pair.initialized is False
