@@ -607,9 +607,11 @@ async def test_real_config_dump_reads_an_encrypted_config(tmp_path):
     assert _json.loads("\n".join(out))["local_1"]["type"] == "alias"
 
 
-async def test_real_rename_on_both_sides_leaves_the_next_sync_nothing_to_do(tmp_path):
+@pytest.mark.parametrize("others", [6, 0])  # 0: the renamed folder is most of the pair
+async def test_real_rename_on_both_sides_leaves_the_next_sync_nothing_to_do(tmp_path, others):
     """A folder renamed through DriveSync moves on Drive and on disk; bisync then sees the same
-    change on both sides: nothing to copy, nothing to delete, no conflicts."""
+    change on both sides: nothing to copy, nothing to delete, no conflicts. Even when the folder
+    holds more than half the pair's files (bisync's 50% brake counts the old paths)."""
     from sqlalchemy import select
     from sqlalchemy.orm import sessionmaker
 
@@ -679,7 +681,7 @@ async def test_real_rename_on_both_sides_leaves_the_next_sync_nothing_to_do(tmp_
                 (d / "RCLONE_TEST").write_text("x")
                 (d / "Old" / "a.txt").write_text("alpha")
                 (d / "Old" / "sub" / "b.txt").write_text("beta")
-                for i in range(6):
+                for i in range(others):
                     (d / f"f{i}.txt").write_text("x")
             seed = await run_rclone(
                 c.bisync_args(env, engine.bisync_target(acc, pair), dry_run=False, resync=True),
@@ -734,8 +736,149 @@ async def test_real_rename_on_both_sides_leaves_the_next_sync_nothing_to_do(tmp_
         for side in (local_dir, remote_dir):
             assert sorted(p.name for p in side.iterdir() if p.name != "RCLONE_TEST") == [
                 "New",
-                *[f"f{i}.txt" for i in range(6)],
+                *[f"f{i}.txt" for i in range(others)],
             ]
     finally:
         await queue.stop()
+        eng.dispose()
+
+
+async def test_real_stat_of_a_missing_path_reaches_the_error_tail(tmp_path):
+    conf = tmp_path / "rclone.conf"
+    conf.write_text("[gd_t]\ntype = local\n")
+    env = c.RcloneEnv(
+        binary="rclone", config_file=conf, cache_dir=tmp_path / "cache", config_pass=""
+    )
+    res = await run_rclone(
+        c.lsjson_args(env, f"gd_t:{tmp_path}/nope", stat=True), env.env(), log_path=None
+    )
+    assert res.exit_code == 3
+    assert any("not found" in ln.lower() for ln in res.error_tail), res.error_tail
+
+
+async def test_real_catalog_of_a_missing_drive_folder_is_an_empty_listing(tmp_path):
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, SyncPair
+    from app.paths import Layout
+    from app.services.catalog.service import CatalogService
+    from app.services.events.bus import EventBus
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            raise AssertionError("no login problem expected")
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text("[gd_alice]\ntype = local\n")
+    try:
+        with sf() as db:
+            acc = Account(email="alice@example.com", remote_name="gd_alice")
+            db.add(acc)
+            db.commit()
+            pair = SyncPair(
+                account_id=acc.id,
+                name="Docs",
+                local_subpath="",
+                remote_path=str(tmp_path / "not-created-yet"),
+            )
+            db.add(pair)
+            db.commit()
+            pair_id = pair.id
+        catalog = CatalogService(
+            layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=_Accounts()
+        )
+        listing = await catalog.refresh(pair_id)
+        assert listing is not None, catalog.last_error
+        assert listing.files == {}
+    finally:
+        eng.dispose()
+
+
+async def test_real_same_new_file_on_both_sides_with_different_times_is_no_conflict(tmp_path):
+    from sqlalchemy import select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, Conflict, SyncJob, SyncPair
+    from app.paths import Layout
+    from app.services.events.bus import EventBus
+    from app.services.sync.engine import SyncEngine
+    from app.services.sync.filters import refresh_pair_filters
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            raise AssertionError("no login problem expected")
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text("[gd_alice]\ntype = local\n")
+    remote_dir = tmp_path / "drive"
+    engine = SyncEngine(
+        layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=_Accounts()
+    )
+    try:
+        with sf() as db:
+            acc = Account(email="alice@example.com", remote_name="gd_alice")
+            db.add(acc)
+            db.commit()
+            pair = SyncPair(
+                account_id=acc.id,
+                name="Docs",
+                local_subpath="",
+                remote_path=str(remote_dir),
+                initialized=True,
+                status="HEALTHY",
+            )
+            db.add(pair)
+            db.commit()
+            refresh_pair_filters(db, layout, pair)
+            local_dir = layout.account_dir(acc.email)
+            for d in (local_dir, remote_dir):
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "RCLONE_TEST").write_text("x")
+                (d / "keep.txt").write_text("k")
+            seed = await run_rclone(
+                c.bisync_args(env, engine.bisync_target(acc, pair), dry_run=False, resync=True),
+                env.env(),
+                log_path=None,
+            )
+            assert seed.exit_code == 0, seed.error_tail
+            pair_id = pair.id
+        (local_dir / "s.txt").write_text("same")
+        (remote_dir / "s.txt").write_text("same")
+        os.utime(remote_dir / "s.txt", (1_600_000_000, 1_600_000_000))
+        await engine.run_pair(pair_id, "MANUAL")
+        with sf() as db:
+            jobs = db.scalars(select(SyncJob).order_by(SyncJob.id)).all()
+            assert [(j.kind, j.state) for j in jobs] == [
+                ("DRY_RUN", "SUCCESS"),
+                ("BISYNC", "SUCCESS"),
+            ], [j.error_message for j in jobs]
+            assert jobs[1].conflicts == 0
+            assert db.scalars(select(Conflict)).all() == []
+            assert db.get(SyncPair, pair_id).status == "HEALTHY"
+        assert sorted(p.name for p in local_dir.iterdir()) == ["RCLONE_TEST", "keep.txt", "s.txt"]
+    finally:
         eng.dispose()

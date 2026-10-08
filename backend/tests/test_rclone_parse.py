@@ -241,3 +241,32 @@ def test_same_change_on_both_sides_is_not_a_conflict():
     )
     assert c.conflict_paths == ["both.txt"]
     assert c.conflict_variants == {"both.txt": ("both.conflict1.txt", "both.conflict2.txt")}
+
+
+def test_equal_files_with_different_times_are_not_a_conflict():
+    # Real rclone 1.7x sequence: the warning, then this INFO line with the path as its object
+    # (JSON log), then a queued copy that only updates the modification time.
+    c = Counters()
+    c.feed(parse_line(jl('Synching Path1 "/l/p1/" with Path2 "gd:Docs/"')))
+    c.feed(parse_line(jl("- WARNING  New or changed in both paths       - s.txt", level="notice")))
+    c.feed(
+        parse_line(
+            jl(
+                "Files are equal but will copy anyway to update modtime (will not rename)",
+                object="s.txt",
+                objectType="string",
+            )
+        )
+    )
+    c.feed(parse_line(jl("- Path1    Queue copy to Path2       - gd:Docs/s.txt", level="notice")))
+    assert c.conflict_paths == []
+    # Plain text form: "s.txt: Files are equal but will copy anyway ..."
+    c = Counters()
+    c.feed(parse_line(jl("- WARNING  New or changed in both paths       - t.txt")))
+    c.feed(
+        parse_line(
+            "2026/10/08 17:36:18 INFO  : t.txt: Files are equal but will copy anyway to update "
+            "modtime (will not rename)"
+        )
+    )
+    assert c.conflict_paths == []
