@@ -5,6 +5,27 @@ import pytest
 from app.config import Settings
 from app.paths import Layout
 
+_ENV_VARS = (
+    "DRIVESYNC_ROOT",
+    "PUBLIC_URL",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "ADMIN_USERNAME",
+    "ADMIN_PASSWORD",
+    "SESSION_SECRET",
+    "RCLONE_CONFIG_PASS",
+    "RCLONE_BINARY",
+    "APP_NAME",
+    "LOG_LEVEL",
+    "TZ",
+)
+
+
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:

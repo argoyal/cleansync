@@ -1,3 +1,5 @@
+import stat
+
 import pytest
 
 from app.paths import Layout
@@ -31,6 +33,15 @@ def test_ensure_creates_directories(tmp_path):
         lay.secrets_dir,
     ):
         assert d.is_dir()
+    assert stat.S_IMODE(lay.secrets_dir.stat().st_mode) == 0o700
+
+
+def test_ensure_tightens_existing_secrets_dir(tmp_path):
+    lay = Layout(tmp_path)
+    lay.secrets_dir.mkdir(parents=True, mode=0o755)
+    lay.secrets_dir.chmod(0o755)
+    lay.ensure()
+    assert stat.S_IMODE(lay.secrets_dir.stat().st_mode) == 0o700
 
 
 def test_account_dir_uses_lowercased_email(tmp_path):

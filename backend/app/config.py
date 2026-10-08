@@ -2,7 +2,7 @@ import ipaddress
 from pathlib import Path
 from urllib.parse import urlparse
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,11 +22,11 @@ class Settings(BaseSettings):
     drivesync_root: Path = Path("/drivesync")
     public_url: str = "http://localhost:8080"
     google_client_id: str = ""
-    google_client_secret: str = ""
+    google_client_secret: str = Field(default="", repr=False)
     admin_username: str = "admin"
-    admin_password: str = ""
-    session_secret: str = ""
-    rclone_config_pass: str = ""
+    admin_password: str = Field(default="", repr=False)
+    session_secret: str = Field(default="", repr=False)
+    rclone_config_pass: str = Field(default="", repr=False)
     rclone_binary: str = "rclone"
     app_name: str = "DriveSync"
     log_level: str = "INFO"
@@ -43,8 +43,12 @@ class Settings(BaseSettings):
         return self
 
     @property
+    def _scheme(self) -> str:
+        return urlparse(self.public_url).scheme
+
+    @property
     def cookie_secure(self) -> bool:
-        return self.public_url.startswith("https://")
+        return self._scheme == "https"
 
     @property
     def insecure_http(self) -> bool:

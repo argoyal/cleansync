@@ -93,9 +93,10 @@ class Layout:
             self.thumbs_dir,
             self.jobs_log_dir,
             self.storage,
-            self.secrets_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
+        self.secrets_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.secrets_dir.chmod(0o700)
 
     def account_dir(self, email: str) -> Path:
         return self.storage / email_dirname(email)

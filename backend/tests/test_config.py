@@ -47,3 +47,45 @@ def test_secret_generated_once_and_reused_with_private_mode(tmp_path):
     assert len(first) >= 48
     assert resolve_secret("", f) == first
     assert stat.S_IMODE(os.stat(f).st_mode) == 0o600
+
+
+def test_scheme_is_case_insensitive_for_https():
+    s = Settings(public_url="HTTPS://drivesync.example.com")
+    assert s.cookie_secure is True
+    assert s.insecure_http is False
+
+
+def test_repr_never_shows_secret_values():
+    s = Settings(
+        public_url="https://drivesync.example.com",
+        admin_password="pw-" + "x" * 12,
+        session_secret="sess-" + "s" * 20,
+        rclone_config_pass="rcp-" + "r" * 15,
+        google_client_secret="gcs-" + "g" * 15,
+    )
+    text = repr(s)
+    for value in (s.admin_password, s.session_secret, s.rclone_config_pass, s.google_client_secret):
+        assert value not in text
+
+
+def test_empty_secret_file_is_regenerated_not_returned_empty(tmp_path):
+    f = tmp_path / "secrets" / "session_secret"
+    f.parent.mkdir(parents=True)
+    f.write_text("")
+    got = resolve_secret("", f)
+    assert got != ""
+    assert len(got) >= 48
+    assert resolve_secret("", f) == got
+
+
+def test_whitespace_only_secret_file_is_regenerated(tmp_path):
+    f = tmp_path / "session_secret"
+    f.write_text("  \n")
+    got = resolve_secret("", f)
+    assert len(got) >= 48
+
+
+def test_no_temp_files_left_behind(tmp_path):
+    f = tmp_path / "session_secret"
+    resolve_secret("", f)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["session_secret"]
