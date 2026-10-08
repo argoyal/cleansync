@@ -18,8 +18,9 @@ from app.config import Settings
 from app.database.engine import make_engine
 from app.database.migrate import run_migrations
 from app.paths import Layout, email_dirname
-from app.services.accounts.service import AccountError, AccountService
+from app.services.accounts.service import AccountError, AccountService, check_local_folder
 from app.services.events.bus import EventBus
+from app.services.rclone.commands import UnsafeArgument
 from app.services.rclone.setup import build_rclone_env
 
 
@@ -43,7 +44,14 @@ async def seed(settings: Settings, email: str, folder: Path | None, samples: boo
     layout.ensure()
     run_migrations(layout.db_file)
     email = email_dirname(email)
-    target = (folder or layout.root / "local-remotes" / email).resolve()
+    env = build_rclone_env(settings, layout)
+    try:
+        target = check_local_folder(layout, env, folder or layout.root / "local-remotes" / email)
+    except (AccountError, UnsafeArgument) as e:
+        raise SystemExit(str(e)) from e
+    if samples:  # before the account exists, so a failure here leaves no half-made account
+        target.mkdir(parents=True, exist_ok=True)
+        write_samples(target)
     engine = make_engine(layout.db_file)
     try:
         service = AccountService(
@@ -51,17 +59,18 @@ async def seed(settings: Settings, email: str, folder: Path | None, samples: boo
             layout=layout,
             session_factory=sessionmaker(engine, expire_on_commit=False),
             bus=EventBus(),
-            rclone_env=build_rclone_env(settings, layout),
+            rclone_env=env,
         )
         try:
             await service.add_local_account(email, target)
-        except AccountError as e:
+        except (AccountError, UnsafeArgument) as e:
             raise SystemExit(str(e)) from e
     finally:
         engine.dispose()
-    if samples:
-        write_samples(target)
-    return f"Added {email}. Its pretend Google Drive is {target}"
+    return (
+        f"Added {email}. Its pretend Google Drive is {target}\n"
+        "If the app is running, restart the app to pick up the new account."
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

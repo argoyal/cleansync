@@ -64,7 +64,7 @@ def test_the_dev_flag_is_off_by_default():
 
 def test_seed_refuses_a_folder_with_a_newline(seed_env, monkeypatch, db, tmp_path):
     monkeypatch.setenv("DRIVESYNC_ALLOW_LOCAL_ACCOUNTS", "1")
-    with pytest.raises(UnsafeArgument):
+    with pytest.raises(SystemExit, match="control characters"):
         main(["alice@example.com", "--folder", str(tmp_path / "a\nb")])
     assert db.scalar(select(Account)) is None
 
@@ -91,3 +91,89 @@ def test_adding_a_local_account_tells_the_scheduler_and_token_cache(
     )
     acc = asyncio.run(svc.add_local_account("bob@example.com", tmp_path / "bobs-drive"))
     assert changed == [1] and logins == [acc.remote_name]
+
+
+def test_setup_without_a_session_is_401(client):
+    assert client.get("/api/setup").status_code == 401
+
+
+def _service(settings, layout, session_factory):
+    from app.services.accounts.service import AccountService
+    from app.services.events.bus import EventBus
+    from app.services.rclone.setup import build_rclone_env
+
+    settings.allow_local_accounts = True
+    return AccountService(
+        settings=settings,
+        layout=layout,
+        session_factory=session_factory,
+        bus=EventBus(),
+        rclone_env=build_rclone_env(settings, layout),
+    )
+
+
+@pytest.mark.parametrize(
+    "where",
+    ["storage", "storage/bob@example.com", "app/data", "app", "app/data/logs", ".", ".."],
+)
+def test_pretend_folder_must_stay_away_from_app_folders(
+    settings, layout, session_factory, where, db
+):
+    import asyncio
+
+    from app.services.accounts.service import AccountError
+
+    svc = _service(settings, layout, session_factory)
+    target = layout.root / where
+    with pytest.raises(AccountError, match="app's own folders"):
+        asyncio.run(svc.add_local_account("bob@example.com", target))
+    assert db.scalar(select(Account)) is None
+
+
+def test_pretend_folder_symlink_into_storage_is_refused(
+    settings, layout, session_factory, tmp_path
+):
+    import asyncio
+
+    from app.services.accounts.service import AccountError
+
+    svc = _service(settings, layout, session_factory)
+    link = tmp_path / "link"
+    link.symlink_to(layout.storage)
+    with pytest.raises(AccountError, match="app's own folders"):
+        asyncio.run(svc.add_local_account("bob@example.com", link))
+
+
+def test_pretend_folder_default_location_is_accepted(settings, layout, session_factory):
+    import asyncio
+
+    svc = _service(settings, layout, session_factory)
+    acc = asyncio.run(
+        svc.add_local_account("bob@example.com", layout.root / "local-remotes" / "bob@example.com")
+    )
+    assert acc.remote_name.startswith("local_")
+
+
+def test_bad_folder_leaves_nothing_behind(settings, layout, session_factory, tmp_path):
+    import asyncio
+
+    svc = _service(settings, layout, session_factory)
+    bad = tmp_path / "x\ny"
+    with pytest.raises(UnsafeArgument):
+        asyncio.run(svc.add_local_account("bob@example.com", bad))
+    assert not bad.exists()
+
+
+def test_seed_cli_reports_problems_without_a_traceback(seed_env, monkeypatch, tmp_path, settings):
+    monkeypatch.setenv("DRIVESYNC_ALLOW_LOCAL_ACCOUNTS", "1")
+    with pytest.raises(SystemExit, match="app's own folders"):
+        main(["alice@example.com", "--folder", str(settings.drivesync_root / "storage")])
+    with pytest.raises(SystemExit, match="control characters"):
+        main(["alice@example.com", "--folder", str(tmp_path / "a\nb")])
+    assert not (settings.drivesync_root / "storage" / "alice@example.com").exists()
+
+
+def test_seed_cli_says_to_restart_the_app(seed_env, monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("DRIVESYNC_ALLOW_LOCAL_ACCOUNTS", "1")
+    main(["alice@example.com", "--folder", str(tmp_path / "d")])
+    assert "restart the app" in capsys.readouterr().out

@@ -40,6 +40,23 @@ class AccountError(Exception):
     pass
 
 
+def check_local_folder(layout: Layout, env: RcloneEnv, folder: Path) -> Path:
+    """Resolve a pretend-account folder and refuse anything that touches the app's own folders.
+
+    Nothing is created. Also runs the rclone argument guard (control characters etc.).
+    """
+    folder = folder.resolve()
+    own = [layout.root.resolve(), (layout.root / "app").resolve(), layout.data.resolve()]
+    own.append(layout.storage.resolve())
+    for p in own:
+        if folder == p or (folder.is_relative_to(p) and p != layout.root.resolve()):
+            raise AccountError("That folder is inside the app's own folders; pick another one.")
+        if p.is_relative_to(folder):
+            raise AccountError("That folder contains the app's own folders; pick another one.")
+    config_create_alias_args(env, "local_check", folder)  # raises UnsafeArgument if unsafe
+    return folder
+
+
 class AccountService:
     def __init__(
         self,
@@ -205,7 +222,7 @@ class AccountService:
                 "Set DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 to allow one."
             )
         email = email_dirname(email)
-        folder = folder.resolve()
+        folder = check_local_folder(self.layout, self.env, folder)
         with self.session_factory() as db:
             if db.scalar(select(Account).where(Account.email == email)) is not None:
                 raise AccountError(f"{email} is already connected")
