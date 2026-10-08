@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # keep in sync with the Dockerfile ARG RCLONE_VERSION
+  RCLONE_VERSION: "1.75.1"
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -33,10 +37,41 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
-      - name: Install rclone
-        run: curl -fsSL https://rclone.org/install.sh | sudo bash
+      - name: Install pinned rclone
+        run: |
+          curl -fsSLo /tmp/rclone.zip "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip"
+          sudo unzip -j /tmp/rclone.zip "*/rclone" -d /usr/local/bin
+          rclone version
       - run: uv sync --frozen
       - run: uv run pytest -q -m realrclone
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: drivesync:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start container
+        run: |
+          docker run -d --name ds -p 8080:8080 --read-only --tmpfs /tmp \
+            --tmpfs /drivesync:uid=1000,gid=1000 --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            -e PUBLIC_URL=http://localhost:8080 -e ADMIN_PASSWORD=ci-smoke-password drivesync:ci
+          for i in $(seq 1 30); do curl -fsS http://localhost:8080/api/health && break; sleep 1; done
+      - name: Health and login
+        run: |
+          curl -fsS http://localhost:8080/api/health
+          curl -fsS -X POST http://localhost:8080/api/auth/login \
+            -H 'content-type: application/json' \
+            -d '{"username":"admin","password":"ci-smoke-password"}' | grep -q must_change_password
+      - if: failure()
+        run: docker logs ds
 
   secrets-scan:
     runs-on: ubuntu-latest

@@ -1,0 +1,17 @@
+services:
+  drivesync:
+    image: ghcr.io/argoyal/drivesync:latest
+    container_name: drivesync
+    user: "1000:1000"
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      # One folder holds everything: app/data (state) and storage/<email> (your files).
+      - /srv/drivesync:/drivesync
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped

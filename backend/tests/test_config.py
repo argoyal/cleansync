@@ -19,7 +19,7 @@ def test_https_public_url_gives_secure_cookies_and_redirect():
     [
         "http://localhost:8080",
         "http://127.0.0.1:8080",
-        "http://192.168.0.10:8095",
+        "http://172.16.0.5:8095",
         "http://10.0.0.5",
         "http://nas.local",
     ],

@@ -1,0 +1,14 @@
+services:
+  drivesync:
+    build: .
+    user: "1000:1000"
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./drivesync-data:/drivesync
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
