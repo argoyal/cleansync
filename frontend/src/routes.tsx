@@ -26,11 +26,11 @@ function OAuthReturn() {
   const navigate = useNavigate();
   const toast = useToast();
   const { setAccountId } = useCurrentAccount();
-  const connected = params.get("connected");
-  const error = params.get("oauth_error");
+  const rawConnected = params.get("connected");
+  const connected = rawConnected && /^[1-9]\d{0,9}$/.test(rawConnected) ? rawConnected : null;
+  const error = (params.get("oauth_error") ?? "").slice(0, 300) || null;
   const handled = useRef(false);
   useEffect(() => {
-    if (!connected && !error) return;
     if (handled.current) return; // StrictMode runs effects twice; show the message once
     handled.current = true;
     let back = "/";
@@ -56,7 +56,7 @@ function OAuthReturn() {
 function HomeOrSetup() {
   const setup = useSetup();
   const [params] = useSearchParams();
-  if (params.get("connected") || params.get("oauth_error")) return <OAuthReturn />;
+  if (params.has("connected") || params.has("oauth_error")) return <OAuthReturn />;
   if (setup.data && setup.data.pairs === 0) return <Navigate to="/setup" replace />;
   return <HomePage />;
 }

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { AppRoutes } from "../routes";
-import { ACCOUNT, mockApi, PAIR, renderApp } from "../test/utils";
+import { ACCOUNT, json, mockApi, PAIR, renderApp } from "../test/utils";
 import { SettingsPage } from "./SettingsPage";
 import { StoragePage } from "./StoragePage";
 
@@ -73,6 +73,29 @@ describe("settings", () => {
     expect(calls.some((c) => c.method === "PUT")).toBe(false);
   });
 
+  it("tells you when a storage check fails", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/accounts/1/quota": () => json(502, { detail: "Google did not answer." }) });
+    renderApp(<SettingsPage />, { route: "/settings?tab=accounts", path: "/settings" });
+    await userEvent.click(await screen.findByRole("button", { name: "Check storage" }));
+    expect(await screen.findByText("Google did not answer.")).toBeInTheDocument();
+  });
+
+  it("offers Retry when the system details fail", async () => {
+    let fail = true;
+    mockApi({ "GET /api/system": () => (fail ? json(500, { detail: "boom" }) : SYSTEM) });
+    renderApp(<SettingsPage />, { route: "/settings?tab=system", path: "/settings" });
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    fail = false;
+    await userEvent.click(retry);
+    expect(await screen.findByText("rclone v1.75.1")).toBeInTheDocument();
+  });
+
+  it("treats an unknown tab as General", async () => {
+    mockApi({ "GET /api/system": SYSTEM, "GET /api/settings": SETTINGS });
+    renderApp(<SettingsPage />, { route: "/settings?tab=constructor", path: "/settings" });
+    expect(await screen.findByRole("link", { name: "General" })).toHaveAttribute("aria-current", "page");
+  });
+
   it("shows system details and the watcher state", async () => {
     mockApi({ "GET /api/system": SYSTEM });
     renderApp(<SettingsPage />, { route: "/settings?tab=system", path: "/settings" });
@@ -82,6 +105,12 @@ describe("settings", () => {
 });
 
 describe("storage page", () => {
+  it("says so when there are no accounts", async () => {
+    mockApi({ "GET /api/accounts": [] });
+    renderApp(<StoragePage />);
+    expect(await screen.findByText("No Google account yet")).toBeInTheDocument();
+  });
+
   it("shows Drive quota and disk use per account", async () => {
     mockApi({
       "GET /api/accounts": [ACCOUNT],
@@ -124,6 +153,31 @@ describe("routes", () => {
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/settings?tab=accounts"));
     expect(screen.getAllByTestId("location")[0]).not.toHaveTextContent("oauth_error");
     expect(sessionStorage.getItem("drivesync.oauthReturn")).toBeNull();
+  });
+
+  it.each([["//evil.example.com/x"], ["https://evil.example.com"]])("ignores an unsafe saved return path %s", async (saved) => {
+    sessionStorage.setItem("drivesync.oauthReturn", saved);
+    mockApi({
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 1, initialized_pairs: 1 },
+    });
+    renderApp(<AppRoutes />, { route: "/?connected=1" });
+    expect(await screen.findByText("Google account connected.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/$/));
+  });
+
+  it("ignores a connected value that is not a positive whole number and caps long errors", async () => {
+    mockApi({
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 1, initialized_pairs: 1 },
+    });
+    renderApp(<AppRoutes />, { route: `/?connected=abc&oauth_error=${"x".repeat(500)}` });
+    expect(await screen.findByText("x".repeat(300))).toBeInTheDocument();
+    expect(screen.queryByText("Google account connected.")).not.toBeInTheDocument();
   });
 
   it("returns from Google sign-in to where the person started", async () => {

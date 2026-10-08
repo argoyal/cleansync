@@ -31,7 +31,8 @@ export function AppShell({ newButton }: { newButton?: React.ReactNode }) {
       <TopBar onMenu={() => setNavOpen(true)} />
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-[256px] shrink-0 pl-3 pt-1 lg:block">
-          <SideNav newButton={newButton} />
+          {/* While the drawer is open it holds the one + New button, so there is never a second one. */}
+          <SideNav newButton={navOpen ? undefined : newButton} />
         </aside>
         {navOpen && (
           <div className="fixed inset-0 z-40 bg-ink/30 lg:hidden" onClick={() => setNavOpen(false)}>

@@ -202,6 +202,15 @@ describe("mobile drawer", () => {
     expect(menu).toHaveFocus();
   });
 
+  it("keeps only one + New button while the drawer is open", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": STATUS });
+    renderApp(<AppShell newButton={<button type="button">Make new</button>} />, { withAccount: true, route: "/recent" });
+    expect(screen.getAllByRole("button", { name: "Make new" })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    expect(screen.getAllByRole("button", { name: "Make new" })).toHaveLength(1);
+    expect(within(screen.getByRole("dialog", { name: "Navigation" })).getByRole("button", { name: "Make new" })).toBeInTheDocument();
+  });
+
   it("closes when any link is used, even the current page", async () => {
     shell();
     await userEvent.click(screen.getByRole("button", { name: "Open navigation" }));

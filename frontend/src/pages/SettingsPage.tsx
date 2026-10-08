@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { api, friendlyError } from "../api/client";
 import { useAccounts, useAppSettings, useSystem } from "../api/queries";
@@ -17,32 +17,31 @@ const TABS = { general: "General", accounts: "Accounts", sync: "Sync defaults", 
 type Tab = keyof typeof TABS;
 
 export function SettingsPage() {
-  const [params, setParams] = useSearchParams();
-  const tab: Tab = (params.get("tab") as Tab) in TABS ? (params.get("tab") as Tab) : "general";
+  const [params] = useSearchParams();
+  const asked = params.get("tab") ?? "";
+  const tab: Tab = Object.hasOwn(TABS, asked) ? (asked as Tab) : "general";
   return (
     <div className="p-4 sm:p-6">
       <h1 className="mb-4 text-title font-semibold">Settings</h1>
-      <div role="tablist" aria-label="Settings" className="mb-6 flex gap-1 overflow-x-auto border-b border-line">
+      <nav aria-label="Settings sections" className="mb-6 flex gap-1 overflow-x-auto border-b border-line">
         {(Object.keys(TABS) as Tab[]).map((t) => (
-          <button
+          <Link
             key={t}
-            role="tab"
-            type="button"
-            aria-selected={tab === t}
-            className={`-mb-px border-b-2 px-3 py-2 text-table font-medium ${tab === t ? "border-accent text-ink" : "border-transparent text-ink-2 hover:text-ink"}`}
-            onClick={() => setParams({ tab: t })}
+            to={`?tab=${t}`}
+            aria-current={tab === t ? "page" : undefined}
+            className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-table font-medium ${tab === t ? "border-accent text-ink" : "border-transparent text-ink-2 hover:text-ink"}`}
           >
             {TABS[t]}
-          </button>
+          </Link>
         ))}
-      </div>
-      <div role="tabpanel" className="max-w-2xl">
+      </nav>
+      <section aria-label={TABS[tab]} className="max-w-2xl">
         {tab === "general" && <General />}
         {tab === "accounts" && <Accounts />}
         {tab === "sync" && <SyncDefaults />}
         {tab === "security" && <Security />}
         {tab === "system" && <System />}
-      </div>
+      </section>
     </div>
   );
 }
@@ -129,6 +128,7 @@ function AccountRow({ account }: { account: Account }) {
   const quota = useMutation({
     mutationFn: () => api(`/api/accounts/${account.id}/quota`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["accounts"] }),
+    onError: (e) => toast(friendlyError(e), { tone: "error" }),
   });
   return (
     <li className="flex flex-wrap items-center gap-3 py-3">
@@ -298,8 +298,17 @@ function Security() {
 }
 
 function System() {
-  const s = useSystem().data;
-  if (!s) return null;
+  const { data: s, isError, error, refetch } = useSystem();
+  if (isError)
+    return (
+      <Notice tone="err">
+        {friendlyError(error)}{" "}
+        <button type="button" className="font-semibold underline" onClick={() => refetch()}>
+          Retry
+        </button>
+      </Notice>
+    );
+  if (!s) return <p className="text-ink-2">Loading system details…</p>;
   return (
     <div className="space-y-4">
       {!s.db_ok && <Notice tone="err">The database check failed, so syncing is off. See docs/backup-recovery.md.</Notice>}
