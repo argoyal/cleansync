@@ -10,9 +10,11 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
+from app.core.pathsafe import safe_join
 from app.models import Account, SyncPair
 from app.models.enums import AccountStatus
 from app.paths import Layout
@@ -181,7 +183,7 @@ async def prepare_moves(
         if not on_drive and (pair.initialized or listing is None):
             if connected:
                 on_drive = await drive.exists(account, src_target)
-            elif pair.initialized and listing is None:
+            elif pair.initialized:  # no listing, or one that may be out of date
                 raise FileOpError(
                     "DriveSync can't tell whether this item is on Google Drive until the Google "
                     "login is reconnected."
@@ -208,9 +210,50 @@ async def _undo_drive_move(account: Account, item: _Planned, drive: DriveMover) 
     try:
         await drive.move(account, item.dst_target, item.src_target)  # type: ignore[arg-type]
         return True
-    except BaseException:
+    except Exception:  # a cancellation is not swallowed
         log.exception("could not undo the Google Drive move of %s", item.step.src)
         return False
+
+
+async def finish_in_thread(fn, *args):
+    """Run fn in a worker thread and always wait for it to end, even when the request is
+    cancelled: a thread can't be stopped, so the caller must not go on (or release a pair)
+    while it may still be changing files. Returns (result, error, cancelled)."""
+    task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+    cancelled = False
+    while True:
+        try:
+            await asyncio.shield(task)
+            break
+        except asyncio.CancelledError:
+            if task.done():
+                break
+            cancelled = True  # wait on; the caller re-raises once the thread is done
+        except Exception:
+            break
+    error = task.exception()
+    return (None if error else task.result()), error, cancelled
+
+
+def _moved_on_disk(scope: Scope, step: MoveStep) -> bool | None:
+    """True: the item is at its new place; False: still at the old one; None: unclear."""
+    src = safe_join(scope.root, step.src)
+    dst = safe_join(scope.root, step.dst)
+    src_there = src.exists() or src.is_symlink()
+    dst_there = dst.exists() or dst.is_symlink()
+    if src_there and dst_there and os.path.samefile(src, dst):
+        # A case-only rename on a case-insensitive disk: look at the name the folder lists.
+        names = set(os.listdir(dst.parent))
+        if dst.name in names and src.name not in names:
+            return True
+        if src.name in names and dst.name not in names:
+            return False
+        return None
+    if dst_there and not src_there:
+        return True
+    if src_there and not dst_there:
+        return False
+    return None
 
 
 async def _move_one(plan: MovePlan, item: _Planned, drive: DriveMover) -> None:
@@ -218,13 +261,27 @@ async def _move_one(plan: MovePlan, item: _Planned, drive: DriveMover) -> None:
     on_drive = bool(item.src_target and item.dst_target)
     if on_drive:
         await drive.move(account, item.src_target, item.dst_target)  # type: ignore[arg-type]
-    try:
-        await asyncio.to_thread(ops.apply_local, plan.scope, item.step)
-    except BaseException as e:  # also a cancelled request: never leave Drive half done
-        if on_drive and not await _undo_drive_move(account, item, drive):
-            if isinstance(e, Exception):
-                raise UndoFailed(e) from e
-        raise
+    _, error, cancelled = await finish_in_thread(ops.apply_local, plan.scope, item.step)
+    if error is None and not cancelled:
+        return
+    if on_drive:
+        # Decide from the disk, not from the error: a cancelled request may still have
+        # finished the local move in its thread.
+        moved, check_error, again = await finish_in_thread(_moved_on_disk, plan.scope, item.step)
+        cancelled = cancelled or again
+        if error is None and moved is not True:
+            error = FileOpError("the local move did not finish", 500)
+        if moved is False:
+            if not await _undo_drive_move(account, item, drive) and error is not None:
+                raise UndoFailed(error) from error
+        elif moved is None or check_error is not None:
+            log.warning("disk state of %s unclear after a failed move", item.step.src)
+            if error is not None:
+                raise UndoFailed(error) from error
+    if cancelled:
+        raise asyncio.CancelledError()
+    assert error is not None
+    raise error
 
 
 async def run_moves(plan: MovePlan, *, queue, drive: DriveMover) -> list[str]:

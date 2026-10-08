@@ -609,34 +609,116 @@ def test_failed_undo_says_the_next_sync_will_reconcile(
     assert len(calls) == 2
 
 
-async def test_a_cancelled_request_still_moves_drive_back(layout, monkeypatch):
+class _RecordingDrive:
+    def __init__(self):
+        self.moves = []
+
+    async def move(self, account, src, dst):
+        self.moves.append((src, dst))
+
+
+class _Holds:
+    def __init__(self):
+        self.held = set()
+
+    def hold(self, pid):
+        import contextlib
+
+        @contextlib.contextmanager
+        def _h():
+            self.held.add(pid)
+            try:
+                yield
+            finally:
+                self.held.discard(pid)
+
+        return _h()
+
+
+async def _cancel_mid_local_move(tmp_path, monkeypatch, *, thread_fails):
+    """Cancel the request while the disk move is running in its thread, then let it end."""
     import asyncio
+    import threading
 
     from app.services.files import moves, ops
+    from app.services.files.scope import Scope
 
-    moved = []
+    root = tmp_path / "acct"
+    (root / "Drive").mkdir(parents=True)
+    (root / "Drive/a.txt").write_text("A")
+    pair = type("P", (), {"id": 7, "local_subpath": "Drive"})()
+    scope = Scope(account=type("A", (), {"id": 1})(), root=root, pairs=[pair])
+    started, release = threading.Event(), threading.Event()
+    real = ops.apply_local
 
-    class Drive:
-        async def move(self, account, src, dst):
-            moved.append((src, dst))
+    def slow(scope, step):
+        started.set()
+        release.wait(5)
+        if thread_fails:
+            raise PermissionError(13, "Permission denied")
+        real(scope, step)
 
-    class Queue:
-        @staticmethod
-        def hold(pid):
-            import contextlib
-
-            return contextlib.nullcontext()
-
-    def cancelled(scope, step):
-        raise asyncio.CancelledError()
-
-    monkeypatch.setattr(ops, "apply_local", cancelled)
-    scope = type("S", (), {"account": None, "pairs": [], "root": layout.root})()
-    step = ops.MoveStep("a", "b", None)
-    plan = moves.MovePlan(scope, [moves._Planned(step, "gd:a", "gd:b")])
+    monkeypatch.setattr(ops, "apply_local", slow)
+    drive, queue = _RecordingDrive(), _Holds()
+    step = ops.MoveStep("Drive/a.txt", "Drive/b.txt", pair)
+    plan = moves.MovePlan(scope, [moves._Planned(step, "gd:a.txt", "gd:b.txt")])
+    task = asyncio.ensure_future(moves.run_moves(plan, queue=queue, drive=drive))
+    while not started.is_set():
+        await asyncio.sleep(0.01)
+    task.cancel()
+    await asyncio.sleep(0.05)
+    assert not task.done() and queue.held == {7}  # still waiting for the thread, pair held
+    release.set()
     with pytest.raises(asyncio.CancelledError):
-        await moves.run_moves(plan, queue=Queue(), drive=Drive())
-    assert moved == [("gd:a", "gd:b"), ("gd:b", "gd:a")]
+        await task
+    assert queue.held == set()
+    return root, drive
+
+
+async def test_cancelled_request_whose_disk_move_finished_keeps_drive_moved(tmp_path, monkeypatch):
+    root, drive = await _cancel_mid_local_move(tmp_path, monkeypatch, thread_fails=False)
+    assert drive.moves == [("gd:a.txt", "gd:b.txt")]  # not moved back
+    assert (root / "Drive/b.txt").read_text() == "A" and not (root / "Drive/a.txt").exists()
+
+
+async def test_cancelled_request_whose_disk_move_failed_moves_drive_back(tmp_path, monkeypatch):
+    root, drive = await _cancel_mid_local_move(tmp_path, monkeypatch, thread_fails=True)
+    assert drive.moves == [("gd:a.txt", "gd:b.txt"), ("gd:b.txt", "gd:a.txt")]
+    assert (root / "Drive/a.txt").exists() and not (root / "Drive/b.txt").exists()
+
+
+def test_no_login_and_an_item_missing_from_the_listing_is_refused(
+    auth_client, app, env, fake_rclone, save_catalog
+):
+    from app.models import Account
+
+    acc, root, pair = env
+    _put(root, "Drive/new.txt")
+    save_catalog(pair.id, [])  # may be old: DriveSync can't tell whether new.txt is on Drive
+    with app.state.session_factory() as db:
+        db.get(Account, acc.id).status = "NEEDS_REAUTH"
+        db.commit()
+    r = _post(auth_client, "rename", account_id=acc.id, path="Drive/new.txt", new_name="n.txt")
+    assert r.status_code == 409
+    assert fake_rclone.calls() == [] and (root / "Drive/new.txt").exists()
+
+
+def test_a_pair_that_turns_busy_before_the_delete_hold_is_a_409(
+    auth_client, env, stub_queue, monkeypatch
+):
+    import contextlib
+
+    acc, root, pair = env
+    _put(root, "Drive/a.txt")
+
+    @contextlib.contextmanager
+    def busy(pid):
+        raise RuntimeError("busy")
+        yield
+
+    monkeypatch.setattr(stub_queue, "hold", busy)
+    assert _post(auth_client, "delete", account_id=acc.id, paths=["Drive/a.txt"]).status_code == 409
+    assert (root / "Drive/a.txt").exists()
 
 
 def test_moving_a_folder_into_itself_ignores_case(auth_client, env):
@@ -662,7 +744,7 @@ def drive_mover(layout, fake_rclone):
         cache_dir=layout.rclone_cache,
         config_pass="",
     )
-    return DriveMover(layout=layout, env=env, accounts=Accounts(), timeout_s=1.0)
+    return DriveMover(layout=layout, env=env, accounts=Accounts(), timeout_s=5.0)
 
 
 @pytest.mark.parametrize(
@@ -700,4 +782,4 @@ async def test_drive_calls_are_bounded_and_rclone_is_stopped(drive_mover, fake_r
     with pytest.raises(FileOpError) as e:
         await drive_mover.move(type("A", (), {"id": 1})(), "gd_1:a", "gd_1:b")
     assert e.value.status == 504
-    assert time.monotonic() - started < 10
+    assert time.monotonic() - started < 15

@@ -164,12 +164,22 @@ async def delete(
         moves.check_pairs(queue, pair_ids)  # before anything moves
     except ops.FileOpError as e:
         raise _http(e) from e
-    try:
-        # No await between the check and the hold, so no sync can start in between.
+
+    # No await between the check and the hold below, so no sync can start in between.
+    async def delete_held() -> list[str]:
         with moves.hold_pairs(queue, pair_ids):
-            kept = await run_op(
+            # The pair stays held until the thread is done, even if the request is cancelled.
+            kept, error, cancelled = await moves.finish_in_thread(
                 ops.delete_to_recovery, request.app.state.layout, scope, rels, utcnow()
             )
+        if cancelled:
+            raise asyncio.CancelledError()
+        if error is not None:
+            raise error
+        return kept
+
+    try:
+        kept = await guarded(delete_held())
     finally:
         # Also after a failure part-way: earlier items may be gone already.
         syncs = after_change(request, scope, rels)
