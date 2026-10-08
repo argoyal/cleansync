@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 
 import { useLiveEvents } from "../hooks/live";
@@ -9,7 +9,23 @@ export function AppShell({ newButton }: { newButton?: React.ReactNode }) {
   useLiveEvents();
   const [navOpen, setNavOpen] = useState(false);
   const location = useLocation();
+  const drawer = useRef<HTMLElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
   useEffect(() => setNavOpen(false), [location.pathname]);
+  // Focus moves into the drawer when it opens and back to the menu button when it closes.
+  useEffect(() => {
+    if (!navOpen) return;
+    opener.current = document.activeElement as HTMLElement | null;
+    drawer.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setNavOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      opener.current?.focus();
+    };
+  }, [navOpen]);
   return (
     <div className="flex h-full flex-col">
       <TopBar onMenu={() => setNavOpen(true)} />
@@ -19,7 +35,19 @@ export function AppShell({ newButton }: { newButton?: React.ReactNode }) {
         </aside>
         {navOpen && (
           <div className="fixed inset-0 z-40 bg-ink/30 lg:hidden" onClick={() => setNavOpen(false)}>
-            <aside className="h-full w-[280px] bg-bg pl-3 pt-4" onClick={(e) => e.stopPropagation()}>
+            <aside
+              ref={drawer}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Navigation"
+              tabIndex={-1}
+              className="h-full w-[280px] bg-bg pl-3 pt-4 outline-none"
+              onClick={(e) => {
+                e.stopPropagation();
+                // Any link closes the drawer, even one to the page already open.
+                if ((e.target as HTMLElement).closest("a")) setNavOpen(false);
+              }}
+            >
               <SideNav newButton={newButton} />
             </aside>
           </div>

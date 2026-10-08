@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { usePairs } from "../api/queries";
 import type { Pair } from "../api/types";
+import { useDismiss } from "../hooks/useDismiss";
 import { useLiveState, useProgress } from "../hooks/live";
 import { formatBytes, formatSpeed, percent } from "../lib/format";
 import { Icon } from "./Icon";
@@ -33,22 +34,26 @@ export function SyncIndicator() {
   const progress = useProgress();
   const live = useLiveState();
   const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  useDismiss(box, () => setOpen(false), open, trigger);
   const running = pairs.filter((p) => p.status === "RUNNING");
   const transfers = running.flatMap((p) => progress[p.id]?.transferring ?? []);
   const s = summary(pairs, transfers.length);
   const moved = running.reduce((n, p) => n + (progress[p.id]?.bytes ?? 0), 0);
   const total = running.reduce((n, p) => n + (progress[p.id]?.total_bytes ?? 0), 0);
   return (
-    <div className="relative">
+    <div className="relative" ref={box}>
       {running.length > 0 && total > 0 && (
         <div className="fixed inset-x-0 top-0 z-40 h-[3px] bg-run/15" aria-hidden="true">
           <div className="h-full bg-run" style={{ width: `${percent(moved, total)}%` }} />
         </div>
       )}
       <button
+        ref={trigger}
         type="button"
         aria-expanded={open}
-        aria-label={`Sync status: ${s.text}`}
+        aria-label={`Sync status: ${s.text}${live === "retrying" ? ", live updates paused, reconnecting" : ""}`}
         className={`flex h-9 items-center gap-2 rounded-full px-3.5 text-table font-semibold ${s.tone}`}
         onClick={() => setOpen(!open)}
       >
@@ -57,8 +62,8 @@ export function SyncIndicator() {
         {live === "retrying" && <span className="h-1.5 w-1.5 rounded-full bg-warn" title="Live updates paused; reconnecting" />}
       </button>
       {open && (
-        <div className="absolute right-0 top-11 z-50 w-[min(380px,calc(100vw-2rem))] rounded-card border border-line bg-surface p-4 shadow-float">
-          {live === "retrying" && <p className="mb-3 text-table text-warn">Live updates paused. Reconnecting.</p>}
+        <div role="region" aria-label="Sync progress" className="absolute right-0 top-11 z-50 w-[min(380px,calc(100vw-2rem))] rounded-card border border-line bg-surface p-4 shadow-float">
+          {live === "retrying" && <p role="status" className="mb-3 text-table text-warn">Live updates paused. Reconnecting.</p>}
           {running.length === 0 ? (
             <p className="text-ink-2">{s.text}.</p>
           ) : (

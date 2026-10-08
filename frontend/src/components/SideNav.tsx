@@ -20,8 +20,9 @@ function Item({ to, icon, label, badge, end }: { to: string; icon: IconName; lab
       <Icon name={icon} className="text-[20px] text-ink-2" />
       <span className="flex-1 truncate">{label}</span>
       {!!badge && (
-        <span className="rounded-full bg-warn px-2 text-meta font-semibold text-white tabular" aria-label={`${badge} open`}>
-          {badge}
+        <span className="rounded-full bg-warn px-2 text-meta font-semibold text-accent-ink tabular">
+          <span aria-hidden="true">{badge}</span>
+          <span className="sr-only">{badge} open {badge === 1 ? "conflict" : "conflicts"}</span>
         </span>
       )}
     </NavLink>

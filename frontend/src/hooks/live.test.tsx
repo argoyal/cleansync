@@ -70,4 +70,45 @@ describe("live updates", () => {
     view.unmount();
     expect(source.closed).toBe(true);
   });
+
+  it("refetches everything on an open that follows an error, even before any open", () => {
+    vi.useFakeTimers();
+    const { spy, source } = setup();
+    act(() => source.fail());
+    act(() => vi.advanceTimersByTime(1000));
+    const second = FakeEventSource.latest();
+    spy.mockClear();
+    act(() => second.open());
+    expect(spy).toHaveBeenCalledWith();
+  });
+
+  it("re-checks the session on an error and does not flicker to connecting while retrying", () => {
+    vi.useFakeTimers();
+    const { spy, source } = setup();
+    act(() => source.open());
+    act(() => source.fail());
+    expect(keys(spy)).toContain("me");
+    act(() => vi.advanceTimersByTime(1000));
+    expect(liveStore.get()).toBe("retrying");
+  });
+
+  it("ignores a garbled message", () => {
+    const { source } = setup();
+    expect(() =>
+      act(() => {
+        (source as unknown as { listeners: Map<string, ((e: MessageEvent) => void)[]> }).listeners
+          .get("progress")
+          ?.forEach((fn) => fn(new MessageEvent("progress", { data: "not json" })));
+      }),
+    ).not.toThrow();
+    expect(progressStore.get()).toEqual({});
+  });
+
+  it("resets the live state when it unmounts", () => {
+    const { view, source } = setup();
+    act(() => source.open());
+    expect(liveStore.get()).toBe("open");
+    view.unmount();
+    expect(liveStore.get()).toBe("connecting");
+  });
 });

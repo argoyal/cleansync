@@ -52,34 +52,45 @@ export function useLiveEvents(): void {
     let timer: number | undefined;
     let retry = 0;
     let stopped = false;
-    let connectedBefore = false;
+    let hadError = false;
     const invalidate = (keys: string[]) => keys.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
-    const data = (e: Event) => JSON.parse((e as MessageEvent).data as string);
+    const data = (e: Event): unknown => {
+      try {
+        return JSON.parse((e as MessageEvent).data as string);
+      } catch {
+        return null; // a garbled message is skipped, not fatal
+      }
+    };
 
     const connect = () => {
-      liveStore.set(connectedBefore ? "retrying" : "connecting");
+      if (!hadError) liveStore.set("connecting");
       source = new EventSource("/api/events");
       source.onopen = () => {
         retry = 0;
         liveStore.set("open");
-        if (connectedBefore) qc.invalidateQueries();
-        connectedBefore = true;
+        if (hadError) qc.invalidateQueries(); // events sent while away are lost
+        hadError = false;
       };
       source.onerror = () => {
         source?.close();
         if (stopped) return;
+        hadError = true;
         liveStore.set("retrying");
+        // A lost session ends the retrying: the answer is a 401, which sends the person to login.
+        qc.invalidateQueries({ queryKey: ["me"] });
         timer = window.setTimeout(connect, Math.min(30_000, 1000 * 2 ** retry));
         retry += 1;
       };
       source.addEventListener("job", (e) => {
-        const d = data(e) as { pair_id: number; state: string };
+        const d = data(e) as { pair_id: number; state: string } | null;
+        if (!d) return;
         if (d.state !== "RUNNING") clearProgress(d.pair_id);
         invalidate(["pairs", "status", "history", "logs", "activity", "preview", "planned", "conflicts", ...FILE_KEYS]);
       });
       source.addEventListener("pair", () => invalidate(["pairs", "status", "browse"]));
       source.addEventListener("progress", (e) => {
-        const p = data(e) as Progress;
+        const p = data(e) as Progress | null;
+        if (!p) return;
         progressStore.set({ ...progressStore.get(), [p.pair_id]: p });
       });
       source.addEventListener("activity", () => invalidate(["activity"]));
@@ -93,6 +104,8 @@ export function useLiveEvents(): void {
       stopped = true;
       window.clearTimeout(timer);
       source?.close();
+      liveStore.set("connecting");
+      progressStore.set({});
     };
   }, [qc]);
 }

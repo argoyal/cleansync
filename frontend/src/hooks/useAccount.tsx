@@ -28,6 +28,15 @@ function remembered(): number | null {
   }
 }
 
+/** Sign-out: the next person on this browser should not inherit the choice. */
+export function forgetAccount(): void {
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    // nothing stored, nothing to forget
+  }
+}
+
 /** The Google account whose files the whole UI shows (switched from the avatar menu). */
 export function AccountProvider({ children }: { children: ReactNode }) {
   const { data: accounts = [] } = useAccounts();

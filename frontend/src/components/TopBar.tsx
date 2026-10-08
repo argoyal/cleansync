@@ -26,12 +26,16 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
           <Icon name="search" className="text-[20px] text-ink-2" />
           <input
             aria-label="Search files"
+            aria-describedby="search-hint"
             placeholder="Search in this account"
             className="min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-ink-2"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
         </label>
+        <span id="search-hint" className="sr-only">
+          Type at least 2 characters, then press Enter.
+        </span>
       </form>
       <div className="ml-auto flex items-center gap-1 sm:gap-2">
         <SyncIndicator />

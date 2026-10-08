@@ -1,9 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { api, clearCsrfToken, friendlyError } from "../api/client";
-import { useCurrentAccount } from "../hooks/useAccount";
+import { forgetAccount, useCurrentAccount } from "../hooks/useAccount";
+import { useDismiss } from "../hooks/useDismiss";
 import { useConnectGoogle } from "../hooks/useConnect";
 import { Icon } from "./Icon";
 import { ACCOUNT_DOT } from "./StatusBadge";
@@ -28,6 +29,10 @@ export function AccountSwitcher() {
   const { account, accounts, setAccountId } = useCurrentAccount();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const box = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  useDismiss(box, () => setOpen(false), open, trigger);
   const toast = useToast();
   const connect = useConnectGoogle();
   const qc = useQueryClient();
@@ -40,12 +45,14 @@ export function AccountSwitcher() {
       return;
     }
     clearCsrfToken();
+    forgetAccount();
     qc.clear(); // leaving the app also closes the live stream
     navigate("/login", { replace: true });
   };
   return (
-    <div className="relative">
+    <div className="relative" ref={box}>
       <button
+        ref={trigger}
         type="button"
         aria-label={account ? `Account: ${account.email}` : "Accounts"}
         aria-expanded={open}
@@ -56,7 +63,7 @@ export function AccountSwitcher() {
       </button>
       {open && (
         <div
-          role="menu"
+          role="group"
           aria-label="Google accounts"
           className="absolute right-0 top-12 z-50 w-[min(320px,calc(100vw-2rem))] rounded-card border border-line bg-surface py-2 shadow-float"
         >
@@ -64,13 +71,15 @@ export function AccountSwitcher() {
             <button
               key={a.id}
               type="button"
-              role="menuitemradio"
-              aria-checked={a.id === account?.id}
-              className={`flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-sunken ${a.id === account?.id ? "bg-accent-soft" : ""}`}
+              aria-pressed={a.id === account?.id}
+              disabled={a.status === "DISCONNECTED"}
+              className={`flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-50 ${a.id === account?.id ? "bg-accent-soft" : ""}`}
               onClick={() => {
                 setAccountId(a.id);
                 setOpen(false);
-                navigate("/drive");
+                trigger.current?.focus();
+                // Settings and Storage are not about one folder, so stay there.
+                if (!/^\/(settings|storage)(\/|$)/.test(pathname)) navigate("/drive");
               }}
             >
               <Avatar email={a.email} size={30} />
@@ -86,7 +95,6 @@ export function AccountSwitcher() {
           <div className="my-1.5 border-t border-line" />
           <button
             type="button"
-            role="menuitem"
             className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-sunken"
             onClick={() =>
               connect.mutate(undefined, { onError: (e) => toast(friendlyError(e), { tone: "error" }) })
@@ -96,10 +104,10 @@ export function AccountSwitcher() {
           </button>
           <button
             type="button"
-            role="menuitem"
             className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-sunken"
             onClick={() => {
               setOpen(false);
+              trigger.current?.focus();
               navigate("/settings?tab=accounts");
             }}
           >
@@ -107,7 +115,6 @@ export function AccountSwitcher() {
           </button>
           <button
             type="button"
-            role="menuitem"
             className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-sunken"
             onClick={() => void signOut()}
           >
