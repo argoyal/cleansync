@@ -1,0 +1,110 @@
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+_EMAIL_RE = re.compile(r"^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$")
+
+
+def email_dirname(email: str) -> str:
+    name = email.strip().lower()
+    if not _EMAIL_RE.match(name):
+        raise ValueError(f"not a usable email for a folder name: {email!r}")
+    return name
+
+
+@dataclass(frozen=True)
+class Layout:
+    root: Path
+
+    @property
+    def data(self) -> Path:
+        return self.root / "app" / "data"
+
+    @property
+    def db_file(self) -> Path:
+        return self.data / "drivesync.db"
+
+    @property
+    def db_backups(self) -> Path:
+        return self.data / "db-backups"
+
+    @property
+    def rclone_dir(self) -> Path:
+        return self.data / "rclone"
+
+    @property
+    def rclone_conf(self) -> Path:
+        return self.rclone_dir / "rclone.conf"
+
+    @property
+    def rclone_cache(self) -> Path:
+        return self.rclone_dir / "cache"
+
+    @property
+    def bisync_dir(self) -> Path:
+        return self.rclone_dir / "bisync"
+
+    @property
+    def filters_dir(self) -> Path:
+        return self.data / "filters"
+
+    @property
+    def catalog_dir(self) -> Path:
+        return self.data / "catalog"
+
+    @property
+    def previews_dir(self) -> Path:
+        return self.data / "previews"
+
+    @property
+    def backups_dir(self) -> Path:
+        return self.data / "backups"
+
+    @property
+    def thumbs_dir(self) -> Path:
+        return self.data / "thumbs"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.data / "logs"
+
+    @property
+    def jobs_log_dir(self) -> Path:
+        return self.logs_dir / "jobs"
+
+    @property
+    def secrets_dir(self) -> Path:
+        return self.data / "secrets"
+
+    @property
+    def storage(self) -> Path:
+        return self.root / "storage"
+
+    def ensure(self) -> None:
+        for d in (
+            self.db_backups,
+            self.rclone_dir,
+            self.rclone_cache,
+            self.bisync_dir,
+            self.filters_dir,
+            self.catalog_dir,
+            self.previews_dir,
+            self.backups_dir,
+            self.thumbs_dir,
+            self.jobs_log_dir,
+            self.storage,
+            self.secrets_dir,
+        ):
+            d.mkdir(parents=True, exist_ok=True)
+
+    def account_dir(self, email: str) -> Path:
+        return self.storage / email_dirname(email)
+
+    def pair_workdir(self, pair_id: int) -> Path:
+        return self.bisync_dir / str(pair_id)
+
+    def pair_filters(self, pair_id: int) -> Path:
+        return self.filters_dir / f"{pair_id}.txt"
+
+    def job_log(self, job_id: int) -> Path:
+        return self.jobs_log_dir / f"{job_id}.log"
