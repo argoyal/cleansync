@@ -1,5 +1,5 @@
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -188,3 +188,41 @@ def test_a_file_newer_than_the_cached_statuses_is_not_called_synced(
     _write(root, "dropped-in-from-windows.txt")  # no DriveSync action, so no invalidation
     items, _ = _browse(auth_client, acc)
     assert items["dropped-in-from-windows.txt"]["status"] == "upload"
+
+
+@pytest.mark.parametrize("name", [".GOOGLE-exports", "rclone_test"])
+def test_hidden_names_ignore_case(auth_client, setup, make_pair, save_catalog, name):
+    acc, root = setup
+    pair = make_pair(acc, initialized=True)
+    save_catalog(pair.id, [])
+    _write(root, f"{name}/a.txt")
+    _write(root, "ok.txt")
+    items, _ = _browse(auth_client, acc)
+    assert list(items) == ["ok.txt"]
+    r = auth_client.get("/api/browse", params={"account_id": acc.id, "path": name})
+    assert r.status_code == 404
+
+
+def test_folder_and_file_with_the_same_name_are_not_confused(
+    auth_client, setup, make_pair, save_catalog
+):
+    acc, root = setup
+    pair = make_pair(acc, initialized=True)
+    _write(root, "x")  # a file here, a folder on Drive
+    save_catalog(pair.id, [CatalogEntry("x", True, 0, NOW, id="F1")])
+    r = auth_client.get("/api/browse", params={"account_id": acc.id}).json()["items"]
+    local = next(i for i in r if not i["is_dir"])
+    assert local["status"] == "upload" and not local["remote"]
+    assert any(i["is_dir"] and i["remote"] and not i["local"] for i in r)
+
+
+def test_fresh_file_with_a_different_size_is_not_synced(
+    auth_client, setup, make_pair, save_catalog
+):
+    acc, root = setup
+    pair = make_pair(acc, initialized=True)
+    save_catalog(pair.id, [CatalogEntry("n.txt", False, 99, NOW - timedelta(hours=1), id="N1")])
+    _browse(auth_client, acc)  # caches the index
+    _write(root, "n.txt")  # 3 bytes, same mtime, appears after the index
+    items, _ = _browse(auth_client, acc)
+    assert items["n.txt"]["status"] == "upload"

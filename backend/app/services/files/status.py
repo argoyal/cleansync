@@ -7,6 +7,7 @@ or after a minute (to notice edits made outside DriveSync). Open conflicts and t
 """
 
 import asyncio
+import logging
 import os
 import time
 from collections.abc import Iterable
@@ -15,14 +16,16 @@ from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from app.models import Account, Conflict, SyncPair
 from app.models.enums import ConflictState
 from app.paths import Layout
-from app.services.catalog.model import Catalog
-from app.services.files.scope import HIDDEN_NAMES, is_hidden, parent_rel
+from app.services.catalog.model import Catalog, CatalogEntry
+from app.services.files.scope import is_hidden, is_hidden_name, parent_rel
 from app.services.sync.pairs import pair_local_dir
+
+log = logging.getLogger(__name__)
 
 # Least to most serious. "native", "offloaded" and "unsynced" never make a folder worse.
 STATUS_ORDER = ("synced", "unknown", "upload", "download", "syncing", "conflict")
@@ -79,7 +82,7 @@ def _walk(local_dir: Path) -> dict[str, LocalEntry]:
             continue
         with it:
             for e in it:
-                if e.name in HIDDEN_NAMES:
+                if is_hidden_name(e.name):
                     continue
                 try:
                     if e.is_symlink():  # rclone skips links; so does DriveSync
@@ -95,22 +98,29 @@ def _walk(local_dir: Path) -> dict[str, LocalEntry]:
     return found
 
 
+def compare(lf: LocalEntry, ent: CatalogEntry | None) -> str:
+    """Where one local item stands against its Drive entry: synced, upload or download."""
+    if ent is None or ent.is_dir != lf.is_dir:
+        return "upload"
+    if lf.is_dir:
+        return "synced"
+    remote_ts = ent.mtime.timestamp() if ent.mtime else None
+    close = remote_ts is not None and abs(remote_ts - lf.mtime) <= MTIME_SLACK_S
+    if ent.size == lf.size and close:
+        return "synced"
+    newer_here = remote_ts is None or lf.mtime > remote_ts
+    return "upload" if newer_here else "download"
+
+
 def build_index(pair_id: int, local_dir: Path, catalog: Catalog | None) -> PairIndex:
     local = _walk(local_dir)
     status: dict[str, str] = {}
     if catalog is not None:
         files = catalog.files
         for rel, lf in local.items():
-            ent = files.get(rel)
-            if ent is None or ent.is_dir != lf.is_dir:
-                status[rel] = "upload"
-            elif not lf.is_dir:
-                remote_ts = ent.mtime.timestamp() if ent.mtime else None
-                same_size = ent.size == lf.size
-                close = remote_ts is not None and abs(remote_ts - lf.mtime) <= MTIME_SLACK_S
-                if not (same_size and close):
-                    newer_here = remote_ts is None or lf.mtime > remote_ts
-                    status[rel] = "upload" if newer_here else "download"
+            st = compare(lf, files.get(rel))
+            if st != "synced":
+                status[rel] = st
         for rel in files:
             if rel not in local and not is_hidden(rel):
                 status[rel] = "download"
@@ -166,30 +176,36 @@ def load_overlay(db: Session, pair_id: int, running: bool) -> Overlay:
 
 
 class StatusIndexes:
+    """Cached per-pair indexes. A stale index is still served while one background
+    rebuild per pair runs (walking a slow drive can take a while); a request only
+    waits when the pair has no index at all."""
+
     def __init__(
         self,
         *,
         layout: Layout,
-        session_factory: sessionmaker[Session],
         catalog,
         ttl_s: float = 60.0,
         clock=time.monotonic,
     ) -> None:
         self.layout = layout
-        self.session_factory = session_factory
         self.catalog = catalog
         self.ttl_s = ttl_s
         self.clock = clock
         self._cache: dict[int, tuple[float, int, PairIndex]] = {}
         self._gen: dict[int, int] = {}
-        self._locks: dict[int, asyncio.Lock] = {}
+        self._building: dict[int, asyncio.Task] = {}
 
     def invalidate(self, pair_id: int | None = None) -> None:
-        """Forget cached statuses (one pair, or all). Safe from any thread."""
-        ids = [pair_id] if pair_id is not None else list(self._gen)
+        """Mark cached statuses stale (one pair, or all). Safe from any thread."""
+        ids = [pair_id] if pair_id is not None else list(set(self._gen) | set(self._cache))
         for pid in ids:
             self._gen[pid] = self._gen.get(pid, 0) + 1
-            self._cache.pop(pid, None)
+
+    def forget(self, pair_id: int) -> None:
+        """Drop everything about a pair that no longer exists."""
+        self._gen.pop(pair_id, None)
+        self._cache.pop(pair_id, None)
 
     def _fresh(self, pair_id: int, catalog_key: datetime | None) -> PairIndex | None:
         hit = self._cache.get(pair_id)
@@ -202,19 +218,35 @@ class StatusIndexes:
             return None
         return index
 
-    async def get(self, pair: SyncPair, account: Account) -> PairIndex:
+    async def _rebuild(self, pair: SyncPair, local_dir: Path, catalog: Catalog | None) -> None:
+        pid = pair.id
+        gen = self._gen.get(pid, 0)
+        try:
+            index = await asyncio.to_thread(build_index, pid, local_dir, catalog)
+            self._cache[pid] = (self.clock(), gen, index)
+        finally:
+            self._building.pop(pid, None)
+
+    async def get(self, pair: SyncPair, account: Account) -> tuple[PairIndex, Catalog | None]:
+        """The pair's index and the Drive listing it should be shown with."""
         catalog = await asyncio.to_thread(self.catalog.load, pair.id)
         key = catalog.refreshed_at if catalog is not None else None
         index = self._fresh(pair.id, key)
         if index is not None:
-            return index
-        lock = self._locks.setdefault(pair.id, asyncio.Lock())
-        async with lock:
-            index = self._fresh(pair.id, key)
-            if index is not None:
-                return index
-            gen = self._gen.get(pair.id, 0)
+            return index, catalog
+        task = self._building.get(pair.id)
+        if task is None:
             local_dir = pair_local_dir(self.layout, account, pair)
-            index = await asyncio.to_thread(build_index, pair.id, local_dir, catalog)
-            self._cache[pair.id] = (self.clock(), gen, index)
-            return index
+            task = asyncio.ensure_future(self._rebuild(pair, local_dir, catalog))
+            self._building[pair.id] = task
+            task.add_done_callback(_log_failure)
+        stale = self._cache.get(pair.id)
+        if stale is not None:
+            return stale[2], catalog
+        await asyncio.shield(task)
+        return self._cache[pair.id][2], catalog
+
+
+def _log_failure(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        log.warning("status index rebuild failed: %r", task.exception())

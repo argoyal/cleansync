@@ -88,6 +88,9 @@ def delete(
         raise HTTPException(409, "this pair is syncing or queued; try again when it finishes")
     delete_pair(db, request.app.state.layout, request.app.state.catalog_store, pair)
     request.app.state.catalog.forget(pair_id)
+    indexes = getattr(request.app.state, "indexes", None)
+    if indexes is not None:
+        indexes.forget(pair_id)
     _reload_schedule(request)
     return Response(status_code=204)
 

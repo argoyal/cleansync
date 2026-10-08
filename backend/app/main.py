@@ -146,9 +146,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         # the watcher reads the database and disk: keep that off the event loop
         asyncio.get_running_loop().run_in_executor(None, app.state.watcher.reload)
 
-    app.state.indexes = StatusIndexes(
-        layout=layout, session_factory=session_factory, catalog=app.state.catalog
-    )
+    app.state.indexes = StatusIndexes(layout=layout, catalog=app.state.catalog)
     app.state.catalog.listeners.append(app.state.indexes.invalidate)
     app.state.queue = SyncQueue(
         make_handler(

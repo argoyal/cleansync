@@ -15,7 +15,7 @@ router = APIRouter()
 
 
 def get_scope(request: Request, db: Session, account_id: int) -> Scope:
-    scope = load_scope(db, request.app.state.layout, account_id)
+    scope = load_scope(db, request.app.state.layout, account_id, create_root=False)
     if scope is None:
         raise HTTPException(404, "account not found")
     return scope
@@ -35,13 +35,19 @@ async def pair_views(
     request: Request, db: Session, scope: Scope, pairs: list[SyncPair]
 ) -> dict[int, PairView]:
     state = request.app.state
+    loaded = await asyncio.gather(*(state.indexes.get(p, scope.account) for p in pairs))
     views: dict[int, PairView] = {}
-    for pair in pairs:
-        index = await state.indexes.get(pair, scope.account)
-        catalog = await asyncio.to_thread(state.catalog.load, pair.id)
+    for pair, (index, catalog) in zip(pairs, loaded, strict=True):
         overlay = load_overlay(db, pair.id, state.queue.is_running(pair.id))
         views[pair.id] = PairView(index=index, catalog=catalog, overlay=overlay)
     return views
+
+
+def _open_folder(scope: Scope, rel: str) -> bool:
+    """Disk checks for a browse path (runs in a worker thread)."""
+    if rel == "":
+        scope.root.mkdir(parents=True, exist_ok=True)
+    return safe_join(scope.root, rel).is_dir()
 
 
 @router.get("/api/browse", response_model=BrowseOut)
@@ -55,10 +61,10 @@ async def browse(
     scope = get_scope(request, db, account_id)
     rel = clean_path(path)
     try:
-        folder = safe_join(scope.root, rel)
+        is_folder = await asyncio.to_thread(_open_folder, scope, rel)
     except UnsafePath as e:
         raise HTTPException(422, str(e)) from e
-    if not folder.is_dir():
+    if not is_folder:
         raise HTTPException(404, "folder not found")
     pair = pair_for(scope.pairs, rel)
     views = await pair_views(request, db, scope, [pair] if pair else pairs_inside(scope.pairs, rel))

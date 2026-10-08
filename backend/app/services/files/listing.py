@@ -9,13 +9,14 @@ from app.schemas.files import FileItemOut
 from app.services.catalog.model import Catalog, CatalogEntry, google_url
 from app.services.files.mimes import can_thumb, guess_mime
 from app.services.files.scope import (
-    HIDDEN_NAMES,
     Scope,
+    is_hidden_name,
     join_rel,
     pair_for,
+    pairs_inside,
     to_pair_rel,
 )
-from app.services.files.status import Overlay, PairIndex, worst
+from app.services.files.status import LocalEntry, Overlay, PairIndex, compare, worst
 
 
 @dataclass
@@ -85,11 +86,7 @@ def _outside_status(scope: Scope, path: str, is_dir: bool, views: dict[int, Pair
     """A folder outside every pair shows the worst state of the pairs inside it."""
     if not is_dir:
         return "unsynced"
-    inner = [
-        p
-        for p in scope.pairs
-        if p.local_subpath and (p.local_subpath == path or p.local_subpath.startswith(path + "/"))
-    ]
+    inner = pairs_inside(scope.pairs, path)
     if not inner:
         return "unsynced"
     return worst(
@@ -105,10 +102,10 @@ def list_folder(scope: Scope, rel: str, views: dict[int, PairView]) -> list[File
     view = views.get(pair.id) if pair else None
     prel_dir = to_pair_rel(pair, rel) if pair else ""
     items: list[FileItemOut] = []
-    local_names: set[str] = set()
+    local_names: set[tuple[str, bool]] = set()
     with os.scandir(folder) as it:
         for e in it:
-            if e.name in HIDDEN_NAMES:
+            if is_hidden_name(e.name):
                 continue
             try:
                 if e.is_symlink():
@@ -117,7 +114,7 @@ def list_folder(scope: Scope, rel: str, views: dict[int, PairView]) -> list[File
                 is_dir = e.is_dir(follow_symlinks=False)
             except OSError:
                 continue
-            local_names.add(e.name)
+            local_names.add((e.name, is_dir))
             path = join_rel(rel, e.name)
             entry = None
             if pair is None:
@@ -127,10 +124,16 @@ def list_folder(scope: Scope, rel: str, views: dict[int, PairView]) -> list[File
             else:
                 prel = join_rel(prel_dir, e.name)
                 entry = view.catalog.files.get(prel) if view.catalog else None
+                if entry is not None and entry.is_dir != is_dir:
+                    entry = None  # a folder and a file sharing a name are different items
                 if is_dir or prel in view.index.local:
                     status = view.status(prel, is_dir)
                 else:  # appeared after the cached index was built: judge it now
-                    fresh = "unknown" if view.catalog is None else "synced" if entry else "upload"
+                    fresh = (
+                        "unknown"
+                        if view.catalog is None
+                        else compare(LocalEntry(st.st_size, st.st_mtime, False), entry)
+                    )
                     status = view.overlay.apply(prel, fresh, False)
             items.append(
                 make_item(
@@ -147,7 +150,9 @@ def list_folder(scope: Scope, rel: str, views: dict[int, PairView]) -> list[File
             )
     if pair is not None and view is not None and view.catalog is not None:
         for ent in view.catalog.children(prel_dir):
-            if ent.name in HIDDEN_NAMES or (not ent.native and ent.name in local_names):
+            if is_hidden_name(ent.name) or (
+                not ent.native and (ent.name, ent.is_dir) in local_names
+            ):
                 continue
             prel = join_rel(prel_dir, ent.name)
             items.append(

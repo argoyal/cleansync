@@ -94,3 +94,98 @@ def test_overlay_conflicts_and_running():
 def test_worst_ignores_statuses_that_never_make_a_folder_worse():
     assert worst(["synced", "native", "unsynced"]) == "synced"
     assert worst(["upload", "conflict", "download"]) == "conflict"
+
+
+# ---- StatusIndexes -------------------------------------------------------------------------
+import asyncio  # noqa: E402
+import threading  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from app.services.files import status as status_mod  # noqa: E402
+from app.services.files.status import StatusIndexes  # noqa: E402
+
+
+class _Cat:
+    def __init__(self, cat):
+        self.cat = cat
+
+    def load(self, pair_id):
+        return self.cat
+
+
+def _indexes(monkeypatch, tmp_path, cat):
+    monkeypatch.setattr(status_mod, "pair_local_dir", lambda layout, account, pair: tmp_path)
+    return StatusIndexes(layout=None, catalog=_Cat(cat))
+
+
+def test_invalidate_all_marks_every_cached_pair_stale(monkeypatch, tmp_path):
+    cat = _cat(_e("a.txt"))
+    idx = _indexes(monkeypatch, tmp_path, cat)
+    account = SimpleNamespace()
+
+    async def run():
+        for pid in (1, 2):
+            await idx.get(SimpleNamespace(id=pid), account)
+        assert all(idx._fresh(pid, cat.refreshed_at) for pid in (1, 2))
+        idx.invalidate()
+        assert all(idx._fresh(pid, cat.refreshed_at) is None for pid in (1, 2))
+
+    asyncio.run(run())
+
+
+def test_stale_index_is_served_while_one_rebuild_runs(monkeypatch, tmp_path):
+    cat = _cat(_e("a.txt"))
+    idx = _indexes(monkeypatch, tmp_path, cat)
+    pair, account = SimpleNamespace(id=1), SimpleNamespace()
+    gate, calls = threading.Event(), []
+    real = status_mod.build_index
+
+    def slow(*a):
+        calls.append(1)
+        if len(calls) > 1:
+            gate.wait(5)
+        return real(*a)
+
+    monkeypatch.setattr(status_mod, "build_index", slow)
+
+    async def run():
+        old, _ = await idx.get(pair, account)
+        idx.invalidate()
+        got = await asyncio.gather(*(idx.get(pair, account) for _ in range(5)))
+        assert all(g[0] is old for g in got)  # served at once, from the old index
+        await asyncio.sleep(0.05)
+        assert len(calls) == 2  # one rebuild, not five
+        gate.set()
+        await asyncio.gather(*idx._building.values())
+        new, _ = await idx.get(pair, account)
+        assert new is not old and len(calls) == 2
+
+    asyncio.run(run())
+
+
+def test_concurrent_first_requests_share_one_build(monkeypatch, tmp_path):
+    idx = _indexes(monkeypatch, tmp_path, _cat(_e("a.txt")))
+    calls = []
+    real = status_mod.build_index
+    monkeypatch.setattr(status_mod, "build_index", lambda *a: (calls.append(1), real(*a))[1])
+
+    async def run():
+        pair, account = SimpleNamespace(id=1), SimpleNamespace()
+        await asyncio.gather(*(idx.get(pair, account) for _ in range(5)))
+
+    asyncio.run(run())
+    assert len(calls) == 1
+
+
+def test_forget_drops_a_deleted_pair(monkeypatch, tmp_path):
+    idx = _indexes(monkeypatch, tmp_path, None)
+    asyncio.run(idx.get(SimpleNamespace(id=1), SimpleNamespace()))
+    idx.invalidate(1)
+    idx.forget(1)
+    assert 1 not in idx._cache and 1 not in idx._gen
+
+
+def test_hidden_names_ignore_case_in_the_walk(tmp_path):
+    _file(tmp_path, ".Google-Exports/a.docx")
+    _file(tmp_path, "rclone_test")
+    assert build_index(1, tmp_path, None).local == {}

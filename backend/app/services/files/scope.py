@@ -15,10 +15,16 @@ from app.paths import Layout
 
 # Never listed, served, renamed or deleted from the UI.
 HIDDEN_NAMES = frozenset({"RCLONE_TEST", ".google-exports"})
+_HIDDEN_FOLDED = frozenset(n.casefold() for n in HIDDEN_NAMES)
+
+
+def is_hidden_name(name: str) -> bool:
+    """Case-insensitive: the disk may be case-insensitive (Windows, macOS)."""
+    return name.casefold() in _HIDDEN_FOLDED
 
 
 def is_hidden(rel: str) -> bool:
-    return any(part in HIDDEN_NAMES for part in rel.split("/"))
+    return any(is_hidden_name(part) for part in rel.split("/"))
 
 
 def join_rel(base: str, name: str) -> str:
@@ -72,7 +78,9 @@ class Scope:
     pairs: list[SyncPair]
 
 
-def load_scope(db: Session, layout: Layout, account_id: int) -> Scope | None:
+def load_scope(
+    db: Session, layout: Layout, account_id: int, *, create_root: bool = True
+) -> Scope | None:
     account = db.get(Account, account_id)
     if account is None:
         return None
@@ -80,5 +88,6 @@ def load_scope(db: Session, layout: Layout, account_id: int) -> Scope | None:
         db.scalars(select(SyncPair).where(SyncPair.account_id == account.id).order_by(SyncPair.id))
     )
     root = layout.account_dir(account.email)
-    root.mkdir(parents=True, exist_ok=True)
+    if create_root:
+        root.mkdir(parents=True, exist_ok=True)
     return Scope(account=account, root=root, pairs=pairs)
