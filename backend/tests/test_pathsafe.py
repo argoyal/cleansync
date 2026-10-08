@@ -45,3 +45,19 @@ def test_remote_path_rules(bad):
 
 def test_remote_path_trims_slashes():
     assert validate_remote_path("/Work/Projects/") == "Work/Projects"
+
+
+def test_backslash_is_an_ordinary_filename_character(tmp_path):
+    # Linux splits paths on '/' only, so "..\\x" is one filename inside base.
+    result = safe_join(tmp_path, "..\\x")
+    assert result == tmp_path / "..\\x"
+    assert result.parent == tmp_path
+
+
+def test_symlink_loop_raises_unsafe_path(tmp_path):
+    base = tmp_path / "base"
+    base.mkdir()
+    os.symlink(base / "b", base / "a")
+    os.symlink(base / "a", base / "b")
+    with pytest.raises(UnsafePath):
+        safe_join(base, "a/x")
