@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 
 from app.services.events.bus import EventBus, event_stream, record_event
 
@@ -35,6 +36,7 @@ async def test_stream_yields_sse_dicts_until_disconnect():
     assert json.loads(item["data"]) == {"pair_id": 2, "status": "RUNNING"}
     state["gone"] = True
     await gen.aclose()
+    assert bus.subscriber_count == 0
 
 
 def test_record_event_persists_and_publishes(db):
@@ -57,3 +59,38 @@ def test_activity_api_needs_login_and_lists_newest_first(auth_client, app):
 
 def test_events_endpoint_requires_login(client):
     assert client.get("/api/events").status_code == 401
+
+
+async def test_publish_from_worker_thread_reaches_subscriber():
+    bus = EventBus()
+    async with bus.subscribe() as q:
+        await asyncio.to_thread(bus.publish, "job", {"pair_id": 7})
+        start = time.monotonic()
+        item = await asyncio.wait_for(q.get(), 1)
+        assert item == ("job", {"pair_id": 7})
+        assert time.monotonic() - start < 1
+
+
+async def test_publish_without_subscribers_or_loop_is_a_noop():
+    bus = EventBus()
+    await asyncio.to_thread(bus.publish, "job", {"pair_id": 1})
+    bus.publish("job", {"pair_id": 1})
+
+
+def test_record_event_redacts_message_and_data(db):
+    bus = EventBus()
+    seen = []
+    bus.publish = lambda kind, data: seen.append((kind, data))  # type: ignore[method-assign]
+    ev = record_event(
+        db,
+        bus,
+        kind="auth",
+        message="token ya29.abcdef",
+        data={"err": "client_secret=XYZsecret", "nested": ["password=hunter2hunter2"]},
+    )
+    stored = json.dumps({"m": ev.message, "d": ev.data})
+    published = json.dumps(seen[0][1])
+    for text in (stored, published):
+        assert "abcdef" not in text
+        assert "XYZsecret" not in text
+        assert "hunter2hunter2" not in text
