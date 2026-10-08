@@ -1,3 +1,4 @@
+import asyncio
 import os
 import shutil
 import sys
@@ -31,7 +32,6 @@ async def test_changed_file_gets_a_new_preview(tmp_path):
     src = _png(tmp_path / "a.png")
     th = Thumbnails(tmp_path / "thumbs")
     first = await th.get(src)
-    time.sleep(0.01)
     _png(src, color=(200, 0, 0))
     os.utime(src, (time.time() + 5, time.time() + 5))
     assert await th.get(src) != first
@@ -80,12 +80,96 @@ async def test_pdf_first_page_is_rendered_with_pdftoppm(tmp_path):
 
 
 async def test_slow_pdf_is_given_up(tmp_path, monkeypatch):
-    monkeypatch.setattr(t, "PDF_TIMEOUT_S", 0.3)
-    fake = _fake_pdftoppm(tmp_path, "time.sleep(5)")
+    monkeypatch.setattr(t, "PDF_TIMEOUT_S", 1.5)
+    pidfile = tmp_path / "pid"
+    fake = _fake_pdftoppm(
+        tmp_path, f"import os\nopen({str(pidfile)!r}, 'w').write(str(os.getpid()))\ntime.sleep(30)"
+    )
     pdf = tmp_path / "slow.pdf"
     pdf.write_bytes(b"%PDF-1.4")
     with pytest.raises(ThumbError, match="too long"):
         await Thumbnails(tmp_path / "thumbs", pdftoppm=fake).get(pdf)
+    assert _is_dead(int(pidfile.read_text()))
+
+
+def _is_dead(pid):
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+async def test_cancelled_pdf_preview_kills_pdftoppm(tmp_path):
+    pidfile = tmp_path / "pid"
+    fake = _fake_pdftoppm(
+        tmp_path, f"import os\nopen({str(pidfile)!r}, 'w').write(str(os.getpid()))\ntime.sleep(30)"
+    )
+    pdf = tmp_path / "slow.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    task = asyncio.create_task(Thumbnails(tmp_path / "thumbs", pdftoppm=fake).get(pdf))
+    for _ in range(100):
+        if pidfile.exists() and pidfile.read_text():
+            break
+        await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert _is_dead(int(pidfile.read_text()))
+
+
+async def test_failing_pdftoppm_is_an_error(tmp_path):
+    fake = _fake_pdftoppm(tmp_path, "sys.exit(1)")
+    pdf = tmp_path / "bad.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    with pytest.raises(ThumbError, match="could not preview"):
+        await Thumbnails(tmp_path / "thumbs", pdftoppm=fake).get(pdf)
+
+
+async def test_renamed_eps_is_never_decoded(tmp_path):
+    eps = tmp_path / "x.jpg"
+    eps.write_bytes(b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\n")
+    with pytest.raises(ThumbError):
+        await Thumbnails(tmp_path / "thumbs").get(eps)
+
+
+async def test_failed_file_is_not_retried_for_a_while(tmp_path, monkeypatch):
+    calls = []
+    real = t.image_thumb
+    monkeypatch.setattr(t, "image_thumb", lambda s, o: (calls.append(1), real(s, o))[1])
+    broken = tmp_path / "broken.jpg"
+    broken.write_bytes(b"not an image")
+    th = Thumbnails(tmp_path / "thumbs")
+    for _ in range(2):
+        with pytest.raises(ThumbError):
+            await th.get(broken)
+    assert len(calls) == 1
+
+
+async def test_busy_server_says_try_again(tmp_path, monkeypatch):
+    monkeypatch.setattr(t, "QUEUE_WAIT_S", 0.1)
+    th = Thumbnails(tmp_path / "thumbs", max_parallel=1)
+    await th._semaphore().acquire()
+    with pytest.raises(t.ThumbBusy):
+        await th.get(_png(tmp_path / "a.png"))
+
+
+def test_prune_removes_stale_temp_files(tmp_path):
+    old = time.time() - 7200
+    stale_file = tmp_path / "ab" / ".x.webp.1234.tmp"
+    stale_file.parent.mkdir()
+    stale_file.write_bytes(b"x")
+    stale_dir = tmp_path / "tmpabc"
+    stale_dir.mkdir()
+    (stale_dir / "page.png").write_bytes(b"x")
+    fresh = tmp_path / "tmpfresh"
+    fresh.mkdir()
+    for p in (stale_file, stale_dir):
+        os.utime(p, (old, old))
+    prune_thumbs(tmp_path)
+    assert not stale_file.exists() and not stale_dir.exists() and fresh.exists()
 
 
 async def test_missing_pdftoppm_is_explained(tmp_path):

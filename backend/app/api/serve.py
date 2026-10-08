@@ -13,7 +13,7 @@ from app.auth.deps import AuthContext, get_db, require_user
 from app.core.pathsafe import UnsafePath, safe_join
 from app.services.files.mimes import guess_mime, serve_policy
 from app.services.files.scope import is_hidden
-from app.services.files.thumbs import ThumbError
+from app.services.files.thumbs import ThumbBusy, ThumbError
 from app.services.files.zipstream import zip_folder
 
 router = APIRouter()
@@ -126,6 +126,8 @@ async def thumbnail(
         raise HTTPException(404, "file not found")
     try:
         out = await request.app.state.thumbs.get(target)
+    except ThumbBusy as e:
+        raise HTTPException(503, str(e)) from e
     except (ThumbError, OSError) as e:
         raise HTTPException(404, str(e)) from e
     # The UI adds ?v=<modified time> to the address, so a changed file gets a new preview.

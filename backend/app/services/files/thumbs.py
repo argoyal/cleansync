@@ -9,18 +9,25 @@ import hashlib
 import logging
 import os
 import secrets
+import shutil
 import tempfile
-import warnings
+import time
 from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from app.services.files.mimes import can_thumb, guess_mime
+from app.services.files.mimes import THUMB_IMAGE_TYPES, can_thumb, guess_mime
 
 log = logging.getLogger(__name__)
 THUMB_PX = 256
-MAX_PIXELS = 60_000_000  # refuse "decompression bombs": tiny files that unpack to huge images
+MAX_PIXELS = 40_000_000  # refuse "decompression bombs": tiny files that unpack to huge images
 PDF_TIMEOUT_S = 20.0
+QUEUE_WAIT_S = 10.0  # how long a request waits for a free slot before "busy"
+FAIL_MEMORY_S = 3600.0  # a file that failed is not retried for an hour
+STALE_TMP_S = 3600.0
+# Only these decoders may open a file, so a renamed EPS/PS can never reach Ghostscript.
+IMAGE_FORMATS = ["JPEG", "PNG", "GIF", "WEBP", "BMP", "TIFF"]
+assert len(THUMB_IMAGE_TYPES) == 6  # keep IMAGE_FORMATS in step with the mime list
 CACHE_MAX_BYTES = 512 * 1024 * 1024
 CACHE_KEEP_BYTES = 384 * 1024 * 1024
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
@@ -28,6 +35,10 @@ Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 
 class ThumbError(Exception):
     pass
+
+
+class ThumbBusy(Exception):
+    """Too many previews are being made right now."""
 
 
 def _save_webp(im: Image.Image, out: Path) -> None:
@@ -40,25 +51,18 @@ def _save_webp(im: Image.Image, out: Path) -> None:
 
 
 def image_thumb(src: Path, out: Path) -> None:
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", Image.DecompressionBombWarning)
-        try:
-            with Image.open(src) as opened:
-                if opened.width * opened.height > MAX_PIXELS:
-                    raise ThumbError("the image is too large to preview")
-                opened.draft("RGB", (THUMB_PX * 2, THUMB_PX * 2))  # fast path for JPEG
-                im = ImageOps.exif_transpose(opened)
-                im.thumbnail((THUMB_PX, THUMB_PX))
-                if im.mode not in ("RGB", "RGBA"):
-                    im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
-                _save_webp(im, out)
-        except (
-            OSError,
-            ValueError,
-            Image.DecompressionBombError,
-            Image.DecompressionBombWarning,
-        ) as e:
-            raise ThumbError(f"could not read the image: {e}") from e
+    try:
+        with Image.open(src, formats=IMAGE_FORMATS) as opened:
+            if opened.width * opened.height > MAX_PIXELS:
+                raise ThumbError("the image is too large to preview")
+            opened.draft("RGB", (THUMB_PX * 2, THUMB_PX * 2))  # fast path for JPEG
+            im = ImageOps.exif_transpose(opened)
+            im.thumbnail((THUMB_PX, THUMB_PX))
+            if im.mode not in ("RGB", "RGBA"):
+                im = im.convert("RGBA" if "A" in im.getbands() else "RGB")
+            _save_webp(im, out)
+    except (OSError, ValueError, Image.DecompressionBombError) as e:
+        raise ThumbError(f"could not read the image: {e}") from e
 
 
 class Thumbnails:
@@ -67,6 +71,12 @@ class Thumbnails:
         self.pdftoppm = pdftoppm
         self._max_parallel = max_parallel
         self._sem: asyncio.Semaphore | None = None
+        self._failed: dict[Path, tuple[float, str]] = {}
+
+    def _semaphore(self) -> asyncio.Semaphore:
+        if self._sem is None:
+            self._sem = asyncio.Semaphore(self._max_parallel)
+        return self._sem
 
     def cache_path(self, src: Path, st: os.stat_result) -> Path:
         key = hashlib.sha256(
@@ -86,15 +96,29 @@ class Thumbnails:
             except OSError:
                 pass
             return out
-        if self._sem is None:
-            self._sem = asyncio.Semaphore(self._max_parallel)
-        async with self._sem:
+        failed = self._failed.get(out)
+        if failed and failed[0] > time.monotonic():
+            raise ThumbError(failed[1])
+        sem = self._semaphore()
+        try:
+            await asyncio.wait_for(sem.acquire(), QUEUE_WAIT_S)
+        except TimeoutError:
+            raise ThumbBusy("busy, try again") from None
+        try:
             if not out.exists():
                 out.parent.mkdir(parents=True, exist_ok=True)
-                if mime == "application/pdf":
-                    await self._pdf(src, out)
-                else:
-                    await asyncio.to_thread(image_thumb, src, out)
+                try:
+                    if mime == "application/pdf":
+                        await self._pdf(src, out)
+                    else:
+                        await asyncio.to_thread(image_thumb, src, out)
+                except ThumbError as e:
+                    if len(self._failed) > 5000:
+                        self._failed.clear()
+                    self._failed[out] = (time.monotonic() + FAIL_MEMORY_S, str(e))
+                    raise
+        finally:
+            sem.release()
         return out
 
     async def _pdf(self, src: Path, out: Path) -> None:
@@ -120,11 +144,14 @@ class Thumbnails:
             except FileNotFoundError as e:
                 raise ThumbError("PDF previews need poppler-utils (pdftoppm)") from e
             try:
-                code = await asyncio.wait_for(proc.wait(), PDF_TIMEOUT_S)
-            except TimeoutError:
-                proc.kill()
-                await proc.wait()
-                raise ThumbError("the PDF took too long to preview") from None
+                try:
+                    code = await asyncio.wait_for(proc.wait(), PDF_TIMEOUT_S)
+                except TimeoutError:
+                    raise ThumbError("the PDF took too long to preview") from None
+            finally:
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
             png = prefix.with_suffix(".png")
             if code != 0 or not png.is_file():
                 raise ThumbError("could not preview the PDF")
@@ -135,6 +162,13 @@ def prune_thumbs(
     cache_dir: Path, max_bytes: int = CACHE_MAX_BYTES, keep_bytes: int = CACHE_KEEP_BYTES
 ) -> int:
     """When the cache is over max_bytes, delete least recently used previews down to keep_bytes."""
+    cutoff = time.time() - STALE_TMP_S
+    for p in [*cache_dir.rglob("*.tmp"), *cache_dir.glob("tmp*")]:
+        try:
+            if p.stat().st_mtime < cutoff:
+                shutil.rmtree(p) if p.is_dir() else p.unlink(missing_ok=True)
+        except OSError:
+            pass
     files = []
     for p in cache_dir.rglob("*.webp"):
         try:
