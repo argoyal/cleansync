@@ -84,12 +84,20 @@ def test_counters_still_accept_path_prefix_form():
 
 
 def test_one_way_dry_run_delete_lines():
-    assert count_dry_run_deletes(
-        parse_line(
-            jl("Skipped delete as --dry-run is set (size 3)", level="notice", object="a.txt")
+    line = parse_line(
+        jl(
+            "Skipped delete as --dry-run is set (size 3)",
+            level="notice",
+            skipped="delete",
+            object="a.txt",
         )
     )
-    assert not count_dry_run_deletes(parse_line(jl("Skipped copy as --dry-run is set")))
+    assert line.skipped == "delete"
+    assert count_dry_run_deletes(line)
+    copy = parse_line(jl("Skipped copy as --dry-run is set", skipped="copy"))
+    assert not count_dry_run_deletes(copy)
+    # Counted from the structured field, not the wording of the message.
+    assert not count_dry_run_deletes(parse_line(jl("Skipped delete as --dry-run is set")))
 
 
 def test_check_combined_lines():
@@ -162,3 +170,46 @@ def test_counters_prefer_unmasked_text():
         )
     )
     assert c.planned == [("remote", "delete", "token=abc.txt")]
+
+
+def test_counters_track_roots_success_and_final_stats():
+    c = Counters()
+    assert not c.has_roots and not c.bisync_successful and c.final_stats is None
+    c.feed(parse_line(jl('Synching Path1 "/l/p1/" with Path2 "gd:Docs/"')))
+    c.feed(parse_line(jl("x", stats={"deletes": 1})))
+    c.feed(parse_line(jl("Bisync successful")))
+    c.feed(parse_line(jl("final", stats={"deletes": 3})))
+    assert c.has_roots and c.bisync_successful and c.final_stats == {"deletes": 3}
+
+
+def test_counters_read_conflict_variant_names_from_rename_lines():
+    c = Counters()
+    c.feed(parse_line(jl('Synching Path1 "/l/p1/" with Path2 "gd:Docs/"')))
+    c.feed(parse_line(jl("- WARNING  New or changed in both paths       - sub/both.txt")))
+    c.feed(
+        parse_line(
+            jl("- Path1    Renaming Path1 copy                - /l/p1/sub/both.conflict3.txt")
+        )
+    )
+    c.feed(
+        parse_line(
+            jl("- Path2    Renaming Path2 copy                - gd:Docs/sub/both.conflict4.txt")
+        )
+    )
+    assert c.conflict_paths == ["sub/both.txt"]
+    assert c.conflict_variants == {
+        "sub/both.txt": ("sub/both.conflict3.txt", "sub/both.conflict4.txt")
+    }
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        'too many deletes (>50%, 5 of 7) on Path1 "/l/". Run with --force if desired.',
+        "Failed to bisync: Too Many Deletes",
+        "Got fatal error on delete: --max-delete threshold reached",
+    ],
+)
+def test_delete_brakes_are_their_own_failure_class(msg):
+    assert classify_failure(1, [msg]) == Failure.TOO_MANY_DELETES
+    assert classify_failure(7, [msg]) == Failure.TOO_MANY_DELETES

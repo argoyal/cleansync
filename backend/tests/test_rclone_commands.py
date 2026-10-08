@@ -387,3 +387,23 @@ def test_sync_and_check_use_filter_from_not_filters_file():
         assert "--filters-file" not in args
         assert args[args.index("--filter-from") + 1] == "/f"
     assert "--filters-file" in c.bisync_args(ENV, T, dry_run=True)
+
+
+def test_one_way_sync_max_delete_is_emitted():
+    args = c.sync_args(
+        ENV, "/l/Docs", "gd_1:Docs", T.filters_file, None, dry_run=False, max_delete=4
+    )
+    assert args[args.index("--max-delete") + 1] == "4"
+    assert "--max-delete" not in c.sync_args(
+        ENV, "/l/Docs", "gd_1:Docs", T.filters_file, None, dry_run=False
+    )
+    zero = c.sync_args(
+        ENV, "/l/Docs", "gd_1:Docs", T.filters_file, None, dry_run=False, max_delete=0
+    )
+    assert zero[zero.index("--max-delete") + 1] == "0"
+
+
+@pytest.mark.parametrize("bad", [-1, True, 1.5, "3"])
+def test_one_way_sync_max_delete_rejects_bad_values(bad):
+    with pytest.raises(ValueError):
+        c.sync_args(ENV, "/l", "gd_1:Docs", T.filters_file, None, dry_run=False, max_delete=bad)

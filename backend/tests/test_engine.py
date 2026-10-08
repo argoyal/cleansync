@@ -5,8 +5,38 @@ from sqlalchemy import select
 
 from app.core.clock import as_utc, utcnow
 from app.models import Account, Conflict, PlannedChange, SyncJob, SyncPair
+from app.services.sync import engine as engine_mod
 from app.services.sync.engine import backoff
 from tests.fake_rclone import jl
+
+ROOTS = jl('Synching Path1 "/l/" with Path2 "gd:/"')
+OK = jl("Bisync successful")
+
+
+def stats(deletes=0):
+    return jl("\nTransferred: 0 B / 0 B", level="notice", stats={"bytes": 0, "deletes": deletes})
+
+
+def bplan(*lines, deletes=0):
+    """A complete, readable bisync dry-run plan: roots line, lines, success, final stats."""
+    return [ROOTS, *lines, OK, stats(deletes)]
+
+
+def splan(*lines, deletes=0):
+    return [*lines, stats(deletes)]
+
+
+def skipped_delete(path):
+    return jl(
+        "Skipped delete as --dry-run is set (size 3)",
+        level="notice",
+        skipped="delete",
+        object=path,
+    )
+
+
+def _real_calls(fake_rclone, sub="bisync"):
+    return [c for c in fake_rclone.calls() if c[4] == sub and "--dry-run" not in c]
 
 
 def _ready_pair(make_account, make_pair, **kw):
@@ -30,7 +60,7 @@ async def test_clean_run_records_counts_and_marks_healthy(
 ):
     acc, pair = _ready_pair(make_account, make_pair)
     up = jl("- Path1    Queue copy to Path2                 - {path2/}new.txt")
-    fake_rclone.on("bisync", match=["--dry-run"], stderr=[up])
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(up))
     fake_rclone.on("bisync", not_match=["--dry-run"], stderr=[up])
     job_id = await sync_engine.run_pair(pair.id, "MANUAL")
     jobs = _jobs(db, pair.id)
@@ -44,6 +74,7 @@ async def test_bisync_runs_with_backup_dir_under_app_data(
     sync_engine, make_account, make_pair, fake_rclone, layout
 ):
     acc, pair = _ready_pair(make_account, make_pair)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
     await sync_engine.run_pair(pair.id, "MANUAL")
     real = [c for c in fake_rclone.calls() if c[4] == "bisync" and "--dry-run" not in c][0]
     backup = real[real.index("--backup-dir1") + 1]
@@ -55,7 +86,7 @@ async def test_too_many_deletions_block_and_nothing_changes(
     sync_engine, make_account, make_pair, fake_rclone, db
 ):
     acc, pair = _ready_pair(make_account, make_pair, max_deletions=10)
-    fake_rclone.on("bisync", match=["--dry-run"], stderr=_deletes(11))
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(11)))
     await sync_engine.run_pair(pair.id, "SCHEDULE")
     assert [c for c in fake_rclone.calls() if "--dry-run" not in c and c[4] == "bisync"] == []
     jobs = _jobs(db, pair.id)
@@ -71,7 +102,7 @@ async def test_deletions_at_the_limit_are_allowed(
     sync_engine, make_account, make_pair, fake_rclone, db
 ):
     acc, pair = _ready_pair(make_account, make_pair, max_deletions=10)
-    fake_rclone.on("bisync", match=["--dry-run"], stderr=_deletes(10))
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(10)))
     await sync_engine.run_pair(pair.id, "SCHEDULE")
     assert [j.kind for j in _jobs(db, pair.id)] == ["DRY_RUN", "BISYNC"]
 
@@ -79,17 +110,56 @@ async def test_deletions_at_the_limit_are_allowed(
 async def test_override_once_applies_to_one_run_only(
     sync_engine, make_account, make_pair, fake_rclone, db
 ):
-    acc, pair = _ready_pair(make_account, make_pair, max_deletions=1, override_next=True)
-    fake_rclone.on("bisync", match=["--dry-run"], stderr=_deletes(5))
-    await sync_engine.run_pair(pair.id, "MANUAL")
-    await sync_engine.run_pair(pair.id, "MANUAL")
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=1)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(5)))
+    await sync_engine.run_pair(pair.id, "MANUAL")  # blocked: 5 planned
+    db.refresh(pair)
+    pair.override_next = True
+    db.commit()
+    await sync_engine.run_pair(pair.id, "MANUAL")  # same plan, override applies
+    await sync_engine.run_pair(pair.id, "MANUAL")  # override used up
     jobs = _jobs(db, pair.id)
     assert [(j.kind, j.state) for j in jobs] == [
+        ("DRY_RUN", "BLOCKED"),
         ("DRY_RUN", "SUCCESS"),
         ("BISYNC", "SUCCESS"),
         ("DRY_RUN", "BLOCKED"),
     ]
-    assert jobs[1].override_used is True
+    assert jobs[2].override_used is True
+
+
+async def test_override_is_not_applied_when_the_plan_grew(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    from app.models import Event
+
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=1)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(5)))
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    db.refresh(pair)
+    pair.override_next = True
+    db.commit()
+    fake_rclone.plan_file.write_text("{}")
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(6)))
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    assert _real_calls(fake_rclone) == []
+    jobs = _jobs(db, pair.id)
+    assert [(j.state, j.planned_deletions) for j in jobs] == [("BLOCKED", 5), ("BLOCKED", 6)]
+    planned = db.scalars(select(PlannedChange).where(PlannedChange.job_id == jobs[1].id)).all()
+    assert len(planned) == 6
+    db.refresh(pair)
+    assert pair.override_next is False
+    msgs = db.scalars(select(Event.message)).all()
+    assert any("override not applied: plan changed from 5 to 6 deletions" in m for m in msgs)
+
+
+async def test_override_without_an_earlier_blocked_plan_is_not_applied(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=1, override_next=True)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(5)))
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    assert [j.state for j in _jobs(db, pair.id)] == ["BLOCKED"]
 
 
 async def test_access_check_failure_marks_pair_error(
@@ -106,7 +176,10 @@ async def test_access_check_failure_marks_pair_error(
     assert [c for c in fake_rclone.calls() if "--dry-run" not in c and c[4] == "bisync"] == []
     db.refresh(pair)
     assert (pair.status, pair.attention_reason) == ("ERROR", "ACCESS_CHECK")
-    assert "mounted" in pair.last_error
+    assert pair.last_error == (
+        "Marker file RCLONE_TEST is missing on one side. Is the storage mounted? "
+        "Nothing was changed."
+    )
 
 
 async def test_auth_failure_marks_account_needs_reauth(
@@ -129,6 +202,7 @@ async def test_transient_failure_sets_backoff(
     sync_engine, make_account, make_pair, fake_rclone, db
 ):
     acc, pair = _ready_pair(make_account, make_pair)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
     fake_rclone.on(
         "bisync",
         not_match=["--dry-run"],
@@ -152,6 +226,7 @@ async def test_conflict_is_recorded_with_both_versions(
 ):
     acc, pair = _ready_pair(make_account, make_pair)
     root = layout.account_dir(acc.email)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
     fake_rclone.on(
         "bisync",
         not_match=["--dry-run"],
@@ -193,7 +268,7 @@ async def test_one_way_remote_to_local_uses_sync_with_gate(
     fake_rclone.on(
         "sync",
         match=["--dry-run"],
-        stderr=[jl("Skipped delete as --dry-run is set (size 3)", level="notice", object="x.txt")],
+        stderr=splan(skipped_delete("x.txt")),
     )
     await sync_engine.run_pair(pair.id, "SCHEDULE")
     call = fake_rclone.calls()[0]
@@ -209,7 +284,7 @@ async def test_job_log_is_written_and_redacted(
     sync_engine, make_account, make_pair, fake_rclone, db
 ):
     acc, pair = _ready_pair(make_account, make_pair)
-    fake_rclone.on("bisync", stderr=[jl("refresh 1//0gSECRETSECRETSECRET")])
+    fake_rclone.on("bisync", stderr=bplan(jl("refresh 1//0gSECRETSECRETSECRET")))
     await sync_engine.run_pair(pair.id, "MANUAL")
     job = _jobs(db, pair.id)[-1]
     text = open(job.log_path).read()
@@ -224,7 +299,7 @@ async def test_blocked_plan_keeps_real_file_names(
     fake_rclone.on(
         "bisync",
         match=["--dry-run"],
-        stderr=[jl("- Path2    Queue delete                        - {path2/}token=abc.txt")],
+        stderr=bplan(jl("- Path2    Queue delete                        - {path2/}token=abc.txt")),
     )
     await sync_engine.run_pair(pair.id, "SCHEDULE")
     job = _jobs(db, pair.id)[0]
@@ -241,13 +316,7 @@ async def test_one_way_blocked_plan_keeps_real_file_names(
     fake_rclone.on(
         "sync",
         match=["--dry-run"],
-        stderr=[
-            jl(
-                "Skipped delete as --dry-run is set (size 3)",
-                level="notice",
-                object="password=x.txt",
-            )
-        ],
+        stderr=splan(skipped_delete("password=x.txt")),
     )
     await sync_engine.run_pair(pair.id, "SCHEDULE")
     job = _jobs(db, pair.id)[0]
@@ -269,3 +338,196 @@ async def test_runner_crash_does_not_leave_pair_running(make_account, make_pair,
     assert "rclone binary missing" in jobs[0].error_message
     db.refresh(pair)
     assert (pair.status, pair.attention_reason) == ("ERROR", "FAILED")
+
+
+@pytest.mark.parametrize(
+    "dry_lines",
+    [
+        [jl("something rclone never said before")],  # nothing recognisable
+        [jl("Bisync successful"), stats()],  # no roots line
+        [ROOTS, stats()],  # no "Bisync successful"
+        [ROOTS, OK],  # no final stats
+    ],
+)
+async def test_unreadable_bisync_plan_fails_closed(
+    sync_engine, make_account, make_pair, fake_rclone, db, dry_lines
+):
+    acc, pair = _ready_pair(make_account, make_pair)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=dry_lines)
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    assert _real_calls(fake_rclone) == []
+    jobs = _jobs(db, pair.id)
+    assert [(j.kind, j.state) for j in jobs] == [("DRY_RUN", "FAILED")]
+    assert jobs[0].error_message == "Couldn't read rclone's plan; nothing was changed"
+    db.refresh(pair)
+    assert (pair.status, pair.attention_reason) == ("ATTENTION", "PLAN_UNREADABLE")
+
+
+async def test_unreadable_one_way_plan_fails_closed(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, direction="LOCAL_TO_REMOTE")
+    fake_rclone.on("sync", match=["--dry-run"], stderr=[skipped_delete("a.txt")])  # no stats
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    assert _real_calls(fake_rclone, "sync") == []
+    assert [j.state for j in _jobs(db, pair.id)] == ["FAILED"]
+
+
+async def test_gate_uses_final_stats_when_they_show_more_deletes(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=10)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*_deletes(2), deletes=40))
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    assert _real_calls(fake_rclone) == []
+    jobs = _jobs(db, pair.id)
+    assert [(j.state, j.planned_deletions) for j in jobs] == [("BLOCKED", 40)]
+
+
+async def test_one_way_counts_structured_skipped_deletes_only(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, direction="LOCAL_TO_REMOTE", max_deletions=0)
+    # A delete line rclone words differently is still counted from its "skipped" field.
+    reworded = jl("Not deleting (dry run)", level="notice", skipped="delete", object="b.txt")
+    copy = jl("Skipped copy as --dry-run is set", level="notice", skipped="copy", object="c")
+    fake_rclone.on("sync", match=["--dry-run"], stderr=splan(reworded, copy))
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    jobs = _jobs(db, pair.id)
+    assert [(j.state, j.planned_deletions) for j in jobs] == [("BLOCKED", 1)]
+
+
+async def test_one_way_real_run_is_capped_at_the_limit(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, direction="LOCAL_TO_REMOTE", max_deletions=7)
+    fake_rclone.on("sync", match=["--dry-run"], stderr=splan(skipped_delete("a.txt")))
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    real = _real_calls(fake_rclone, "sync")[0]
+    assert real[real.index("--max-delete") + 1] == "7"
+    assert [j.state for j in _jobs(db, pair.id)] == ["SUCCESS", "SUCCESS"]
+
+
+async def test_one_way_override_caps_the_real_run_at_the_approved_count(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair, direction="LOCAL_TO_REMOTE", max_deletions=1)
+    dels = [skipped_delete(f"f{i}.txt") for i in range(3)]
+    fake_rclone.on("sync", match=["--dry-run"], stderr=splan(*dels))
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    db.refresh(pair)
+    pair.override_next = True
+    db.commit()
+    await sync_engine.run_pair(pair.id, "MANUAL")
+    real = _real_calls(fake_rclone, "sync")[0]
+    assert real[real.index("--max-delete") + 1] == "3"
+
+
+async def test_bisync_safety_brake_blocks_without_retry(
+    sync_engine, make_account, make_pair, fake_rclone, db
+):
+    acc, pair = _ready_pair(make_account, make_pair)
+    fake_rclone.on(
+        "bisync",
+        match=["--dry-run"],
+        exit=1,
+        stderr=[
+            jl(
+                'too many deletes (>50%, 5 of 7) on Path1 "/l/". Run with --force if desired.',
+                level="error",
+            ),
+            jl("Failed to bisync: too many deletes", level="notice"),
+        ],
+    )
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    db.refresh(pair)
+    assert (pair.status, pair.attention_reason) == ("ATTENTION", "BLOCKED")
+    assert "50%" in pair.last_error
+    assert pair.fail_count == 0 and pair.next_retry_at is None
+    assert _real_calls(fake_rclone) == []
+
+
+async def test_conflict_uses_rclone_variant_names_and_counts_new_rows(
+    sync_engine, make_account, make_pair, fake_rclone, layout, db
+):
+    acc, pair = _ready_pair(make_account, make_pair)
+    root = layout.account_dir(acc.email)
+    for n in (1, 2):  # an older, still open conflict on the same file
+        (root / f"report.conflict{n}.xlsx").write_text("old")
+    db.add(
+        Conflict(
+            pair_id=pair.id,
+            path="report.xlsx",
+            local_variant="report.conflict1.xlsx",
+            remote_variant="report.conflict2.xlsx",
+        )
+    )
+    db.commit()
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
+    fake_rclone.on(
+        "bisync",
+        not_match=["--dry-run"],
+        stderr=[
+            jl("- WARNING  New or changed in both paths        - report.xlsx"),
+            jl("- Path1    Renaming Path1 copy                - {path1/}report.conflict3.xlsx"),
+            jl("- Path2    Renaming Path2 copy                - {path2/}report.conflict4.xlsx"),
+        ],
+        create_files=[root / "report.conflict3.xlsx", root / "report.conflict4.xlsx"],
+    )
+    job_id = await sync_engine.run_pair(pair.id, "SCHEDULE")
+    rows = db.scalars(select(Conflict).order_by(Conflict.id)).all()
+    assert [(c.local_variant, c.remote_variant) for c in rows] == [
+        ("report.conflict1.xlsx", "report.conflict2.xlsx"),
+        ("report.conflict3.xlsx", "report.conflict4.xlsx"),
+    ]
+    assert db.get(SyncJob, job_id).conflicts == 1
+
+
+async def test_conflicts_are_recorded_even_when_the_run_fails(
+    sync_engine, make_account, make_pair, fake_rclone, layout, db
+):
+    acc, pair = _ready_pair(make_account, make_pair)
+    root = layout.account_dir(acc.email)
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
+    fake_rclone.on(
+        "bisync",
+        not_match=["--dry-run"],
+        exit=5,
+        stderr=[
+            jl("- WARNING  New or changed in both paths        - a.txt"),
+            jl("- WARNING  New or changed in both paths        - ghost.txt"),
+            jl("connection reset by peer", level="error"),
+        ],
+        create_files=[root / "a.conflict1.txt", root / "a.conflict2.txt"],
+    )
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    rows = db.scalars(select(Conflict)).all()
+    assert [(c.path, c.local_variant) for c in rows] == [("a.txt", "a.conflict1.txt")]
+    assert _jobs(db, pair.id)[-1].state == "FAILED"
+
+
+@pytest.mark.parametrize("reason", ["BLOCKED", "ACCESS_CHECK", "NEEDS_RESYNC"])
+async def test_schedule_and_watcher_do_not_retry_pairs_waiting_for_the_user(
+    sync_engine, make_account, make_pair, fake_rclone, db, reason
+):
+    acc, pair = _ready_pair(make_account, make_pair)
+    pair.status, pair.attention_reason = "ATTENTION", reason
+    db.commit()
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan())
+    assert await sync_engine.run_pair(pair.id, "SCHEDULE") is None
+    assert await sync_engine.run_pair(pair.id, "WATCHER") is None
+    assert fake_rclone.calls() == []
+    assert await sync_engine.run_pair(pair.id, "MANUAL") is not None
+
+
+async def test_capped_planned_rows_keep_deletes_first(
+    sync_engine, make_account, make_pair, fake_rclone, db, monkeypatch
+):
+    monkeypatch.setattr(engine_mod, "_MAX_PLANNED_ROWS", 2)
+    acc, pair = _ready_pair(make_account, make_pair, max_deletions=0)
+    copies = [jl(f"- Path1    Queue copy to Path2    - {{path2/}}c{i}.txt") for i in range(3)]
+    fake_rclone.on("bisync", match=["--dry-run"], stderr=bplan(*copies, *_deletes(2)))
+    await sync_engine.run_pair(pair.id, "SCHEDULE")
+    job = _jobs(db, pair.id)[0]
+    planned = db.scalars(select(PlannedChange).where(PlannedChange.job_id == job.id)).all()
+    assert [p.action for p in planned] == ["delete", "delete"]

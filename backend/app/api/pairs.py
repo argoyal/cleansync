@@ -10,7 +10,7 @@ from app.services.sync.pairs import PairError, create_pair, delete_pair, to_out,
 
 router = APIRouter(prefix="/api/sync-pairs")
 
-_ATTENTION = {"BLOCKED", "CONFLICTS", "NEEDS_RESYNC", "AUTH"}
+_ATTENTION = {"BLOCKED", "CONFLICTS", "NEEDS_RESYNC", "AUTH", "PLAN_UNREADABLE"}
 _ERRORS = {"ACCESS_CHECK", "FAILED"}
 
 

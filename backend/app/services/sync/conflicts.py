@@ -14,6 +14,7 @@ def _rel(parent: PurePosixPath, name: str) -> str:
 
 
 def find_variants(local_dir: Path, rel: str) -> tuple[str, str] | None:
+    """The newest complete pair of conflict copies on disk: (conflict2k-1, conflict2k)."""
     p = PurePosixPath(rel)
     folder = local_dir / p.parent
     if not folder.is_dir():
@@ -28,9 +29,11 @@ def find_variants(local_dir: Path, rel: str) -> tuple[str, str] | None:
             m = pat.match(entry.name)
             if m:
                 found.setdefault(int(m.group(1)), _rel(p.parent, entry.name))
-    if 1 in found and 2 in found:
-        return found[1], found[2]
-    return None
+    pairs = [n for n in found if n % 2 == 0 and n - 1 in found]
+    if not pairs:
+        return None
+    k = max(pairs)
+    return found[k - 1], found[k]
 
 
 def _stat(local_dir: Path, rel: str) -> tuple[int | None, datetime | None]:
@@ -41,19 +44,50 @@ def _stat(local_dir: Path, rel: str) -> tuple[int | None, datetime | None]:
     return st.st_size, datetime.fromtimestamp(st.st_mtime, UTC)
 
 
-def record_conflicts(db: Session, pair: SyncPair, local_dir: Path, paths: list[str]) -> int:
+def _variants(
+    local_dir: Path, path: str, named: dict[str, tuple[str | None, str | None]]
+) -> tuple[str, str]:
+    local_v, remote_v = named.get(path, (None, None))
+    if local_v and remote_v:
+        return local_v, remote_v
+    return find_variants(local_dir, path) or ("", "")
+
+
+def record_conflicts(
+    db: Session,
+    pair: SyncPair,
+    local_dir: Path,
+    paths: list[str],
+    variants: dict[str, tuple[str | None, str | None]] | None = None,
+    *,
+    require_files: bool = False,
+) -> int:
+    """Add a row per new conflict; returns how many rows were added.
+
+    Variant names come from rclone's own rename lines when known, else the newest pair on disk.
+    With require_files, a conflict is only recorded when both copies exist on disk.
+    """
+    named = variants or {}
     created = 0
-    for path in paths:
+    for path in dict.fromkeys(paths):
+        local_v, remote_v = _variants(local_dir, path, named)
+        if require_files and not (
+            local_v
+            and remote_v
+            and (local_dir / local_v).is_file()
+            and (local_dir / remote_v).is_file()
+        ):
+            continue
         exists = db.scalar(
-            select(Conflict).where(
+            select(Conflict.id).where(
                 Conflict.pair_id == pair.id,
                 Conflict.path == path,
+                Conflict.local_variant == local_v,
                 Conflict.state == ConflictState.OPEN,
             )
         )
         if exists:
             continue
-        local_v, remote_v = find_variants(local_dir, path) or ("", "")
         ls, lm = _stat(local_dir, local_v)
         rs, rm = _stat(local_dir, remote_v)
         db.add(

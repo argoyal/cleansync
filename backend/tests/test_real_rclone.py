@@ -79,6 +79,73 @@ async def test_real_bisync_conflict_is_detected_and_keeps_both(tmp_path):
     assert (p1 / "both.conflict2.txt").read_text() == "remote edit"
 
 
+async def test_real_second_conflict_points_at_conflict3_and_4(
+    tmp_path, db, make_account, make_pair
+):
+    from sqlalchemy import select
+
+    from app.models import Conflict
+    from app.services.sync.conflicts import record_conflicts
+
+    env, t, p1, p2 = _setup(tmp_path)
+    pair = make_pair(make_account())
+    await _run(env, t, tmp_path, dry_run=False, resync=True)
+    for n in (1, 2):
+        (p1 / "both.txt").write_text(f"local edit {n}, longer")
+        (p2 / "both.txt").write_text(f"remote {n}")
+        res, counters = await _run(env, t, tmp_path, dry_run=False)
+        assert res.exit_code == 0, res.error_tail
+        assert (
+            record_conflicts(db, pair, p1, counters.conflict_paths, counters.conflict_variants) == 1
+        ), counters.conflict_variants
+    rows = db.scalars(select(Conflict).order_by(Conflict.id)).all()
+    assert [(c.path, c.local_variant, c.remote_variant) for c in rows] == [
+        ("both.txt", "both.conflict1.txt", "both.conflict2.txt"),
+        ("both.txt", "both.conflict3.txt", "both.conflict4.txt"),
+    ]
+    assert (p1 / "both.conflict3.txt").read_text() == "local edit 2, longer"
+    assert (p1 / "both.conflict4.txt").read_text() == "remote 2"
+
+
+async def test_real_dry_run_plan_is_readable(tmp_path):
+    env, t, p1, p2 = _setup(tmp_path)
+    await _run(env, t, tmp_path, dry_run=False, resync=True)
+    (p1 / "keep.txt").unlink()
+    res, counters = await _run(env, t, tmp_path, dry_run=True)
+    assert res.exit_code == 0
+    assert counters.has_roots and counters.bisync_successful
+    assert counters.final_stats is not None and counters.final_stats["deletes"] == 1
+
+
+async def test_real_bisync_safety_brake_is_classified(tmp_path):
+    from app.services.rclone.errors import Failure, classify_failure
+
+    env, t, p1, p2 = _setup(tmp_path)
+    for i in range(6):
+        (p1 / f"f{i}.txt").write_text("x")
+        (p2 / f"f{i}.txt").write_text("x")
+    await _run(env, t, tmp_path, dry_run=False, resync=True)
+    for i in range(6):
+        (p1 / f"f{i}.txt").unlink()
+    res, _ = await _run(env, t, tmp_path, dry_run=True)
+    assert classify_failure(res.exit_code, res.error_tail) == Failure.TOO_MANY_DELETES
+
+
+async def test_real_one_way_sync_max_delete_stops_extra_deletes(tmp_path):
+    from app.services.rclone.errors import Failure, classify_failure
+
+    env, t, p1, p2 = _setup(tmp_path)
+    for i in range(4):
+        (p2 / f"x{i}.txt").write_text("x")
+    res = await run_rclone(
+        c.sync_args(env, str(p1), str(p2), t.filters_file, None, dry_run=False, max_delete=1),
+        env.env(),
+        log_path=None,
+    )
+    assert classify_failure(res.exit_code, res.error_tail) == Failure.TOO_MANY_DELETES
+    assert len(list(p2.glob("x*.txt"))) == 3
+
+
 async def test_real_access_check_blocks_when_marker_missing(tmp_path):
     env, t, p1, p2 = _setup(tmp_path)
     await _run(env, t, tmp_path, dry_run=False, resync=True)
@@ -110,7 +177,7 @@ async def test_real_sync_dry_run_honours_filter_from(tmp_path):
         on_line=lines.append,
     )
     assert res.exit_code == 0, res.error_tail
-    skipped = [ln for ln in lines if ln.msg.startswith("Skipped ")]
+    skipped = [ln for ln in lines if ln.skipped]
     objs = {ln.obj for ln in skipped}
     assert {"new.txt", "extra.txt"} <= objs, [ln.raw for ln in lines]
     assert not any(o.startswith("skip/") for o in objs), objs

@@ -63,3 +63,4 @@ class AttentionReason(StrEnum):
     ACCESS_CHECK = "ACCESS_CHECK"
     AUTH = "AUTH"
     FAILED = "FAILED"
+    PLAN_UNREADABLE = "PLAN_UNREADABLE"

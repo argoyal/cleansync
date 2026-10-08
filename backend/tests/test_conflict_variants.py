@@ -19,3 +19,9 @@ def test_variants_appended_suffix(tmp_path):
 
 def test_missing_variants(tmp_path):
     assert find_variants(tmp_path, "nothing.txt") is None
+
+
+def test_variants_pick_the_newest_complete_pair(tmp_path):
+    for n in (1, 2, 3, 4, 5):
+        (tmp_path / f"r.conflict{n}.txt").write_text("x")
+    assert find_variants(tmp_path, "r.txt") == ("r.conflict3.txt", "r.conflict4.txt")

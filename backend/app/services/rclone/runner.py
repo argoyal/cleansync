@@ -133,6 +133,7 @@ async def run_rclone(
                         obj=redact(line.obj, secrets) if isinstance(line.obj, str) else line.obj,
                         stats=line.stats,
                         raw=redact(line.raw, secrets),
+                        skipped=line.skipped,
                         plain_msg=line.msg,
                         plain_obj=line.obj if isinstance(line.obj, str) else None,
                     )

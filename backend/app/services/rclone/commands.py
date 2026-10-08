@@ -160,7 +160,12 @@ def sync_args(
     backup_dir: Path | None,
     *,
     dry_run: bool,
+    max_delete: int | None = None,
 ) -> list[str]:
+    if max_delete is not None and (
+        isinstance(max_delete, bool) or not isinstance(max_delete, int) or max_delete < 0
+    ):
+        raise ValueError(f"max_delete must be an int >= 0: {max_delete!r}")
     src_ep = _endpoint(src)
     dst_ep = _endpoint(dst)
     if backup_dir is not None and not dst_ep.startswith("/"):
@@ -177,6 +182,8 @@ def sync_args(
     ]
     if backup_dir is not None:
         args += ["--backup-dir", str(backup_dir)]
+    if max_delete is not None:
+        args += ["--max-delete", str(max_delete)]
     args += LOG_FLAGS
     if dry_run:
         args.append("--dry-run")
