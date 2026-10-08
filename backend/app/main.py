@@ -17,6 +17,7 @@ from app.api import (
     health,
     jobs,
     pairs,
+    serve,
     system,
 )
 from app.auth.bootstrap import ensure_admin
@@ -187,6 +188,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         browse.router,
         catalog.router,
         files.router,
+        serve.router,
         jobs.router,
         conflicts.router,
         system.router,

@@ -37,3 +37,29 @@ def can_thumb(mime: str | None, size: int | None) -> bool:
     if mime in THUMB_IMAGE_TYPES:
         return size <= MAX_THUMB_IMAGE_BYTES
     return mime == "application/pdf" and size <= MAX_THUMB_PDF_BYTES
+
+
+_TEXT_LIKE = frozenset(
+    {
+        "application/json",
+        "application/xml",
+        "application/yaml",
+        "application/x-yaml",
+        "application/javascript",
+    }
+)
+
+
+def serve_policy(mime: str | None) -> tuple[str, bool]:
+    """(Content-Type to send, may the browser show it inline).
+
+    Anything that could run script on DriveSync's own address (HTML, XML, JavaScript) is
+    sent as plain text, and every inline response also gets a sandboxing CSP (api/serve.py).
+    """
+    if mime is None:
+        return "application/octet-stream", False
+    if mime == "application/pdf" or mime.startswith(("image/", "video/", "audio/")):
+        return mime, True
+    if mime.startswith("text/") or mime in _TEXT_LIKE:
+        return "text/plain; charset=utf-8", True
+    return mime, False
