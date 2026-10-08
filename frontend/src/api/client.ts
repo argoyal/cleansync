@@ -46,14 +46,20 @@ export function reportAuthProblem(status: number, detail: string): void {
   if (status === 403 && detail === "password_change_required") signal("change-password");
 }
 
+/** A list of paths from the server; an older answer may name a single path as plain text. */
+function pathList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === "string");
+  return typeof value === "string" && value ? [value] : [];
+}
+
 export function detailOf(body: unknown, status: number): { detail: string; partial?: PartialResult } {
   if (body && typeof body === "object" && "detail" in body) {
     const d = (body as { detail: unknown }).detail;
     if (typeof d === "string") return { detail: d };
     if (Array.isArray(d) && d.length > 0 && typeof d[0]?.msg === "string") return { detail: d[0].msg };
     if (d && typeof d === "object" && "message" in d && typeof d.message === "string") {
-      const o = d as { message: string; done?: string[]; failed?: string[]; not_done?: string[] };
-      return { detail: o.message, partial: { done: o.done ?? [], failed: o.failed ?? [], not_done: o.not_done ?? [] } };
+      const o = d as { message: string; done?: unknown; failed?: unknown; not_done?: unknown };
+      return { detail: o.message, partial: { done: pathList(o.done), failed: pathList(o.failed), not_done: pathList(o.not_done) } };
     }
   }
   return { detail: `Request failed (${status})` };

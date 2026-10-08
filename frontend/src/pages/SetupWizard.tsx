@@ -55,6 +55,26 @@ const latest = (jobs: Job[] | undefined, keep: (j: Job) => boolean) =>
  * typed confirmation → start. The step lives in the address (?step=&pair=), so coming back
  * from Google's sign-in page lands on the right step.
  */
+export const SETUP_SKIPPED_KEY = "drivesync.setupSkipped";
+
+/** Remember for this browser session that the person chose to look around first. */
+function skipSetup() {
+  try {
+    sessionStorage.setItem(SETUP_SKIPPED_KEY, "1");
+  } catch {
+    // a private window: Home may offer the wizard again
+  }
+}
+
+/** Whether the person skipped the wizard earlier in this browser session. */
+export function setupSkipped(): boolean {
+  try {
+    return sessionStorage.getItem(SETUP_SKIPPED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function SetupWizard() {
   useLiveEvents();
   const [params, setParams] = useSearchParams();
@@ -71,7 +91,7 @@ export function SetupWizard() {
     <main className="mx-auto max-w-3xl px-4 py-8 sm:py-12">
       <div className="mb-8 flex items-center justify-between">
         <Brand big />
-        <Link to="/" className="text-table text-ink-2 hover:text-ink">
+        <Link to="/drive" onClick={skipSetup} className="text-table text-ink-2 hover:text-ink">
           Skip for now
         </Link>
       </div>

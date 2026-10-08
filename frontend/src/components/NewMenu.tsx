@@ -3,6 +3,7 @@ import { type FormEvent, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { api, friendlyError } from "../api/client";
+import { useBrowse } from "../api/queries";
 import { uploads } from "../hooks/uploads";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { useInvalidateFiles } from "./FileActions";
@@ -28,6 +29,8 @@ export function NewMenu() {
   const dirs = useRef<HTMLInputElement>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [newFolder, setNewFolder] = useState(false);
+  // A Drive-to-here folder takes no local additions; Google files are made on Drive itself.
+  const oneWay = useBrowse(accountId, folder).data?.pair?.direction === "REMOTE_TO_LOCAL";
 
   const create = useMutation({
     mutationFn: ({ kind }: { kind: Kind; tab: Window | null }) =>
@@ -67,17 +70,17 @@ export function NewMenu() {
   };
 
   const items: MenuItem[] = [
-    { label: "New folder", icon: "create_new_folder", onSelect: () => setNewFolder(true) },
+    { label: "New folder", icon: "create_new_folder", onSelect: () => setNewFolder(true), disabled: oneWay },
     { separator: true },
-    { label: "Upload files", icon: "upload_file", onSelect: () => files.current?.click() },
-    { label: "Upload folder", icon: "drive_folder_upload", onSelect: () => dirs.current?.click() },
+    { label: "Upload files", icon: "upload_file", onSelect: () => files.current?.click(), disabled: oneWay },
+    { label: "Upload folder", icon: "drive_folder_upload", onSelect: () => dirs.current?.click(), disabled: oneWay },
     { separator: true },
     {
       label: "Google Docs",
       icon: "article",
       submenu: [
         { label: "Blank Google Doc", onSelect: () => newFile("document") },
-        { label: "Word file (.docx)", onSelect: () => newFile("docx") },
+        { label: "Word file (.docx)", onSelect: () => newFile("docx"), disabled: oneWay },
       ],
     },
     {
@@ -85,7 +88,7 @@ export function NewMenu() {
       icon: "table_chart",
       submenu: [
         { label: "Blank Google Sheet", onSelect: () => newFile("spreadsheet") },
-        { label: "Excel file (.xlsx)", onSelect: () => newFile("xlsx") },
+        { label: "Excel file (.xlsx)", onSelect: () => newFile("xlsx"), disabled: oneWay },
       ],
     },
     {
@@ -93,7 +96,7 @@ export function NewMenu() {
       icon: "slideshow",
       submenu: [
         { label: "Blank Google Slides", onSelect: () => newFile("presentation") },
-        { label: "PowerPoint file (.pptx)", onSelect: () => newFile("pptx") },
+        { label: "PowerPoint file (.pptx)", onSelect: () => newFile("pptx"), disabled: oneWay },
       ],
     },
   ];

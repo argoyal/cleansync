@@ -10,7 +10,7 @@ Back up `app/data/`. It holds the database (including which paths are offloaded)
 - Local files replaced or deleted by a sync go to `app/data/backups/<email>/<pair>/<date>/` and are kept for the pair's retention (7/30/90 days or forever).
 - Before the first sync, local versions of files that differ from Drive go to `…/<date>/.drivesync-initial-<job_id>/` (and before a safe resync, to `…/<date>/.drivesync-resync-<job_id>/`).
 - When you resolve a conflict, the version you didn't keep goes to `…/<date>/conflicts/`.
-- Items you delete in the web app are moved to `…/<pair>/<date>/.drivesync-deleted-<time>-<id>/` (or `app/data/backups/<email>/unsynced/…` for items outside every sync pair, which are never pruned). The next sync then sends the Drive copy to Drive's trash.
+- Items you delete in the web app are moved to `…/<pair>/<date>/.drivesync-deleted-<time>-<id>/` (or `app/data/backups/<email>/unsynced/…` for items outside every sync pair; those are pruned after the default backup retention in Settings, 30 days unless you change it, and kept for good when it is set to "Keep forever"). The next sync then sends the Drive copy to Drive's trash.
 - Files deleted on Drive go to Drive's trash (kept 30 days by Google).
 
 ## Restore the database

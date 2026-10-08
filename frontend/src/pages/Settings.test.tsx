@@ -195,3 +195,22 @@ describe("routes", () => {
     expect(localStorage.getItem("drivesync.account")).toBe("1");
   });
 });
+
+describe("setup wizard skip", () => {
+  it("Skip for now goes to My Drive and Home stops sending you back this session", async () => {
+    mockApi({
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/sync-pairs": [],
+      "GET /api/browse": { account_id: 1, path: "", pair: null, items: [] },
+      "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 0, initialized_pairs: 0 },
+    });
+    renderApp(<AppRoutes />, { route: "/setup" });
+    await userEvent.click(await screen.findByRole("link", { name: "Skip for now" }));
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/drive$/));
+    await userEvent.click(screen.getAllByRole("link", { name: /^Home$/ })[0]);
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/$/));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/$/);
+  });
+});

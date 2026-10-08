@@ -14,7 +14,7 @@ import { DrivePage } from "./pages/DrivePage";
 import { HomePage, RecentPage, SearchPage, StarredPage } from "./pages/ListPages";
 import { BlockedPage, PairDetailPage } from "./pages/PairDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { SetupWizard } from "./pages/SetupWizard";
+import { SetupWizard, setupSkipped } from "./pages/SetupWizard";
 import { StoragePage } from "./pages/StoragePage";
 
 /**
@@ -57,7 +57,7 @@ function HomeOrSetup() {
   const setup = useSetup();
   const [params] = useSearchParams();
   if (params.has("connected") || params.has("oauth_error")) return <OAuthReturn />;
-  if (setup.data && setup.data.pairs === 0) return <Navigate to="/setup" replace />;
+  if (setup.data && setup.data.pairs === 0 && !setupSkipped()) return <Navigate to="/setup" replace />;
   return <HomePage />;
 }
 

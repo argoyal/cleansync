@@ -40,3 +40,10 @@ export function parentOf(path: string): string {
   const i = path.lastIndexOf("/");
   return i < 0 ? "" : path.slice(0, i);
 }
+
+/** Shown in folders of a Drive-to-here pair: the next sync undoes local changes there. */
+export const ONE_WAY_NOTE =
+  "This folder only receives changes from Google Drive. Add, rename, move or delete files on Google Drive; the next sync brings the change here.";
+
+/** The server refuses to rename or move an item on Drive while it has changes waiting to sync. */
+export const isWaitingToSync = (message: string) => /changes waiting to sync/i.test(message);

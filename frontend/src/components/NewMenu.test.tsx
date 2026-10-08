@@ -277,3 +277,24 @@ describe("the real upload request", () => {
     expect(seen).toEqual(["login"]);
   });
 });
+
+describe("+ New in a Drive-to-here folder", () => {
+  it("only offers Google files, which are made on Drive itself", async () => {
+    setup({
+      "GET /api/browse": {
+        account_id: 1,
+        path: "Work",
+        pair: { id: 7, name: "Down", status: "HEALTHY", initialized: true, local_subpath: "Work", direction: "REMOTE_TO_LOCAL" },
+        items: [],
+      },
+    });
+    const menu = await openMenu();
+    await waitFor(() => expect(within(menu).getByRole("menuitem", { name: "New folder" })).toBeDisabled());
+    expect(within(menu).getByRole("menuitem", { name: "Upload files" })).toBeDisabled();
+    expect(within(menu).getByRole("menuitem", { name: "Upload folder" })).toBeDisabled();
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Google Docs" }));
+    const sub = screen.getByRole("menu", { name: "Google Docs" });
+    expect(within(sub).getByRole("menuitem", { name: "Blank Google Doc" })).toBeEnabled();
+    expect(within(sub).getByRole("menuitem", { name: "Word file (.docx)" })).toBeDisabled();
+  });
+});

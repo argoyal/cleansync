@@ -85,8 +85,17 @@ export type PairBrief = {
   status: PairStatus;
   initialized: boolean;
   local_subpath: string;
+  direction?: Direction;
 };
 export type Browse = { account_id: number; path: string; pair: PairBrief | null; items: FileItem[] };
+
+/** The answer to a rename, move, delete or new folder. */
+export type OpOut = {
+  paths: string[];
+  syncs: Record<string, string>;
+  /** New paths of the items that were renamed or moved on Google Drive too. */
+  drive?: string[];
+};
 
 export type Storage = {
   account_id: number;

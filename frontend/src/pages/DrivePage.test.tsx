@@ -339,3 +339,81 @@ describe("Loading states", () => {
     expect(await screen.findByText("Loading")).toBeInTheDocument();
   });
 });
+
+describe("Final review fixes", () => {
+  const oneWay = (path = "") => ({
+    account_id: 1,
+    path,
+    pair: { id: 7, name: "Down", status: "HEALTHY", initialized: true, local_subpath: "", direction: "REMOTE_TO_LOCAL" },
+    items: ITEMS,
+  });
+
+  it("explains a Drive-to-here folder and offers no local changes in it", async () => {
+    const { PAIR } = await import("../test/utils");
+    setup("/drive", { "GET /api/browse": oneWay(), "GET /api/sync-pairs": [{ ...PAIR, direction: "REMOTE_TO_LOCAL" }] });
+    expect(await screen.findByText(/only receives changes from Google Drive/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "More actions for photo.jpg" }));
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Rename" })).toBeDisabled());
+    expect(screen.getByRole("menuitem", { name: "Move" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Download" })).toBeEnabled();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByText("photo.jpg"));
+    await userEvent.keyboard("{Delete}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("offers Sync now when a rename waits for changes to sync", async () => {
+    const { json } = await import("../test/utils");
+    const { calls } = setup("/drive", {
+      "POST /api/files/rename": () => json(409, { detail: "This has changes waiting to sync. Sync now, then try again." }),
+      "POST /api/sync-pairs/7/sync": { result: "queued" },
+    });
+    await userEvent.pointer({ keys: "[MouseRight]", target: await screen.findByText("photo.jpg") });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    await userEvent.type(screen.getByLabelText("New name"), "x");
+    await userEvent.click(screen.getByRole("button", { name: "Rename" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("changes waiting to sync");
+    await userEvent.click(within(alert).getByRole("button", { name: "Sync now" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/api/sync-pairs/7/sync")).toBe(true));
+  });
+
+  it("copes with a half-done answer that names the failed item as plain text", async () => {
+    const { json } = await import("../test/utils");
+    setup("/drive", {
+      "POST /api/files/delete": () => json(403, { detail: { message: "Stopped half way.", done: ["a.txt"], failed: "b.txt", not_done: [] } }),
+    });
+    await userEvent.click(await screen.findByText("photo.jpg"));
+    await userEvent.keyboard("{Delete}");
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Failed: b.txt");
+    expect(alert).toHaveTextContent("Done: a.txt");
+  });
+
+  it("says Drive was renamed at the same time for items already on Drive", async () => {
+    setup("/drive", { "POST /api/files/rename": { paths: ["notes.txt"], syncs: {}, drive: ["notes.txt"] } });
+    await userEvent.pointer({ keys: "[MouseRight]", target: await screen.findByText("Work") });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).not.toHaveTextContent("deletion limit");
+    expect(dialog).toHaveTextContent("renamed on Google Drive at the same time");
+    await userEvent.type(screen.getByLabelText("New name"), "2");
+    await userEvent.click(screen.getByRole("button", { name: "Rename" }));
+    expect(await screen.findByText("Renamed, on Google Drive too.")).toBeInTheDocument();
+  });
+
+  it("says a rename reaches Drive at the next sync for items not there yet", async () => {
+    setup("/drive", {
+      "GET /api/browse": browse("", [item({ name: "new.txt", path: "new.txt", status: "upload", remote: false })]),
+      "POST /api/files/rename": { paths: ["new2.txt"], syncs: {}, drive: [] },
+    });
+    await userEvent.pointer({ keys: "[MouseRight]", target: await screen.findByText("new.txt") });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Google Drive gets the new name at the next sync");
+    await userEvent.type(screen.getByLabelText("New name"), "2");
+    await userEvent.click(screen.getByRole("button", { name: "Rename" }));
+    expect(await screen.findByText("Renamed. Google Drive gets the change at the next sync.")).toBeInTheDocument();
+  });
+});

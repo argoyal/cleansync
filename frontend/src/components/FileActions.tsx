@@ -3,9 +3,9 @@ import { type FormEvent, type ReactNode, useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError, api, friendlyError } from "../api/client";
-import { fileUrl, zipUrl } from "../api/queries";
-import type { FileItem } from "../api/types";
-import { isOffice, opensInBrowser, parentOf } from "../lib/files";
+import { fileUrl, usePairs, zipUrl } from "../api/queries";
+import type { FileItem, OpOut } from "../api/types";
+import { isOffice, isWaitingToSync, ONE_WAY_NOTE, opensInBrowser, parentOf } from "../lib/files";
 import { FolderPicker } from "./FolderPicker";
 import { useToast } from "./Toasts";
 import { Button, Dialog, Field, inputClass, type MenuItem, Notice } from "./ui";
@@ -26,16 +26,11 @@ function startDownload(href: string) {
   a.remove();
 }
 
-type DialogState = { kind: "rename"; item: FileItem } | { kind: "move"; items: FileItem[] } | { kind: "delete"; items: FileItem[] } | null;
-
-/** Open, download and the right-click actions for files in one account, plus their dialogs. */
-export function useFileActions(accountId: number | null) {
-  const navigate = useNavigate();
+/** Ask for a sync of one pair now (the "Sync now" buttons). */
+export function useSyncNow() {
   const toast = useToast();
-  const [dialog, setDialog] = useState<DialogState>(null);
-
   const qc = useQueryClient();
-  const syncNow = (pairId: number | null) => {
+  return (pairId: number | null) => {
     if (pairId === null) return;
     api(`/api/sync-pairs/${pairId}/sync`, { method: "POST" })
       .then(() => {
@@ -44,6 +39,25 @@ export function useFileActions(accountId: number | null) {
       })
       .catch((e) => toast(friendlyError(e), { tone: "error" }));
   };
+}
+
+/** Items in a Drive-to-here pair can't be changed locally: the next sync would undo it. */
+export function useOneWay() {
+  const { data: pairs = [] } = usePairs();
+  const ids = new Set(pairs.filter((p) => p.direction === "REMOTE_TO_LOCAL").map((p) => p.id));
+  return (item: FileItem) => item.pair_id !== null && ids.has(item.pair_id);
+}
+
+type DialogState = { kind: "rename"; item: FileItem } | { kind: "move"; items: FileItem[] } | { kind: "delete"; items: FileItem[] } | null;
+
+/** Open, download and the right-click actions for files in one account, plus their dialogs. */
+export function useFileActions(accountId: number | null) {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [dialog, setDialog] = useState<DialogState>(null);
+
+  const syncNow = useSyncNow();
+  const oneWay = useOneWay();
 
   const download = (item: FileItem) => {
     if (accountId === null) return;
@@ -82,6 +96,7 @@ export function useFileActions(accountId: number | null) {
 
   const menuFor = (item: FileItem): MenuItem[] => {
     const local = item.local;
+    const changeable = local && !oneWay(item);
     const items: MenuItem[] = [
       { label: "Open", icon: "open_in_new", onSelect: () => open(item) },
     ];
@@ -92,10 +107,10 @@ export function useFileActions(accountId: number | null) {
     }
     items.push({ label: item.is_dir ? "Download as zip" : "Download", icon: "download", onSelect: () => download(item), disabled: !local });
     items.push({ separator: true });
-    items.push({ label: "Rename", icon: "edit", onSelect: () => setDialog({ kind: "rename", item }), disabled: !local });
-    items.push({ label: "Move", icon: "drive_file_move", onSelect: () => setDialog({ kind: "move", items: [item] }), disabled: !local });
+    items.push({ label: "Rename", icon: "edit", onSelect: () => setDialog({ kind: "rename", item }), disabled: !changeable });
+    items.push({ label: "Move", icon: "drive_file_move", onSelect: () => setDialog({ kind: "move", items: [item] }), disabled: !changeable });
     items.push({ separator: true });
-    items.push({ label: "Delete", icon: "delete", danger: true, onSelect: () => setDialog({ kind: "delete", items: [item] }), disabled: !local });
+    items.push({ label: "Delete", icon: "delete", danger: true, onSelect: () => setDialog({ kind: "delete", items: [item] }), disabled: !changeable });
     return items;
   };
 
@@ -105,17 +120,25 @@ export function useFileActions(accountId: number | null) {
   if (accountId !== null && dialog?.kind === "move") dialogs = <MoveDialog accountId={accountId} items={dialog.items} onClose={close} />;
   if (accountId !== null && dialog?.kind === "delete") dialogs = <DeleteDialog accountId={accountId} items={dialog.items} onClose={close} />;
 
-  return { open, download, openInGoogle, menuFor, dialogs, askDelete: (items: FileItem[]) => setDialog({ kind: "delete", items }) };
+  const askDelete = (items: FileItem[]) => {
+    if (items.some(oneWay)) {
+      toast(ONE_WAY_NOTE);
+      return;
+    }
+    setDialog({ kind: "delete", items });
+  };
+
+  return { open, download, openInGoogle, menuFor, dialogs, askDelete };
 }
 
-function useFileOp(path: string, done: string, onClose: () => void) {
+function useFileOp(path: string, done: string | ((out: OpOut) => string), onClose: () => void) {
   const toast = useToast();
   const invalidate = useInvalidateFiles();
   return useMutation({
-    mutationFn: (body: unknown) => api(`/api/files/${path}`, { method: "POST", body }),
-    onSuccess: () => {
+    mutationFn: (body: unknown) => api<OpOut>(`/api/files/${path}`, { method: "POST", body }),
+    onSuccess: (out) => {
       invalidate();
-      toast(done);
+      toast(typeof done === "string" ? done : done(out ?? { paths: [], syncs: {} }));
       onClose();
     },
     // A half-finished action still changed some items: refresh so the list tells the truth.
@@ -128,11 +151,18 @@ function useFileOp(path: string, done: string, onClose: () => void) {
 const names = (paths: string[]) => paths.join(", ");
 
 /** The server's message, plus which items were done, failed or left alone when it stopped half way. */
-function OpError({ error }: { error: unknown }) {
+function OpError({ error, pairId = null }: { error: unknown; pairId?: number | null }) {
   const partial = error instanceof ApiError ? error.partial : undefined;
+  const syncNow = useSyncNow();
+  const message = friendlyError(error);
   return (
     <Notice tone="err">
-      <p>{friendlyError(error)}</p>
+      <p>{message}</p>
+      {pairId !== null && isWaitingToSync(message) && (
+        <Button className="mt-2" icon="sync" onClick={() => syncNow(pairId)}>
+          Sync now
+        </Button>
+      )}
       {partial && partial.done.length > 0 && <p className="mt-1 text-table">Done: {names(partial.done)}</p>}
       {partial && partial.failed.length > 0 && <p className="mt-1 text-table">Failed: {names(partial.failed)}</p>}
       {partial && partial.not_done.length > 0 && <p className="mt-1 text-table">Not done: {names(partial.not_done)}</p>}
@@ -142,7 +172,13 @@ function OpError({ error }: { error: unknown }) {
 
 function RenameDialog({ accountId, item, onClose }: { accountId: number; item: FileItem; onClose: () => void }) {
   const [name, setName] = useState(item.name);
-  const op = useFileOp("rename", "Renamed. Google Drive gets the change at the next sync.", onClose);
+  const synced = item.pair_id !== null;
+  const op = useFileOp(
+    "rename",
+    (out) =>
+      !synced ? "Renamed." : out.drive?.length ? "Renamed, on Google Drive too." : "Renamed. Google Drive gets the change at the next sync.",
+    onClose,
+  );
   const submit = (e: FormEvent) => {
     e.preventDefault();
     op.mutate({ account_id: accountId, path: item.path, new_name: name.trim() });
@@ -165,20 +201,28 @@ function RenameDialog({ accountId, item, onClose }: { accountId: number; item: F
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
       </form>
-      {item.is_dir && (
+      {synced && (
         <p className="text-table text-ink-2">
-          Google Drive sees a renamed folder as removed and added again, so every file inside counts toward the
-          deletion limit of the next sync.
+          {item.remote ? "It is renamed on Google Drive at the same time." : "Google Drive gets the new name at the next sync."}
         </p>
       )}
-      {op.isError && <OpError error={op.error} />}
+      {op.isError && <OpError error={op.error} pairId={item.pair_id} />}
     </Dialog>
   );
 }
 
 function MoveDialog({ accountId, items, onClose }: { accountId: number; items: FileItem[]; onClose: () => void }) {
   const [to, setTo] = useState(parentOf(items[0].path));
-  const op = useFileOp("move", "Moved. Google Drive gets the change at the next sync.", onClose);
+  const op = useFileOp(
+    "move",
+    (out) => {
+      const onDrive = out.drive?.length ?? 0;
+      if (onDrive === 0) return "Moved. Google Drive gets the change at the next sync.";
+      if (onDrive >= out.paths.length) return "Moved, on Google Drive too.";
+      return "Moved. Items already on Google Drive moved there too; the rest follow at the next sync.";
+    },
+    onClose,
+  );
   return (
     <Dialog
       title={items.length === 1 ? `Move "${items[0].name}"` : `Move ${items.length} items`}
@@ -199,7 +243,7 @@ function MoveDialog({ accountId, items, onClose }: { accountId: number; items: F
       }
     >
       <FolderPicker source="local" accountId={accountId} value={to} onChange={setTo} rootLabel="My Drive" />
-      {op.isError && <OpError error={op.error} />}
+      {op.isError && <OpError error={op.error} pairId={items[0].pair_id} />}
     </Dialog>
   );
 }
