@@ -15,6 +15,7 @@ from app.services.accounts.service import AccountService
 from app.services.events.bus import EventBus
 from app.services.rclone.setup import build_rclone_env, ensure_config_encrypted
 from app.services.sync.engine import SyncEngine
+from app.services.sync.initial import InitialSync
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rclone_env=app.state.rclone_env,
         accounts=app.state.accounts,
     )
+    app.state.initial = InitialSync(app.state.engine)
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(events.router)

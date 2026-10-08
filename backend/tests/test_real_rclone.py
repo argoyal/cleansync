@@ -1,3 +1,4 @@
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -7,6 +8,7 @@ import pytest
 from app.services.rclone import commands as c
 from app.services.rclone.parse import Counters, count_dry_run_deletes, parse_check_combined
 from app.services.rclone.runner import run_rclone
+from app.services.sync.initial import CONFIRM_PHRASE
 
 pytestmark = [
     pytest.mark.realrclone,
@@ -229,3 +231,84 @@ async def test_real_config_gets_encrypted(tmp_path):
         env.base() + ["listremotes"], env.env(), log_path=None, on_stdout=out.append
     )
     assert res.exit_code == 0 and "t:" in out
+
+
+async def test_real_first_sync_merges_without_deleting_and_backs_up():
+    """Whole InitialSync flow on real rclone; Drive is an rclone `alias` remote to a local dir."""
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, SyncPair
+    from app.paths import Layout
+    from app.services.events.bus import EventBus
+    from app.services.sync.engine import SyncEngine
+    from app.services.sync.initial import InitialSync
+
+    root = Path(tempfile.mkdtemp(prefix="r"))
+    try:
+        layout = Layout(root)
+        layout.ensure()
+        run_migrations(layout.db_file)
+        eng = make_engine(layout.db_file)
+        sf = sessionmaker(eng, expire_on_commit=False)
+        drive = root / "d"
+        drive.mkdir()
+        env = c.RcloneEnv(
+            binary="rclone",
+            config_file=layout.rclone_conf,
+            cache_dir=layout.rclone_cache,
+            config_pass="",
+        )
+        layout.rclone_conf.write_text("")
+        r = await run_rclone(
+            [*env.base(), "config", "create", "gd_t", "alias", "remote", str(drive)],
+            env.env(),
+            log_path=None,
+        )
+        assert r.exit_code == 0, r.error_tail
+        with sf() as db:
+            acc = Account(email="alice@example.com", remote_name="gd_t")
+            db.add(acc)
+            db.commit()
+            pair = SyncPair(account_id=acc.id, name="Docs", local_subpath="", remote_path="")
+            db.add(pair)
+            db.commit()
+            pair_id = pair.id
+        local = layout.account_dir("alice@example.com")
+        local.mkdir(parents=True, exist_ok=True)
+        (local / "same.txt").write_text("same")
+        (drive / "same.txt").write_text("same")
+        (local / "only-local.txt").write_text("L")
+        (drive / "only-drive.txt").write_text("D")
+        (local / "differ.txt").write_text("local version")
+        (drive / "differ.txt").write_text("drive version, longer")
+        os.utime(drive / "differ.txt", (1, 1))  # drive copy is older, local wins
+
+        engine = SyncEngine(
+            layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=None
+        )
+        initial = InitialSync(engine)
+        await initial.preview(pair_id)
+        p = initial.load_preview(pair_id)
+        assert p is not None, "preview failed"
+        assert (p["same"], p["only_local"], p["only_remote"], p["different"]) == (1, 1, 1, 1)
+        assert p["samples"]["different"] == ["differ.txt"]
+
+        initial.check_phrase(CONFIRM_PHRASE)
+        await initial.run_initial(pair_id)
+        with sf() as db:
+            pair = db.get(SyncPair, pair_id)
+            assert pair.initialized is True, pair.last_error
+        for side in (local, drive):
+            assert (side / "only-local.txt").read_text() == "L"
+            assert (side / "only-drive.txt").read_text() == "D"
+            assert (side / "same.txt").read_text() == "same"
+            assert (side / "differ.txt").exists()
+        backups = list((layout.backups_dir / "alice@example.com" / str(pair_id)).rglob("*.txt"))
+        assert [b.name for b in backups] == ["differ.txt"]
+        assert "/initial/" in backups[0].as_posix()
+        assert backups[0].read_text() == "local version"
+        eng.dispose()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
