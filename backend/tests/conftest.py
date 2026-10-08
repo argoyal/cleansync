@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.paths import Layout
@@ -52,6 +53,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.database.engine import make_engine
 from app.database.migrate import run_migrations
+from app.main import create_app
 from app.models import Account, SyncPair
 
 
@@ -96,3 +98,28 @@ def make_pair(db: Session) -> Callable[..., SyncPair]:
         return pair
 
     return _make
+
+
+NEW_PASSWORD = "a-much-better-passphrase"
+
+
+@pytest.fixture
+def app(settings):
+    return create_app(settings)
+
+
+@pytest.fixture
+def client(app):
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture
+def auth_client(client, settings):
+    r = client.post("/api/auth/login",
+                    json={"username": settings.admin_username, "password": settings.admin_password})
+    client.headers["X-CSRF-Token"] = r.json()["csrf_token"]
+    r = client.post("/api/auth/change-password",
+                    json={"current_password": settings.admin_password, "new_password": NEW_PASSWORD})
+    assert r.status_code == 200, r.text
+    return client

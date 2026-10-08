@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from sqlalchemy.orm import sessionmaker
 
-from app.api import health
+from app.api import auth, health
+from app.auth.bootstrap import ensure_admin
+from app.auth.ratelimit import LoginLimiter
 from app.config import Settings
 from app.database.engine import integrity_ok, make_engine
 from app.database.migrate import run_migrations
@@ -20,5 +22,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine_db = engine
     app.state.session_factory = sessionmaker(engine, expire_on_commit=False)
     app.state.db_ok = integrity_ok(engine)
+    with app.state.session_factory() as db:
+        ensure_admin(db, settings, layout)
+    app.state.login_limiter = LoginLimiter()
     app.include_router(health.router)
+    app.include_router(auth.router)
     return app
