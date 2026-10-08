@@ -302,7 +302,6 @@ def test_failed_replace_removes_the_placeholder(tmp_path, monkeypatch):
 
 
 def test_late_cancel_still_queues_the_sync(auth_client, env, stub_queue, monkeypatch):
-    import asyncio
 
     from app.api import fileops
 
