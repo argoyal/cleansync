@@ -66,3 +66,24 @@ class RedactingFilter(logging.Filter):
         record.msg = redact(record.getMessage(), secrets)
         record.args = None
         return True
+
+
+# Request paths whose query string carries secrets (the OAuth code and state).
+_SECRET_QUERY_PATHS = ("/api/oauth/callback",)
+
+
+class AccessLogQueryFilter(logging.Filter):
+    """Drops the query string of secret-carrying paths from uvicorn's access log.
+
+    Attach to the ``uvicorn.access`` logger: its records are created there. The record keeps
+    uvicorn's argument tuple (client, method, path, http version, status), which uvicorn's
+    AccessFormatter needs, so only the path inside it changes.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            path, sep, _query = args[2].partition("?")
+            if sep and path.endswith(_SECRET_QUERY_PATHS):
+                record.args = (*args[:2], f"{path}?<redacted>", *args[3:])
+        return True

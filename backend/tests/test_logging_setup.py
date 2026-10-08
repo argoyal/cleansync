@@ -58,3 +58,48 @@ def test_info_level_hides_debug(settings, capsys):
     assert logging.getLogger().level == logging.INFO
     logging.getLogger("app.test").debug("quiet please")
     assert "quiet please" not in capsys.readouterr().err
+
+
+def _access_record(path: str) -> logging.LogRecord:
+    # The shape uvicorn's access logger uses (uvicorn/protocols/http/*.py).
+    return logging.getLogger("uvicorn.access").makeRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("203.0.113.5:4711", "GET", path, "1.1", 302),
+        None,
+    )
+
+
+def _access_line(path: str) -> str:
+    from uvicorn.logging import AccessFormatter
+
+    record = _access_record(path)
+    for f in logging.getLogger("uvicorn.access").filters:
+        f.filter(record)
+    return AccessFormatter("%(request_line)s %(status_code)s", use_colors=False).format(record)
+
+
+def test_access_log_hides_the_oauth_callback_query(settings, capsys):
+    create_app(settings, start_background=False)
+    line = _access_line("/api/oauth/callback?state=STATE-123&code=4/CODE-XYZ&scope=drive")
+    assert "/api/oauth/callback" in line
+    assert "CODE-XYZ" not in line and "STATE-123" not in line
+    logging.getLogger("uvicorn.access").handle(
+        _access_record("/api/oauth/callback?state=STATE-123&code=4/CODE-XYZ")
+    )
+    err = capsys.readouterr().err
+    assert "CODE-XYZ" not in err and "STATE-123" not in err
+
+
+def test_access_log_keeps_other_paths(settings):
+    create_app(settings, start_background=False)
+    assert "/api/browse?path=docs" in _access_line("/api/browse?path=docs")
+
+
+def test_access_log_filter_is_added_once(settings):
+    create_app(settings, start_background=False)
+    create_app(settings, start_background=False)
+    assert len(logging.getLogger("uvicorn.access").filters) == 1

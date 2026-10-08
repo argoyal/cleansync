@@ -2,7 +2,7 @@ import logging
 import sys
 from collections.abc import Iterable
 
-from app.core.redact import RedactingFilter
+from app.core.redact import AccessLogQueryFilter, RedactingFilter
 
 _HANDLER_NAME = "drivesync"
 _FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -33,6 +33,10 @@ def configure_logging(level: str, secrets: Iterable[str]) -> RedactingFilter:
         handler.setFormatter(logging.Formatter(_FORMAT))
         handler.addFilter(RedactingFilter())
         root.addHandler(handler)
+    # uvicorn's access log has its own handler and does not reach ours.
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, AccessLogQueryFilter) for f in access.filters):
+        access.addFilter(AccessLogQueryFilter())
     redactor = next(f for f in handler.filters if isinstance(f, RedactingFilter))
     for secret in secrets:
         redactor.add_secret(secret)
