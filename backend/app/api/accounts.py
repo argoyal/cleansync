@@ -1,3 +1,4 @@
+import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -9,7 +10,9 @@ from app.auth.deps import AuthContext, get_db, require_user
 from app.models import Account
 from app.schemas.accounts import AccountOut, AuthUrlOut
 from app.services.accounts.oauth import OAuthError
+from app.services.accounts.service import AccountError
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -49,12 +52,23 @@ def reconnect(
 async def oauth_callback(request: Request, state: str = "", code: str = "", error: str = ""):
     # No session check: Google's redirect is cross-site, so the SameSite=Strict cookie is not
     # sent. The single-use, 10-minute state (with PKCE) is what proves this request is ours.
+    service = request.app.state.accounts
     if error:
-        return RedirectResponse(f"/?oauth_error={quote('Google sign-in failed: ' + error)}", 303)
+        service.states.pop(state)
+        msg = (
+            "Google sign-in was cancelled."
+            if error == "access_denied"
+            else "Google sign-in failed."
+        )
+        return RedirectResponse(f"/?oauth_error={quote(msg)}", 303)
     try:
-        acc = await request.app.state.accounts.finish_connect(state, code)
+        acc = await service.finish_connect(state, code)
     except OAuthError as e:
         return RedirectResponse(f"/?oauth_error={quote(str(e))}", 303)
+    except Exception:
+        logger.exception("connecting a Google account failed")
+        msg = "Connecting the Google account failed; see the logs."
+        return RedirectResponse(f"/?oauth_error={quote(msg)}", 303)
     return RedirectResponse(f"/?connected={acc.id}", 303)
 
 
@@ -64,6 +78,8 @@ async def disconnect(account_id: int, request: Request, ctx: AuthContext = Depen
         return _out(await request.app.state.accounts.disconnect(account_id))
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
+    except AccountError as e:
+        raise HTTPException(502, str(e)) from e
 
 
 @router.get("/api/accounts/{account_id}/quota", response_model=AccountOut)

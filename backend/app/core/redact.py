@@ -12,7 +12,7 @@ _KEY = (
     r"secret|token|authorization|rclone_config_pass)\\?\"?"
 )
 # A quoted value may contain backslash-escaped quotes; an unquoted value ends at space, comma or brace.
-_VALUE = r'(?:\\?"(?:[^"\\]|\\.)*\\?"|[^\s,}]+)'
+_VALUE = r'(?:\\?"(?:[^"\\]|\\.)*\\?"|[^\s,}"\\]+)'
 
 # Header-style and bare-token patterns run first, so a "Bearer <token>" pair is
 # masked as a whole before the key/value pattern sees the word "Bearer" alone.

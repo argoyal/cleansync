@@ -122,3 +122,34 @@ async def test_runner_cleans_up_process_when_callback_raises(fake_rclone, tmp_pa
     assert time.monotonic() - start < 20
     await asyncio.sleep(0.2)
     assert not _alive(marker)
+
+
+async def test_runner_json_error_line_reaches_error_tail_and_classifies_auth(fake_rclone, tmp_path):
+    from app.services.rclone.errors import Failure, classify_failure
+
+    fake_rclone.on(
+        "about",
+        stderr=['{"level":"error","msg":"couldn\'t fetch token: invalid_grant"}'],
+        exit=1,
+    )
+    log = tmp_path / "x.log"
+    res = await run_rclone(
+        [fake_rclone.binary, "about", "gd:"], fake_rclone.env(), log_path=log, secrets=["abcdef123"]
+    )
+    assert res.error_tail
+    assert classify_failure(res.exit_code, res.error_tail) == Failure.AUTH
+
+
+async def test_runner_masks_secrets_in_callback_and_tail(fake_rclone, tmp_path):
+    fake_rclone.on("about", stderr=[jl("oops supersecretvalue", level="error")], exit=1)
+    seen = []
+    res = await run_rclone(
+        [fake_rclone.binary, "about", "gd:"],
+        fake_rclone.env(),
+        log_path=tmp_path / "y.log",
+        on_line=seen.append,
+        secrets=["supersecretvalue"],
+    )
+    assert "supersecretvalue" not in " ".join(res.error_tail)
+    assert all("supersecretvalue" not in ln.msg + ln.raw for ln in seen)
+    assert "supersecretvalue" not in (tmp_path / "y.log").read_text()

@@ -1,4 +1,5 @@
 import json
+import logging
 import secrets
 from collections.abc import Callable
 
@@ -29,6 +30,12 @@ from app.services.rclone.commands import (
 from app.services.rclone.errors import Failure, classify_failure
 from app.services.rclone.runner import RunResult, run_rclone
 from app.services.rclone.setup import ensure_config_encrypted
+
+logger = logging.getLogger(__name__)
+
+
+class AccountError(Exception):
+    pass
 
 
 class AccountService:
@@ -104,13 +111,16 @@ class AccountService:
                 if acc is None:
                     raise OAuthError("That account no longer exists.")
                 if acc.email != email:
-                    raise OAuthError(f"You signed in as {email}, but this account is {acc.email}.")
+                    raise OAuthError(
+                        "You signed in with a different Google account than the one being "
+                        "reconnected."
+                    )
             else:
                 acc = db.scalar(select(Account).where(Account.email == email))
             name = acc.remote_name if acc else self._new_remote_name(db)
             token_json = to_rclone_token(tok, self.clock())
-            if acc is not None:
-                await self._rclone(config_delete_args(self.env, name))
+            # `config create` replaces an existing section of the same name, so a reconnect
+            # needs no delete first (a delete-then-failed-create would lose the old login).
             res = await self._rclone(
                 config_create_args(
                     self.env,
@@ -123,10 +133,23 @@ class AccountService:
                 tok["refresh_token"],
             )
             if res.exit_code != 0:
+                if acc is not None:
+                    db.rollback()
+                    await self.mark_needs_reauth(acc.id, "saving the new Google login failed")
                 raise OAuthError(
                     "Could not save the Google login (rclone config create failed). See the logs."
                 )
-            await ensure_config_encrypted(self.env, self.runner)
+            try:
+                await ensure_config_encrypted(self.env, self.runner)
+            except Exception as e:
+                logger.error("rclone config encryption failed: %s", e)
+                await self._rclone(config_delete_args(self.env, name))
+                if acc is not None:
+                    db.rollback()
+                    await self.mark_needs_reauth(acc.id, "saving the new Google login failed")
+                raise OAuthError(
+                    "Could not encrypt the saved login, so it was not kept. See the logs."
+                ) from e
             if acc is None:
                 acc = Account(email=email, remote_name=name)
                 db.add(acc)
@@ -153,7 +176,9 @@ class AccountService:
             acc = db.get(Account, account_id)
             if acc is None:
                 raise LookupError("account not found")
-            await self._rclone(config_delete_args(self.env, acc.remote_name))
+            res = await self._rclone(config_delete_args(self.env, acc.remote_name))
+            if res.exit_code != 0:
+                raise AccountError("Could not remove the saved Google login; see the logs.")
             acc.status = AccountStatus.DISCONNECTED
             db.commit()
             record_event(

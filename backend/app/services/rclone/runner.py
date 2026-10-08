@@ -117,14 +117,24 @@ async def run_rclone(
     async def pump_stderr() -> None:
         assert proc.stderr is not None
         async for raw in _read_lines(proc.stderr):
-            text = redact(raw.decode("utf-8", "replace"), secrets)
+            raw_text = raw.decode("utf-8", "replace")
+            # Parse BEFORE masking: masking can eat a closing quote and break the JSON, which
+            # would hide the real level (and so real auth errors).
+            line = parse_line(raw_text)
             if log_fh:
-                log_fh.write(text + "\n")
-            line = parse_line(text)
+                log_fh.write(redact(raw_text, secrets) + "\n")
             if _is_error(line):
-                errors.append(line.msg)
+                errors.append(redact(line.msg, secrets))
             if on_line:
-                on_line(line)
+                on_line(
+                    LogLine(
+                        level=line.level,
+                        msg=redact(line.msg, secrets),
+                        obj=redact(line.obj, secrets) if isinstance(line.obj, str) else line.obj,
+                        stats=line.stats,
+                        raw=redact(line.raw, secrets),
+                    )
+                )
 
     async def pump_stdout() -> None:
         assert proc.stdout is not None

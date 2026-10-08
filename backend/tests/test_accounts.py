@@ -68,7 +68,18 @@ def test_callback_with_google_error_is_reported(auth_client):
         f"/api/oauth/callback?state={state}&error=access_denied", follow_redirects=False
     )
     assert "oauth_error=" in r.headers["location"]
-    assert "access_denied" in r.headers["location"]
+    assert "cancelled" in r.headers["location"]
+
+
+def test_callback_google_error_never_echoes_query_value(auth_client):
+    state = _start(auth_client)
+    r = auth_client.get(
+        f"/api/oauth/callback?state={state}&error=<script>evil", follow_redirects=False
+    )
+    assert "evil" not in r.headers["location"]
+    # the state was consumed
+    r2 = auth_client.get(f"/api/oauth/callback?state={state}&code=x", follow_redirects=False)
+    assert "oauth_error=" in r2.headers["location"]
 
 
 @respx.mock
@@ -123,3 +134,89 @@ def test_quota_success_updates_numbers(auth_client, make_account, fake_rclone):
     fake_rclone.on("about", stdout=['{"total": 2000, "used": 50, "trashed": 5, "free": 1950}'])
     body = auth_client.get(f"/api/accounts/{acc.id}/quota").json()
     assert (body["quota_total"], body["quota_used"], body["quota_trash"]) == (2000, 50, 5)
+
+
+def test_quota_auth_failure_json_log_line_marks_needs_reauth(
+    auth_client, make_account, fake_rclone
+):
+    acc = make_account()
+    fake_rclone.on(
+        "about", stderr=['{"level":"error","msg":"couldn\'t fetch token: invalid_grant"}'], exit=1
+    )
+    r = auth_client.get(f"/api/accounts/{acc.id}/quota")
+    assert r.json()["status"] == "NEEDS_REAUTH"
+
+
+def _connect(auth_client) -> None:
+    _mock_google()
+    auth_client.get(
+        f"/api/oauth/callback?state={_start(auth_client)}&code=a", follow_redirects=False
+    )
+
+
+@respx.mock
+def test_reconnect_does_not_delete_first(auth_client, fake_rclone):
+    _connect(auth_client)
+    respx.reset()
+    _mock_google()
+    before = len(fake_rclone.calls())
+    url = auth_client.post("/api/accounts/1/reconnect").json()["auth_url"]
+    state = parse_qs(urlparse(url).query)["state"][0]
+    auth_client.get(f"/api/oauth/callback?state={state}&code=b", follow_redirects=False)
+    new = fake_rclone.calls()[before:]
+    assert not any(c[4:6] == ["config", "delete"] for c in new)
+    assert any(c[4:6] == ["config", "create"] for c in new)
+
+
+@respx.mock
+def test_failed_create_on_reconnect_marks_needs_reauth(auth_client, fake_rclone):
+    _connect(auth_client)
+    respx.reset()
+    _mock_google()
+    fake_rclone.on("config", match=["create"], exit=1)
+    url = auth_client.post("/api/accounts/1/reconnect").json()["auth_url"]
+    state = parse_qs(urlparse(url).query)["state"][0]
+    r = auth_client.get(f"/api/oauth/callback?state={state}&code=b", follow_redirects=False)
+    assert "oauth_error=" in r.headers["location"]
+    assert auth_client.get("/api/accounts").json()[0]["status"] == "NEEDS_REAUTH"
+
+
+def test_disconnect_failure_keeps_status_and_returns_502(auth_client, make_account, fake_rclone):
+    acc = make_account()
+    fake_rclone.on("config", match=["delete"], exit=1)
+    r = auth_client.post(f"/api/accounts/{acc.id}/disconnect")
+    assert r.status_code == 502
+    assert "could not remove the saved google login" in r.json()["detail"].lower()
+    assert auth_client.get("/api/accounts").json()[0]["status"] == "CONNECTED"
+
+
+@respx.mock
+def test_encryption_failure_removes_remote_and_refuses(auth_client, app, fake_rclone):
+    _mock_google()
+    fake_rclone.on("config", match=["encryption"], exit=1)
+    app.state.layout.rclone_conf.write_text("[x]\ntype = drive\n")
+    state = _start(auth_client)
+    r = auth_client.get(f"/api/oauth/callback?state={state}&code=a", follow_redirects=False)
+    assert "encrypt" in r.headers["location"]
+    assert any(c[4:6] == ["config", "delete"] for c in fake_rclone.calls())
+    assert auth_client.get("/api/accounts").json() == []
+
+
+def test_unexpected_error_in_callback_is_generic(auth_client, app):
+    async def boom(state, code):
+        raise RuntimeError("secret detail user@example.com")
+
+    app.state.accounts.finish_connect = boom
+    r = auth_client.get("/api/oauth/callback?state=s&code=c", follow_redirects=False)
+    assert r.status_code == 303
+    assert "see%20the%20logs" in r.headers["location"]
+    assert "secret" not in r.headers["location"]
+
+
+def test_startup_encrypts_existing_plain_config(app, fake_rclone):
+    from fastapi.testclient import TestClient
+
+    app.state.layout.rclone_conf.write_text("[x]\ntype = drive\n")
+    with TestClient(app):
+        pass
+    assert any(c[4:7] == ["config", "encryption", "set"] for c in fake_rclone.calls())

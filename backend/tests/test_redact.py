@@ -103,3 +103,10 @@ def test_logger_exception_traceback_is_redacted():
     assert "sync failed" in output
     assert "LEAKEDTOKEN" not in output
     assert "MSGTOKEN" not in output
+
+
+def test_json_stays_valid_after_redaction():
+    import json
+
+    out = redact('{"level":"error","msg":"token: abc"}')
+    assert json.loads(out)["level"] == "error"
