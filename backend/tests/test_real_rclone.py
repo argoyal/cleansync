@@ -1051,3 +1051,20 @@ async def test_real_deletefile_removes_just_that_file(tmp_path):
     assert res.exit_code == 0, res.error_tail
     assert not (drive / "sibling.txt").exists()
     assert (drive / "Old [1]" / "a.txt").exists()
+
+
+async def test_real_rmdirs_of_a_parent_via_dot_dot_is_refused_before_rclone_runs(tmp_path):
+    env, drive, _ = _offload_world(tmp_path)
+    (drive / "Work" / "Old").mkdir(parents=True)
+    (drive / "empty elsewhere").mkdir()
+    ran: list[list[str]] = []
+
+    async def spy(args, *a, **kw):
+        ran.append(args)
+        return await run_rclone(args, *a, **kw)
+
+    for target in (f"loc:{drive}/Work/..", f"loc:{drive}/Work/Old/..", f"loc:{drive}/."):
+        with pytest.raises(c.UnsafeArgument):
+            await spy(c.rmdirs_args(env, target), env.env(), log_path=None)
+    assert ran == []
+    assert (drive / "empty elsewhere").is_dir() and (drive / "Work" / "Old").is_dir()

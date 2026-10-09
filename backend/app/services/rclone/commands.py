@@ -259,12 +259,34 @@ def moveto_args(env: RcloneEnv, src: str, dst: str) -> list[str]:
     ]
 
 
-def _remote_item(target: str) -> str:
-    """A remote target naming one item below the remote's top: never the whole Drive."""
+def _plain_parts(target: str) -> str:
+    """The path of a remote target, refused if any part is empty, `.` or `..`.
+
+    rclone cleans such paths, so `gd:Work/..` would mean the folder above, or the whole
+    Drive. One leading "/" is allowed (a local remote's absolute path). The empty path (the
+    remote's top) passes here; callers that must name an item refuse it themselves.
+    """
     _remote(target)
     path = target.split(":", 1)[1]
-    if not path.strip("/") or _CONTROL_CHARS.search(path):
+    if _CONTROL_CHARS.search(path):
+        raise UnsafeArgument(f"remote path holds control characters: {target!r}")
+    body = path[1:] if path.startswith("/") else path
+    if body and any(part in ("", ".", "..") for part in body.split("/")):
+        raise UnsafeArgument(f"remote path has an empty, '.' or '..' part: {target!r}")
+    return body
+
+
+def _remote_item(target: str) -> str:
+    """A remote target naming one item below the remote's top: never the whole Drive, and
+    never a path that rclone would turn into a parent folder."""
+    if not _plain_parts(target):
         raise UnsafeArgument(f"target must name one item, not the whole remote: {target!r}")
+    return target
+
+
+def _remote_parent(target: str) -> str:
+    """A folder on a remote, the top included, with no empty, `.` or `..` parts."""
+    _plain_parts(target)
     return target
 
 
@@ -287,7 +309,7 @@ def offload_list_args(env: RcloneEnv, remote_parent: str, name: str, is_dir: boo
     """Every file of one item on Drive, with Drive IDs and MD5s. Native docs are left out."""
     return env.base() + [
         "lsjson",
-        _remote(remote_parent),
+        _remote_parent(remote_parent),
         "--recursive",
         "--files-only",
         "--hash",
@@ -306,7 +328,7 @@ def offload_check_args(
     return env.base() + [
         "check",
         _local(local_parent),
-        _endpoint(remote_parent),
+        _remote_parent(remote_parent),
         "--combined",
         "-",
         *item_filters(name, is_dir),
@@ -367,6 +389,8 @@ def rmdirs_args(env: RcloneEnv, target: str) -> list[str]:
     """Remove the empty folders left by delete_args (a folder still holding anything stays).
 
     No --drive-skip-gdocs here, so a folder that still holds a native doc is not seen as empty.
+    An empty folder made on Drive after the check is removed too; it goes to Drive's trash,
+    so it can be brought back from there.
     """
     return env.base() + ["rmdirs", _remote_item(target), TRASH_FLAG, *LOG_FLAGS, NO_PROMPT_FLAG]
 

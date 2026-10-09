@@ -42,7 +42,7 @@ _EDITOR = {
     "presentation": "presentation",
     "drawing": "drawings",
 }
-_ID = re.compile(r"^[A-Za-z0-9_-]{1,200}$")
+_ID = re.compile(r"[A-Za-z0-9_-]{1,200}")
 _TRUE = {"true", "1", "yes"}
 
 
@@ -114,7 +114,7 @@ def valid_path(path: object) -> bool:
 
 
 def valid_id(obj: object) -> str | None:
-    return obj if isinstance(obj, str) and _ID.match(obj) else None
+    return obj if isinstance(obj, str) and _ID.fullmatch(obj) else None
 
 
 def native_kind(item: dict) -> str | None:

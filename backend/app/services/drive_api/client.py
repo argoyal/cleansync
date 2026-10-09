@@ -53,8 +53,7 @@ class DriveFileState:
 
 
 def _file_id(file_id: str) -> str:
-    # valid_id's pattern ends in `$`, which also lets a trailing line break through.
-    if valid_id(file_id) is None or "\n" in file_id:
+    if valid_id(file_id) is None:
         raise DriveApiError("not a usable Google Drive ID")
     return file_id
 
@@ -184,6 +183,10 @@ class DriveApi:
 
         Returns True when it is gone, False when it was left alone: it is not in the trash
         (someone took it out) or it is not the saved file any more.
+
+        Drive has no "delete only if unchanged": a file taken out of the trash or changed in
+        the moment between the check and the delete is still deleted. The gap is a single
+        request long; callers must not treat this as one atomic step.
         """
         state = await self.file_state(remote_name, file_id)
         if state is None:

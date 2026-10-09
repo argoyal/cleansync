@@ -174,6 +174,7 @@ def test_stored_listing_is_revalidated(tmp_path):
     from app.services.catalog.model import valid_id
 
     assert valid_id("../x") is None and valid_id("ok_1-A") == "ok_1-A"
+    assert valid_id("F1\n") is None  # `$` alone would let a trailing line break through
     assert parse_item({"Path": "a/../b", "IsDir": False}) is None
     base = {"pair_id": 1, "refreshed_at": "2026-10-08T00:00:00+00:00", "root_id": None}
     ok = {"path": "a.txt", "dir": False, "size": 1, "mtime": None, "id": "../bad"}
