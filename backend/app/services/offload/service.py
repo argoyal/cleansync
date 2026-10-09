@@ -58,6 +58,7 @@ DONE_MSG = "Removed from Google Drive (it is in Drive's trash). Kept on this ser
 STOPPED_BEFORE_DELETE = (
     "Syncing stopped before anything was removed from Google Drive. Use Restore to Drive to undo."
 )
+NOT_RUN_MSG = "DriveSync stopped before this item ran, so nothing was removed."
 EMPTY_FOLDERS_STAY = "Syncing stopped, so its empty folders may still be on Google Drive."
 
 
@@ -134,15 +135,17 @@ def _listing_problem(files: list[DriveFile], name: str, is_dir: bool, pretend: b
             "Sync now, then try again."
         )
     paths = [f.path for f in files]
+    if len({x.casefold() for x in paths}) != len(paths):
+        # Drive allows two files with one name (or names differing only in capital letters);
+        # this server may keep only one of them, so the other would have no copy here.
+        return (
+            "Google Drive has more than one file with the same name here (perhaps differing "
+            "only in capital letters), so nothing was removed. Rename one of them on Drive, "
+            "sync, then try again."
+        )
     inside = all(x.startswith(name + "/") for x in paths) if is_dir else paths == [name]
     if not inside:
         return "Google Drive listed files outside this item, so nothing was removed."
-    if len(set(paths)) != len(paths):
-        # Drive allows two files with one name; this server keeps only one of them.
-        return (
-            "Google Drive has more than one file with the same name here, so nothing was "
-            "removed. Rename one of them on Drive, sync, then try again."
-        )
     if pretend:
         return None
     if any(f.id is None for f in files):
@@ -281,6 +284,13 @@ class OffloadService:
                     continue
                 await self._run_pair(batch, pair_id, items)
         finally:
+            # A batch is never "done" with items still waiting or running.
+            for bi in batch.items:
+                if bi.state == "waiting":
+                    bi.state, bi.message = "failed", NOT_RUN_MSG
+                elif bi.state == "running":
+                    bi.state = "failed" if bi.offload_id is None else "attention"
+                    bi.message = NOT_RUN_MSG if bi.offload_id is None else store.INTERRUPTED_NOTE
             batch.done = True
             self._changed(batch.account_id)
 
@@ -298,6 +308,12 @@ class OffloadService:
             for bi, _ in items:
                 bi.state, bi.message = "failed", BUSY_MSG
             return
+        except Exception as e:
+            log.exception("could not hold pair %s for an offload", pair_id)
+            for bi, _ in items:
+                bi.state = "failed"
+                bi.message = f"DriveSync couldn't start this offload, so nothing was removed: {e}"
+            return
         try:
             for bi, p in items:
                 if await is_stopped(queue):
@@ -310,7 +326,10 @@ class OffloadService:
                 except Exception as e:  # never leave a row half-way
                     log.exception("offload of %s failed unexpectedly", p.path)
                     bi.state, bi.message = "failed", f"Something went wrong: {e}"
-                    recorded |= self._settle_crashed(bi)
+                    if self._settle_crashed(bi):
+                        recorded = True
+                        bi.state = "attention"
+                        bi.message = f"Something went wrong: {e}. {store.INTERRUPTED_NOTE}"
                 self._changed(batch.account_id, pair_id)
         finally:
             held.__exit__(None, None, None)
@@ -383,7 +402,7 @@ class OffloadService:
             return self._stop(db, job, bi, problem)
         # The delete names exactly the listed files, never "whatever is in the folder now":
         # a file added on Drive after this listing was never checked, so it must stay there.
-        delete_list = self.layout.offloads_dir / f"delete-{job.id}.txt"
+        delete_list = store.delete_list_file(self.layout, job.id)
         try:
             if p.is_dir:
                 list_text = files_from_raw_text([f.path[len(name) + 1 :] for f in files])
@@ -459,15 +478,19 @@ class OffloadService:
         off.state = S.VERIFYING
         db.commit()
         missing: list[str] | None
+        changed: list[str] = []
         try:
-            missing = [] if pretend else await self._not_in_trash(account.remote_name, files)
+            if pretend:
+                missing = []
+            else:
+                missing, changed = await self._not_in_trash(account.remote_name, files)
         except DriveAuthError:
             await self.accounts.mark_needs_reauth(account.id, AUTH_REASON)
             missing = None
         except DriveApiError as e:
             log.warning("could not check Drive's trash for %s: %s", p.prel, e)
             missing = None
-        if missing == [] and refused is None:
+        if missing == [] and not changed and refused is None:
             off.trash_verified = True
             if pretend:
                 notes.insert(0, "Pretend account: there is no trash to check.")
@@ -476,18 +499,26 @@ class OffloadService:
         parts = []
         if refused:
             parts.append(f"Google Drive refused to remove some files: {refused}.")
+
+        def shown(paths: list[str]) -> str:
+            return names([to_account_rel(pair, join_rel(parent, m)) for m in paths])
+
         if missing:
-            shown = [to_account_rel(pair, join_rel(parent, m)) for m in missing]
-            parts.append(
-                "These files are not in Google Drive's trash, or changed there after the "
-                f"check: {names(shown)}."
-            )
+            parts.append(f"These files are not in Google Drive's trash: {shown(missing)}.")
         if missing is None:
             parts.append("DriveSync could not check Google Drive's trash.")
-        parts.append(
-            "Everything stays on this server and out of sync. Use Restore to Drive to "
-            "put it back on Drive."
-        )
+        if changed:
+            parts.append(
+                "These files changed on Google Drive after DriveSync checked them, so the "
+                "newer version is in Google Drive's trash, not on this server: "
+                f"{shown(changed)}. Recover them from Google Drive's trash soon: Google "
+                "empties it after 30 days."
+            )
+        parts.append("Everything stays on this server and out of sync.")
+        if changed:
+            parts.append("Once you have the newer versions back, use Restore to Drive.")
+        else:
+            parts.append("Use Restore to Drive to put it back on Drive.")
         self._settle(db, job, bi, account, off, S.ATTENTION, " ".join(parts))
         return True
 
@@ -533,19 +564,27 @@ class OffloadService:
             )
         return None
 
-    async def _not_in_trash(self, remote_name: str, files: list[DriveFile]) -> list[str]:
-        """Listed files that are not in Drive's trash as the file that was checked: gone for
-        good, not in the trash, or with another size or MD5 (changed on Drive meanwhile)."""
+    async def _not_in_trash(
+        self, remote_name: str, files: list[DriveFile]
+    ) -> tuple[list[str], list[str]]:
+        """Listed files that are not in Drive's trash as the file that was checked.
+
+        Returns (missing, changed): missing are gone for good or not in the trash; changed are
+        in the trash with another size or MD5 (or none), so changed on Drive meanwhile."""
         gate = asyncio.Semaphore(TRASH_CHECKS_AT_ONCE)
 
-        async def one(f: DriveFile) -> str | None:
+        async def one(f: DriveFile) -> tuple[str, str | None]:
             async with gate:
                 state = await self.drive.file_state(remote_name, f.id)
-            if state is not None and state.trashed and state.matches(f.size, f.md5):
-                return None
-            return f.path
+            if state is None or not state.trashed:
+                return f.path, "missing"
+            return f.path, None if state.matches(f.size, f.md5) else "changed"
 
-        return [p for p in await asyncio.gather(*(one(f) for f in files)) if p is not None]
+        found = await asyncio.gather(*(one(f) for f in files))
+        return (
+            [p for p, why in found if why == "missing"],
+            [p for p, why in found if why == "changed"],
+        )
 
     def _stop(self, db: Session, job: SyncJob, bi: BatchItem, message: str) -> bool:
         self.engine.finish_job(db, job, JobState.FAILED, error=message)

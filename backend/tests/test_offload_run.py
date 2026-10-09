@@ -1,3 +1,4 @@
+import contextlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -184,6 +185,12 @@ async def test_offload_checks_records_deletes_to_trash_and_verifies(s, fake_rclo
     assert off.trash_verified and off.trashed_ids == ["F1", "F2"]
     assert sorted(s.drive.asked) == ["F1", "F2"]
     assert _subs(fake_rclone) == ["lsjson", "check", "delete", "rmdirs"]
+    listing, check = fake_rclone.calls()[:2]
+    assert listing[5] == "gd_alice:Work"
+    assert check[5:7] == [str(s.root / "Drive"), "gd_alice:Work"]
+    for args in (listing, check):
+        include = args.index("--filter=+ /Old/**")
+        assert args.index("--filter=- **") > include
     delete = fake_rclone.calls()[2]
     assert delete[5] == "gd_alice:Work/Old"
     assert "--drive-use-trash=true" in delete and "--drive-skip-gdocs" in delete
@@ -308,6 +315,7 @@ async def test_a_file_not_in_the_trash_puts_the_offload_in_attention(s, fake_rcl
     off = db.scalars(select(Offload)).one()
     assert item.state == "attention" and off.state == S.ATTENTION
     assert "Drive/Old/b.txt" in off.note and "Drive/Old/a.txt" not in off.note
+    assert "Use Restore to Drive" in off.note and "newer version" not in off.note
     assert not off.trash_verified
     # Still out of sync: the next sync neither uploads nor deletes the local copy.
     assert "- /Old/**" in layout.pair_filters(s.pair.id).read_text().splitlines()
@@ -327,6 +335,9 @@ async def test_a_trashed_file_that_changed_on_drive_is_attention(s, fake_rclone,
     off = db.scalars(select(Offload)).one()
     assert item.state == "attention" and off.state == S.ATTENTION
     assert "Drive/Old/b.txt" in off.note and not off.trash_verified
+    # The newer version is only in Drive's trash: recover it from there, not from here.
+    assert "newer version" in off.note and "Google Drive's trash" in off.note
+    assert "30 days" in off.note and "Use Restore to Drive to put" not in off.note
 
 
 async def test_a_file_gone_for_good_is_attention(s, fake_rclone, db):
@@ -455,7 +466,8 @@ async def test_an_unexpected_error_leaves_the_offload_in_attention(s, fake_rclon
 
     s.drive.file_state = broken
     [item] = (await _run(s, ["Drive/Old"])).items
-    assert item.state == "failed" and "boom" in item.message
+    assert item.state == "attention" and "boom" in item.message
+    assert store.INTERRUPTED_NOTE in item.message
     off = db.scalars(select(Offload)).one()
     assert off.state == S.ATTENTION and off.note == store.INTERRUPTED_NOTE
     assert "- /Old/**" in layout.pair_filters(s.pair.id).read_text().splitlines()
@@ -472,3 +484,51 @@ async def test_an_item_offloaded_meanwhile_is_not_offloaded_twice(s, fake_rclone
     assert [(i.state, i.message) for i in late.items] == [("failed", "This is already offloaded.")]
     assert _subs(fake_rclone).count("delete") == 1
     assert len(db.scalars(select(Offload)).all()) == 1
+
+
+async def test_a_single_file_with_a_twin_on_drive_says_so(s, fake_rclone, db):
+    _drive_has(s, fake_rclone, files=(("a.txt", 3, "F1"), ("a.txt", 3, "F9")))
+    (s.root / "Drive" / "a.txt").write_text("aaa")
+    [item] = (await _run(s, ["Drive/a.txt"])).items
+    assert item.state == "failed" and "same name" in item.message
+    assert "deletefile" not in _subs(fake_rclone)
+    assert db.scalars(select(Offload)).all() == []
+
+
+async def test_names_differing_only_in_case_stop_before_the_delete(s, fake_rclone, db):
+    # Even if the check called both "same" (a disk that ignores case holds only one of them).
+    _drive_has(s, fake_rclone, files=(("Old/A.txt", 3, "F1"), ("Old/a.txt", 3, "F2")))
+    [item] = (await _run(s, ["Drive/Old"])).items
+    assert item.state == "failed" and "same name" in item.message
+    assert "delete" not in _subs(fake_rclone)
+    assert db.scalars(select(Offload)).all() == []
+
+
+class HoldBreaks(StubQueue):
+    @contextlib.contextmanager
+    def hold(self, pair_id):
+        raise OSError("hold broke")
+        yield
+
+
+async def test_a_hold_that_breaks_fails_its_items_with_the_reason(s, fake_rclone):
+    _drive_has(s, fake_rclone)
+    s.queue = HoldBreaks()
+    s.service._get_queue = lambda: s.queue
+    batch = await _run(s, ["Drive/Old"])
+    assert batch.done
+    [item] = batch.items
+    assert item.state == "failed" and "hold broke" in item.message
+    assert fake_rclone.calls() == []
+
+
+async def test_a_batch_cut_short_never_ends_with_waiting_items(s, fake_rclone, monkeypatch):
+    _drive_has(s, fake_rclone)
+
+    async def cut(*a, **kw):
+        raise RuntimeError("cut short")
+
+    monkeypatch.setattr(s.service, "_run_pair", cut)
+    batch = await _run(s, ["Drive/Old"])
+    assert batch.done and [i.state for i in batch.items] == ["failed"]
+    assert "nothing was removed" in batch.items[0].message

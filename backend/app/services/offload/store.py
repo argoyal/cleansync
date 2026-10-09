@@ -85,3 +85,18 @@ def read_manifest(layout: Layout, offload_id: int) -> list[dict]:
     except (OSError, ValueError):
         return []
     return data if isinstance(data, list) else []
+
+
+def delete_list_file(layout: Layout, job_id: int) -> Path:
+    """Where an offload writes the checked list for one `rclone delete` (removed after it)."""
+    return layout.offloads_dir / f"delete-{job_id}.txt"
+
+
+def sweep_delete_lists(layout: Layout) -> int:
+    """At startup: remove delete lists a hard stop left behind. They are never read again."""
+    count = 0
+    for path in layout.offloads_dir.glob("delete-*.txt"):
+        if path.name[len("delete-") : -len(".txt")].isdigit():
+            path.unlink(missing_ok=True)
+            count += 1
+    return count

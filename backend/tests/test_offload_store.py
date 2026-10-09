@@ -63,3 +63,15 @@ def test_manifest_round_trip(layout):
     assert store.read_manifest(layout, 7) == files
     assert store.manifest_file(layout, 7).parent == layout.offloads_dir
     assert store.read_manifest(layout, 8) == []
+
+
+def test_leftover_delete_lists_are_swept_at_startup(layout):
+    store.write_manifest(layout, 7, [])
+    left = store.delete_list_file(layout, 12)
+    left.write_text("a.txt\n")
+    (layout.offloads_dir / "notes.txt").write_text("keep")
+    assert left.parent == layout.offloads_dir and left.name == "delete-12.txt"
+    assert store.sweep_delete_lists(layout) == 1
+    assert not left.exists()
+    assert store.manifest_file(layout, 7).exists()
+    assert (layout.offloads_dir / "notes.txt").exists()
