@@ -230,6 +230,16 @@ def list_entries(
     return out
 
 
+def check_filters(kind: str, path: str) -> str:
+    """Raises RecoveryError(422) for an unknown kind or an unsafe path; returns the clean path."""
+    if kind and kind not in KINDS:
+        raise RecoveryError(f"unknown kind {kind!r}", 422)
+    try:
+        return normalize_rel(path)
+    except UnsafePath as e:
+        raise RecoveryError(str(e), 422) from e
+
+
 def filter_entries(
     entries: list[RecoveryEntry], *, pair: str = "", kind: str = "", path: str = ""
 ) -> list[RecoveryEntry]:
@@ -260,8 +270,11 @@ def _no_links(base: Path, rel: str) -> bool:
     return True
 
 
-def resolve(layout: Layout, scope: Scope, entry_id: str) -> tuple[RecoveryEntry, Path]:
-    """The entry and its file. Ids are checked: they can't reach outside backups/<email>/."""
+def resolve(
+    layout: Layout, scope: Scope, entry_id: str, *, default_days: int | None = None
+) -> tuple[RecoveryEntry, Path]:
+    """The entry and its file. Ids are checked: they can't reach outside backups/<email>/.
+    default_days is the default retention, for the entry's expires_on."""
     if entry_id.startswith(OFFLOAD_PREFIX):
         raise RecoveryError(OFFLOAD_MSG)
     try:
@@ -283,7 +296,7 @@ def resolve(layout: Layout, scope: Scope, entry_id: str) -> tuple[RecoveryEntry,
     if base.is_symlink() or not _no_links(base, rel) or not src.is_file():
         raise RecoveryError("not found", 404)
     pairs = {str(p.id): p for p in scope.pairs}
-    entry = _entry(pairs, None, parts[0], day, parts[2:], src.stat().st_size)
+    entry = _entry(pairs, default_days, parts[0], day, parts[2:], src.stat().st_size)
     if entry is None:
         raise RecoveryError("not found", 404)
     return entry, src
@@ -300,6 +313,9 @@ def _usable_folder(scope: Scope, pair: SyncPair | None, folder_rel: str) -> Path
     except UnsafePath as e:
         raise RecoveryError(str(e), 422) from e
     if base.is_symlink() or not base.is_dir():
+        raise RecoveryError(FOLDER_GONE_MSG)
+    # Checked before making anything: a link on the way must not lead into a hidden folder.
+    if resolves_to_hidden(scope.root, folder):
         raise RecoveryError(FOLDER_GONE_MSG)
     folder.mkdir(parents=True, exist_ok=True)
     if folder.is_symlink() or not folder.is_dir() or resolves_to_hidden(scope.root, folder):

@@ -11,6 +11,7 @@ import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 
+from app.services.files.names import split_name
 from app.services.files.scope import is_hidden_name
 
 log = logging.getLogger(__name__)
@@ -99,12 +100,12 @@ def zip_folder(folder: Path, arc_root: str) -> Iterator[bytes]:
 
 
 def zip_files(files: list[tuple[Path, str]]) -> Iterator[bytes]:
-    """Chosen files as one zip, streamed. Repeated names get " (2)", " (3)", ..."""
+    """Chosen files as one zip, streamed. Repeated names get "name (2).ext", "name (3).ext", ..."""
     sink = _Sink()
     used: set[str] = set()
     with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
         for path, arc in files:
-            stem, ext = os.path.splitext(arc)
+            stem, ext = split_name(arc)
             name, n = arc, 2
             while name in used:
                 name, n = f"{stem} ({n}){ext}", n + 1

@@ -5,7 +5,7 @@ import pytest
 
 from app.models import Offload
 from app.models.enums import OffloadState as S
-from app.services.files.recovery import restored_names, unconflict
+from app.services.files.recovery import FOLDER_GONE_MSG, restored_names, unconflict
 from app.services.queue import MISSING_DISK_MSG
 
 
@@ -326,3 +326,79 @@ def test_zip_files_names_repeats_and_aborts_on_read_errors(tmp_path):
     assert zf.read("same (2).txt") == b"2"
     with pytest.raises(OSError):
         b"".join(zip_files([(a / "same.txt", "same.txt"), (tmp_path / "gone.txt", "gone.txt")]))
+
+
+def test_a_file_cleaned_up_before_download_is_a_plain_404(auth_client, env, monkeypatch):
+    import app.api.recovery as api
+
+    acc, _, _, _ = env
+    entry = next(e["id"] for e in _list(auth_client, acc)["entries"] if e["name"] == "b.txt")
+    real = api.resolve
+
+    def resolve_then_prune(*args, **kwargs):
+        found, src = real(*args, **kwargs)
+        src.unlink()  # retention removed it in between
+        return found, src
+
+    monkeypatch.setattr(api, "resolve", resolve_then_prune)
+    r = auth_client.get("/api/recovery/file", params={"account_id": acc.id, "id": entry})
+    assert r.status_code == 404
+    assert "no longer" in r.json()["detail"]
+
+
+def test_restore_never_recreates_a_missing_sync_folder(auth_client, env, stub_queue):
+    import shutil
+
+    acc, _, root, _ = env
+    entry = next(e["id"] for e in _list(auth_client, acc)["entries"] if e["name"] == "a.txt")
+    shutil.rmtree(root / "Docs")  # as if the disk were not mounted
+    body = _restore(auth_client, acc, entry)
+    assert body["results"][0]["error"] == FOLDER_GONE_MSG
+    assert not (root / "Docs").exists()
+    assert stub_queue.requests == []
+
+
+def test_restore_never_makes_folders_through_a_link_to_a_hidden_name(auth_client, env, app):
+    acc, pair, root, _ = env
+    (root / "Docs" / ".google-exports").mkdir()
+    (root / "Docs" / "Sub").symlink_to(root / "Docs" / ".google-exports")
+    entry = next(e["id"] for e in _list(auth_client, acc)["entries"] if e["name"] == "a.txt")
+    _put(
+        app.state.layout.backups_dir / acc.email,
+        f"{pair.id}/2026-10-05/.drivesync-deleted-131313-aa11/Sub/new/q.txt",
+        "q",
+    )
+    deep = next(e["id"] for e in _list(auth_client, acc)["entries"] if e["name"] == "q.txt")
+    body = _restore(auth_client, acc, entry, deep)
+    assert [x["restored_to"] for x in body["results"]] == [None, None]
+    assert list((root / "Docs" / ".google-exports").iterdir()) == []
+
+
+def test_kind_and_path_filters_are_checked(auth_client, env):
+    acc, _, _, _ = env
+    r = auth_client.get("/api/recovery", params={"account_id": acc.id, "kind": "nope"})
+    assert r.status_code == 422
+    r = auth_client.get("/api/recovery", params={"account_id": acc.id, "path": "Docs/../x"})
+    assert r.status_code == 422
+    assert {e["name"] for e in _list(auth_client, acc, path="/Docs//Sub/")["entries"]} == {"a.txt"}
+
+
+def test_zip_repeats_use_the_same_naming_as_restore(tmp_path):
+    from app.services.files.zipstream import zip_files
+
+    a = tmp_path / "a"
+    a.mkdir()
+    (a / ".env").write_text("1")
+    data = b"".join(zip_files([(a / ".env", ".env"), (a / ".env", ".env")]))
+    assert zipfile.ZipFile(BytesIO(data)).namelist() == [".env", ".env (2)"]
+
+
+def test_resolve_reports_when_an_entry_goes(env, app, db):
+    from app.services.files.recovery import resolve
+    from app.services.files.scope import load_scope
+
+    acc, pair, _, _ = env
+    scope = load_scope(db, app.state.layout, acc.id)
+    loose = "unsynced/2026-10-04/.drivesync-deleted-111111-cd34/Loose/x.txt"
+    entry, _ = resolve(app.state.layout, scope, loose, default_days=30)
+    assert str(entry.expires_on) == "2026-11-04"
