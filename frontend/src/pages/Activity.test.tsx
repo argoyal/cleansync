@@ -122,6 +122,26 @@ describe("sync activity", () => {
     await waitFor(() => expect(sw).not.toHaveAttribute("aria-disabled", "true"));
   });
 
+  it("shows every switch as stopped while the storage disk is missing, and sends nothing", async () => {
+    const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart DriveSync.";
+    const { calls } = mockApi({
+      "GET /api/sync-pairs": [PAIR, { ...PAIR, id: 8, name: "Photos", paused: true, status: "PAUSED" }],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/sync-pairs/8/catalog": CATALOG,
+      "GET /api/activity": [],
+      "GET /api/status": { accounts: 1, accounts_attention: 0, pairs: 2, new: 0, healthy: 1, attention: 0, running: 0, paused: 1, conflicts: 0, sync_stopped: MSG },
+    });
+    renderApp(<ActivityPage />);
+    for (const name of ["My Drive", "Photos"]) {
+      const sw = await screen.findByRole("switch", { name: `Stopped — storage disk missing, ${name}` });
+      expect(sw).toHaveTextContent("Stopped — storage disk missing");
+      expect(sw).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(sw);
+    }
+    expect(screen.getByRole("button", { name: "Sync now, My Drive" })).toBeDisabled();
+    expect(calls.filter((c) => c.method === "POST")).toEqual([]);
+  });
+
   it("calls a pair with syncing off 'Sync off', not 'Paused'", async () => {
     mockApi({
       "GET /api/sync-pairs": [{ ...PAIR, paused: true, status: "PAUSED" }],

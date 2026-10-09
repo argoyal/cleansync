@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
 import { api, friendlyError } from "../api/client";
+import { useStatus } from "../api/queries";
 import type { Pair } from "../api/types";
 import { useToast } from "./Toasts";
 import { formatRelative } from "../lib/format";
@@ -20,18 +21,26 @@ export function usePairAction(pairId: number) {
   });
 }
 
+/** What the switch says while all syncing is stopped (spec §6.9), or null while it runs. */
+function stoppedLabel(reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  return reason.startsWith("Storage disk is missing") ? "Stopped — storage disk missing" : "Stopped — see the message above";
+}
+
 /** Spec §6.9: one switch per pair. Off is the existing pause; on is resume. */
 export function SyncSwitch({ pair, act: shared }: { pair: Pair; act?: ReturnType<typeof usePairAction> }) {
   const own = usePairAction(pair.id);
   const act = shared ?? own;
+  const stopped = stoppedLabel(useStatus().data?.sync_stopped);
   const on = !pair.paused;
-  const pending = act.isPending;
+  const pending = act.isPending || stopped !== null;
+  const label = stopped ?? (on ? "Sync on" : "Sync off");
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
-      aria-label={`${on ? "Sync on" : "Sync off"}, ${pair.name}`}
+      aria-label={`${label}, ${pair.name}`}
       aria-disabled={pending}
       className="inline-flex h-9 items-center gap-2 rounded-ctl px-3 text-body font-medium hover:bg-sunken aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
       onClick={() =>
@@ -46,7 +55,7 @@ export function SyncSwitch({ pair, act: shared }: { pair: Pair; act?: ReturnType
       <span aria-hidden="true" className={`relative h-5 w-9 rounded-full transition-colors ${on ? "bg-accent" : "bg-line"}`}>
         <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-surface shadow-float transition-[left] ${on ? "left-[18px]" : "left-0.5"}`} />
       </span>
-      {on ? "Sync on" : "Sync off"}
+      {label}
     </button>
   );
 }
@@ -54,7 +63,8 @@ export function SyncSwitch({ pair, act: shared }: { pair: Pair; act?: ReturnType
 /** Sync now / the Sync on-off switch, plus the one action the pair's current problem calls for. */
 export function PairActions({ pair, details = true }: { pair: Pair; details?: boolean }) {
   const act = usePairAction(pair.id);
-  const busy = act.isPending || pair.status === "RUNNING";
+  const stopped = Boolean(useStatus().data?.sync_stopped);
+  const busy = act.isPending || pair.status === "RUNNING" || stopped;
   return (
     <div className="flex flex-wrap gap-2">
       {!pair.initialized ? (
