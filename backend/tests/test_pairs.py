@@ -215,3 +215,28 @@ def test_a_following_local_folder_still_cannot_overlap(auth_client, make_account
     )
     r = _create(auth_client, acc.id, remote_path="Work")
     assert r.status_code == 422 and "local folder overlaps" in r.json()["detail"]
+
+
+def test_a_local_folder_the_disk_cannot_hold_gives_a_plain_error(
+    auth_client, make_account, monkeypatch
+):
+    from pathlib import Path
+
+    def boom(self, *a, **k):
+        raise OSError("File name too long")
+
+    acc = make_account()
+    monkeypatch.setattr(Path, "mkdir", boom)
+    r = _create(auth_client, acc.id, remote_path="Work")
+    assert r.status_code == 422
+    assert (
+        r.json()["detail"]
+        == "The local folder 'Work' can't be created on this disk. Choose a different local folder."
+    )
+    assert auth_client.get("/api/sync-pairs").json() == []
+
+
+def test_a_reserved_name_taken_from_the_drive_folder_says_so(auth_client, make_account):
+    r = _create(auth_client, make_account().id, remote_path=".google-exports")
+    assert r.status_code == 422
+    assert "followed the Drive folder" in r.json()["detail"]
