@@ -61,3 +61,4 @@ def test_the_theme_script_is_served_as_javascript(spa_client):
     r = spa_client.get("/theme.js")
     assert r.status_code == 200
     assert "javascript" in r.headers["content-type"]
+    assert r.headers["cache-control"] == "no-cache"

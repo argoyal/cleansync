@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { getTheme, setTheme, THEME_KEY } from "./theme";
+import { act, renderHook } from "@testing-library/react";
+
+import { getTheme, setTheme, THEME_KEY, useTheme } from "./theme";
 
 // Read as plain files: files under public/ can't be imported, and CSS is not loaded in tests.
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
@@ -39,6 +41,29 @@ describe("theme", () => {
     expect(() => setTheme("light")).not.toThrow();
     expect(root().getAttribute("data-theme")).toBe("light");
     expect(getTheme()).toBe("system"); // nothing could be remembered
+  });
+
+  it("every useTheme follows a change made anywhere", () => {
+    const a = renderHook(() => useTheme());
+    const b = renderHook(() => useTheme());
+    act(() => a.result.current[1]("dark"));
+    expect(b.result.current[0]).toBe("dark");
+  });
+
+  it("follows a change made in another tab", () => {
+    const a = renderHook(() => useTheme());
+    localStorage.setItem(THEME_KEY, "light");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: THEME_KEY }));
+    });
+    expect(a.result.current[0]).toBe("light");
+    expect(root().getAttribute("data-theme")).toBe("light");
+    localStorage.removeItem(THEME_KEY);
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: THEME_KEY }));
+    });
+    expect(a.result.current[0]).toBe("system");
+    expect(root().hasAttribute("data-theme")).toBe(false);
   });
 
   it("theme.js applies a remembered choice before the app starts", () => {

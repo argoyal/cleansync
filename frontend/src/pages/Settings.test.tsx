@@ -1,7 +1,8 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
+import { setTheme } from "../lib/theme";
 import { AppRoutes } from "../routes";
 import { ACCOUNT, json, mockApi, PAIR, renderApp } from "../test/utils";
 import { SettingsPage } from "./SettingsPage";
@@ -95,6 +96,14 @@ describe("settings", () => {
     renderApp(<SettingsPage />, { route: "/settings?tab=general", path: "/settings" });
     await userEvent.click(within(await screen.findByRole("radiogroup", { name: "Theme" })).getByRole("radio", { name: "Light" }));
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+  });
+
+  it("shows a theme picked elsewhere", async () => {
+    mockApi({ "GET /api/system": SYSTEM, "GET /api/settings": SETTINGS });
+    renderApp(<SettingsPage />, { route: "/settings?tab=general", path: "/settings" });
+    const group = await screen.findByRole("radiogroup", { name: "Theme" });
+    act(() => setTheme("dark"));
+    expect(within(group).getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "true");
   });
 
   it("treats an unknown tab as General", async () => {

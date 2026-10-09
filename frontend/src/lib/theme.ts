@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useSyncExternalStore } from "react";
 
 export type Theme = "system" | "light" | "dark";
 /** Keep in step with public/theme.js, which applies the choice before the page draws. */
@@ -28,20 +28,33 @@ export function setTheme(theme: Theme): void {
     // storage blocked: the choice lasts for this visit only
   }
   applyTheme(theme);
+  notify();
+}
+
+const listeners = new Set<() => void>();
+const notify = () => listeners.forEach((l) => l());
+
+/** The page's own marker is the one source of truth, so every switch and every tab agree. */
+function shownTheme(): Theme {
+  const shown = document.documentElement.getAttribute("data-theme");
+  return shown === "light" || shown === "dark" ? shown : "system";
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  const onStorage = (e: StorageEvent) => {
+    if (e.key !== THEME_KEY && e.key !== null) return;
+    applyTheme(getTheme()); // another tab changed the choice
+    notify();
+  };
+  window.addEventListener("storage", onStorage);
+  return () => {
+    listeners.delete(listener);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 export function useTheme(): [Theme, (theme: Theme) => void] {
-  // Start from what the page shows (theme.js may have applied it), so a blocked storage
-  // read can't make the switch disagree with the page.
-  const [theme, setState] = useState<Theme>(() => {
-    const shown = document.documentElement.getAttribute("data-theme");
-    return shown === "light" || shown === "dark" ? shown : getTheme();
-  });
-  return [
-    theme,
-    (next) => {
-      setTheme(next);
-      setState(next);
-    },
-  ];
+  const theme = useSyncExternalStore(subscribe, shownTheme);
+  return [theme, setTheme];
 }
