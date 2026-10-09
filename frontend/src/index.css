@@ -27,8 +27,9 @@
   --shadow: 20 24 36;
 }
 
+/* Dark colours when the system asks for them, unless Light was picked in DriveSync... */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: 20 22 28;
     --surface: 27 30 38;
@@ -49,6 +50,29 @@
     --paused: 140 147 163;
     --shadow: 0 0 0;
   }
+}
+
+/* ...or when Dark was picked. Keep these the same as the block above. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: 20 22 28;
+  --surface: 27 30 38;
+  --sunken: 34 38 49;
+  --ink: 231 233 239;
+  --ink-2: 160 166 181;
+  --line: 46 51 64;
+  --accent: 180 156 255;
+  --accent-ink: 24 18 42;
+  --accent-soft: 44 37 70;
+  --ok: 76 195 138;
+  --warn: 242 193 78;
+  --warn-soft: 58 47 20;
+  --err: 255 107 97;
+  --err-soft: 66 30 30;
+  --run: 110 168 255;
+  --run-soft: 27 42 70;
+  --paused: 140 147 163;
+  --shadow: 0 0 0;
 }
 
 html,

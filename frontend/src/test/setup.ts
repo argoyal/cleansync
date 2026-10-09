@@ -47,4 +47,5 @@ afterEach(() => {
   FakeEventSource.instances = [];
   localStorage.clear();
   sessionStorage.clear();
+  document.documentElement.removeAttribute("data-theme");
 });

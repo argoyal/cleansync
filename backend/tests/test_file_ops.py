@@ -955,3 +955,52 @@ def test_done_actions_update_the_cached_listing(
     assert app.state.catalog.store.load(pair.id).files["New/x.txt"].id == "X1"
     listed = auth_client.get("/api/browse", params={"account_id": acc.id, "path": "Drive"}).json()
     assert {i["name"]: i["status"] for i in listed["items"]} == {"New": "synced"}
+
+
+def test_disk_gone_refuses_drive_moves_before_any_rclone_call(
+    auth_client, app, make_account, make_pair, fake_rclone, save_catalog, monkeypatch
+):
+    # The real queue, and no sync has been asked for since the disk went away.
+    from app.services.queue import MISSING_DISK_MSG
+
+    acc = make_account()
+    root = app.state.layout.account_dir(acc.email)
+    pair = make_pair(acc, local_subpath="Drive", remote_path="", initialized=True)
+    _put(root, "Drive/a.txt")
+    (root / "Drive/Dest").mkdir()
+    save_catalog(pair.id, [_entry("a.txt"), _entry("Dest", is_dir=True)])
+    _stat_missing(fake_rclone)
+    app.state.layout.volume_file.unlink()
+    assert app.state.queue.disabled_reason is None
+    for action, body in (
+        ("rename", {"path": "Drive/a.txt", "new_name": "b.txt"}),
+        ("move", {"paths": ["Drive/a.txt"], "to": "Drive/Dest"}),
+        ("delete", {"paths": ["Drive/a.txt"]}),
+        ("mkdir", {"path": "Drive", "name": "New"}),
+    ):
+        r = _post(auth_client, action, account_id=acc.id, **body)
+        assert r.status_code == 503, (action, r.text)
+        assert r.json()["detail"] == MISSING_DISK_MSG
+    # A new Google file is made on Drive itself, and an upload ends up there: both refused.
+    made: list[object] = []
+
+    async def create_native(*args):
+        made.append(args)
+        return {"id": "G1"}
+
+    monkeypatch.setattr(app.state.drive_api, "create_native", create_native)
+    r = auth_client.post(
+        "/api/files/new", json={"account_id": acc.id, "path": "Drive", "kind": "document"}
+    )
+    assert r.status_code == 503 and r.json()["detail"] == MISSING_DISK_MSG
+    r = auth_client.post(
+        "/api/files/upload",
+        params={"account_id": acc.id, "path": "Drive", "name": "up.txt"},
+        content=b"data",
+    )
+    assert r.status_code == 503 and r.json()["detail"] == MISSING_DISK_MSG
+    assert made == []
+    assert fake_rclone.calls() == []
+    assert (root / "Drive/a.txt").exists() and not (root / "Drive/New").exists()
+    assert not (root / "Drive/up.txt").exists()
+    assert app.state.queue.disabled_reason == MISSING_DISK_MSG

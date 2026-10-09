@@ -61,15 +61,29 @@ def create_pair(db: Session, layout: Layout, data: PairCreate) -> SyncPair:
     if acc is None:
         raise PairError("account not found")
     try:
-        local = normalize_rel(data.local_subpath)
         remote = validate_remote_path(data.remote_path)
+        # Spec §6.10: left out, the local folder is the Drive path under the account folder.
+        followed = "local_subpath" not in data.model_fields_set
+        wanted = remote if followed else data.local_subpath
+        local = normalize_rel(wanted)
         if local.split("/")[0] == ".google-exports":
-            raise PairError("that folder name is reserved")
+            hint = (
+                " The local folder followed the Drive folder; choose a different local folder."
+                if followed
+                else ""
+            )
+            raise PairError("that folder name is reserved." + hint)
         local_dir = safe_join(layout.account_dir(acc.email), local)
     except UnsafePath as e:
         raise PairError(str(e)) from e
     _check_overlap(db, acc.id, local, remote)
-    local_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        local_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise PairError(
+            f"The local folder '{local}' can't be created on this disk. "
+            "Choose a different local folder."
+        ) from e
     pair = SyncPair(
         account_id=acc.id,
         name=data.name,

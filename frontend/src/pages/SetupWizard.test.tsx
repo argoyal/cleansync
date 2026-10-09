@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -80,10 +80,29 @@ describe("first-run wizard", () => {
     });
     renderApp(<SetupWizard />, { route: "/setup", path: "/setup" });
     await userEvent.click(await screen.findByRole("button", { name: "Work" }));
-    expect(screen.getByText(/stay in step with/)).toHaveTextContent("Google Drive Work will stay in step with alice@example.com");
+    expect(screen.getByText(/stay in step with/)).toHaveTextContent("Google Drive Work will stay in step with alice@example.com/Work");
     await userEvent.click(screen.getByRole("button", { name: "Create and preview" }));
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/setup?step=preview&pair=11"));
-    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ account_id: 1, name: "My Drive", remote_path: "Work", local_subpath: "" });
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ account_id: 1, name: "My Drive", remote_path: "Work", local_subpath: "Work" });
+  });
+
+  it("keeps a local folder picked by hand when the Drive folder changes", async () => {
+    const { calls } = mockApi({
+      ...HEALTH,
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/remote-browse": ({ url }: { url: URL }) =>
+        url.searchParams.get("path") ? [] : [{ name: "Work", path: "Work" }, { name: "Photos", path: "Photos" }],
+      "GET /api/local-browse": ({ url }: { url: URL }) => (url.searchParams.get("path") ? [] : [{ name: "Mine", path: "Mine" }]),
+      "POST /api/sync-pairs": { ...NEW_PAIR },
+      "GET /api/sync-pairs/11": NEW_PAIR,
+      "GET /api/sync-pairs/11/preview": none,
+    });
+    renderApp(<SetupWizard />, { route: "/setup", path: "/setup" });
+    await userEvent.click(within(await screen.findByRole("list", { name: "Folders in alice@example.com" })).getByRole("button", { name: "Mine" }));
+    await userEvent.click(within(await screen.findByRole("list", { name: "Folders in My Drive" })).getByRole("button", { name: "Photos" }));
+    expect(screen.getByText(/stay in step with/)).toHaveTextContent("Google Drive Photos will stay in step with alice@example.com/Mine");
+    await userEvent.click(screen.getByRole("button", { name: "Create and preview" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ account_id: 1, name: "My Drive", remote_path: "Photos", local_subpath: "Mine" }));
   });
 
   it("previews, then needs the exact phrase before starting", async () => {

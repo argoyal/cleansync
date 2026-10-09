@@ -8,6 +8,7 @@ import { useDismiss } from "../hooks/useDismiss";
 import { useConnectGoogle } from "../hooks/useConnect";
 import { Icon } from "./Icon";
 import { ACCOUNT_DOT } from "./StatusBadge";
+import { ThemeSwitch } from "./ThemeSwitch";
 import { useToast } from "./Toasts";
 
 const STATUS_TEXT = { CONNECTED: "Connected", NEEDS_REAUTH: "Needs reconnecting", DISCONNECTED: "Disconnected" };
@@ -93,6 +94,10 @@ export function AccountSwitcher() {
             </button>
           ))}
           <div className="my-1.5 border-t border-line" />
+          <div className="flex items-center justify-between gap-3 px-4 py-2">
+            <span className="text-table text-ink-2">Theme</span>
+            <ThemeSwitch />
+          </div>
           <button
             type="button"
             className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-sunken"

@@ -62,6 +62,38 @@ describe("account switcher", () => {
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/drive"));
   });
 
+  it("switches the theme from the account menu", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT] });
+    renderApp(<AccountSwitcher />, { withAccount: true });
+    await userEvent.click(await screen.findByRole("button", { name: "Account: alice@example.com" }));
+    const theme = screen.getByRole("radiogroup", { name: "Theme" });
+    expect(within(theme).getByRole("radio", { name: "System" })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(within(theme).getByRole("radio", { name: "Dark" }));
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(within(theme).getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(within(theme).getByRole("radio", { name: "System" }));
+    expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
+  });
+
+  it("theme radios use arrow keys and a single tab stop", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT] });
+    renderApp(<AccountSwitcher />, { withAccount: true });
+    await userEvent.click(await screen.findByRole("button", { name: "Account: alice@example.com" }));
+    const theme = screen.getByRole("radiogroup", { name: "Theme" });
+    const radio = (n: string) => within(theme).getByRole("radio", { name: n });
+    expect(radio("System")).toHaveAttribute("tabindex", "0");
+    expect(radio("Light")).toHaveAttribute("tabindex", "-1");
+    radio("System").focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(radio("Light")).toHaveFocus();
+    expect(radio("Light")).toHaveAttribute("aria-checked", "true");
+    expect(radio("Light")).toHaveAttribute("tabindex", "0");
+    expect(radio("System")).toHaveAttribute("tabindex", "-1");
+    await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
+    expect(radio("Dark")).toHaveFocus(); // wraps round
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  });
+
   it("starts Google sign-in for a new account", async () => {
     mockApi({ "GET /api/accounts": [ACCOUNT], "POST /api/accounts/connect": { auth_url: "https://accounts.google.com/o/oauth2/v2/auth?x=1" } });
     const assign = vi.fn();
@@ -217,5 +249,22 @@ describe("mobile drawer", () => {
     const dialog = screen.getByRole("dialog", { name: "Navigation" });
     await userEvent.click(within(dialog).getByRole("link", { name: /Recent/ }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("stopped syncing", () => {
+  const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart DriveSync.";
+
+  it("says so on every page", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": { ...STATUS, sync_stopped: MSG } });
+    renderApp(<AppShell />, { withAccount: true, route: "/recent" });
+    expect(await screen.findByRole("alert")).toHaveTextContent(MSG);
+  });
+
+  it("shows nothing while syncing runs", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": { ...STATUS, sync_stopped: null } });
+    renderApp(<AppShell />, { withAccount: true, route: "/recent" });
+    await screen.findByText("3 open conflicts");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

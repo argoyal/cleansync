@@ -9,12 +9,17 @@ from app.models import Account, Conflict, PlannedChange, SyncJob, SyncPair
 from app.models.enums import AccountStatus, ConflictState, JobKind, JobState, PairStatus
 from app.schemas.jobs import JobOut
 from app.services.logs import tail_lines
+from app.services.queue import stop_message
 
 router = APIRouter()
 
 
 @router.get("/api/status")
-def status(ctx: AuthContext = Depends(require_user), db: Session = Depends(get_db)) -> dict:
+def status(
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> dict:
     def count(model, *where) -> int:
         return db.scalar(select(func.count()).select_from(model).where(*where)) or 0
 
@@ -28,6 +33,7 @@ def status(ctx: AuthContext = Depends(require_user), db: Session = Depends(get_d
         "running": count(SyncPair, SyncPair.status == PairStatus.RUNNING),
         "paused": count(SyncPair, SyncPair.status == PairStatus.PAUSED),
         "conflicts": count(Conflict, Conflict.state == ConflictState.OPEN),
+        "sync_stopped": stop_message(request.app.state.queue),
     }
 
 

@@ -7,6 +7,7 @@ from app.auth.deps import AuthContext, get_db, require_user
 from app.models import Account, SyncPair
 from app.models.enums import AttentionReason, Direction, PairStatus
 from app.schemas.pairs import PairCreate, PairOut, PairUpdate
+from app.services.queue import is_stopped, stop_message
 from app.services.sync.pairs import PairError, create_pair, delete_pair, to_out, update_pair
 
 router = APIRouter(prefix="/api/sync-pairs")
@@ -33,13 +34,21 @@ def list_pairs(
     ]
 
 
+async def _refuse_when_stopped(request: Request) -> None:
+    """Spec §6.9: while syncing is stopped, nothing may be switched on or added."""
+    queue = request.app.state.queue
+    if await is_stopped(queue):  # checks the disk now
+        raise HTTPException(503, stop_message(queue))
+
+
 @router.post("", response_model=PairOut, status_code=201)
-def create(
+async def create(
     body: PairCreate,
     request: Request,
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
+    await _refuse_when_stopped(request)
     try:
         pair = create_pair(db, request.app.state.layout, body)
     except PairError as e:
@@ -111,12 +120,13 @@ def pause(
 
 
 @router.post("/{pair_id}/resume", response_model=PairOut)
-def resume(
+async def resume(
     pair_id: int,
     request: Request,
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
+    await _refuse_when_stopped(request)
     pair, acc = load_pair(db, pair_id)
     pair.paused = False
     if pair.attention_reason in _ATTENTION:
@@ -144,14 +154,16 @@ class ConfirmIn(BaseModel):
     phrase: str
 
 
-def _queue(request: Request, pair_id: int, trigger: str, action: str = "sync") -> dict:
-    result = request.app.state.queue.request(pair_id, trigger, action)
+async def _queue(request: Request, pair_id: int, trigger: str, action: str = "sync") -> dict:
+    queue = request.app.state.queue
+    # Check the disk now: request() only knows about a stop that was already noticed.
+    if await is_stopped(queue):
+        raise HTTPException(503, stop_message(queue))
+    result = queue.request(pair_id, trigger, action)
     if result == "busy":
         raise HTTPException(409, "this pair is busy; try again when the current job finishes")
     if result == "disabled":
-        raise HTTPException(
-            503, "database integrity check failed; restore a backup (see docs/backup-recovery.md)"
-        )
+        raise HTTPException(503, stop_message(request.app.state.queue))
     return {"result": result}
 
 
@@ -165,7 +177,7 @@ async def sync_now(
     pair, _ = load_pair(db, pair_id)
     if not pair.initialized:
         raise HTTPException(409, "run the first-sync preview and confirm it first")
-    return _queue(request, pair_id, "MANUAL")
+    return await _queue(request, pair_id, "MANUAL")
 
 
 @router.post("/{pair_id}/override-once", status_code=202)
@@ -185,7 +197,7 @@ async def override_once(
     pair.override_next = True
     db.commit()
     try:
-        out = _queue(request, pair_id, "MANUAL")
+        out = await _queue(request, pair_id, "MANUAL")
     except HTTPException:
         pair.override_next = False  # nothing was queued: don't leave an approval lying around
         db.commit()
@@ -210,7 +222,7 @@ async def start_preview(
     pair, _ = load_pair(db, pair_id)
     if pair.initialized:
         raise HTTPException(409, "pair is already initialized")
-    return _queue(request, pair_id, "INITIAL", "preview")
+    return await _queue(request, pair_id, "INITIAL", "preview")
 
 
 @router.get("/{pair_id}/preview")
@@ -245,7 +257,7 @@ async def confirm_initial(
         initial.check_phrase(body.phrase)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
-    return _queue(request, pair_id, "INITIAL", "initial")
+    return await _queue(request, pair_id, "INITIAL", "initial")
 
 
 @router.post("/{pair_id}/resync", status_code=202)
@@ -260,4 +272,4 @@ async def resync(
         raise HTTPException(409, "use the first-sync preview instead")
     if pair.direction != Direction.BIDIRECTIONAL:
         raise HTTPException(409, "one-way pairs don't need a resync")
-    return _queue(request, pair_id, "MANUAL", "resync")
+    return await _queue(request, pair_id, "MANUAL", "resync")

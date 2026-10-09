@@ -26,7 +26,10 @@ describe("sync activity", () => {
     expect(await within(card).findByText("1,234 files")).toBeInTheDocument();
     await userEvent.click(within(card).getByRole("button", { name: "Sync now, My Drive" }));
     const photos = screen.getByRole("heading", { name: "Photos" }).closest("article") as HTMLElement;
-    await userEvent.click(within(photos).getByRole("button", { name: "Resume, Photos" }));
+    const photosSwitch = within(photos).getByRole("switch", { name: "Sync off, Photos" });
+    expect(photosSwitch).toHaveAttribute("aria-checked", "false");
+    expect(photosSwitch).toHaveTextContent("Sync off");
+    await userEvent.click(photosSwitch);
     await waitFor(() => expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/api/sync-pairs/7/sync", "/api/sync-pairs/8/resume"]));
     expect(screen.getByText("My Drive sync completed: 2 uploaded")).toBeInTheDocument();
   });
@@ -45,6 +48,110 @@ describe("sync activity", () => {
     expect(await screen.findByRole("link", { name: "Review blocked sync, My Drive" })).toHaveAttribute("href", "/activity/7/blocked");
     expect(screen.getAllByRole("button", { name: "Run safe resync, Old" })).toHaveLength(1);
     expect(screen.getByText("This sync would delete 40 files. Your limit is 10.")).toBeInTheDocument();
+  });
+
+  it("turns syncing off with the switch", async () => {
+    const { calls } = mockApi({
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/activity": [],
+      "POST /api/sync-pairs/7/pause": { ...PAIR, paused: true, status: "PAUSED" },
+    });
+    renderApp(<ActivityPage />);
+    const card = (await screen.findByRole("heading", { name: "My Drive" })).closest("article") as HTMLElement;
+    const sw = within(card).getByRole("switch", { name: "Sync on, My Drive" });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(sw).toHaveTextContent("Sync on");
+    expect(within(card).queryByRole("button", { name: /^(Pause|Resume),/ })).not.toBeInTheDocument();
+    await userEvent.click(sw);
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/api/sync-pairs/7/pause"]));
+    expect(await screen.findByText("Sync is off. Nothing syncs until you turn it back on.")).toBeInTheDocument();
+  });
+
+  it("resuming shows 'Sync is on.' and a keyboard Space press toggles the switch", async () => {
+    const { calls } = mockApi({
+      "GET /api/sync-pairs": [{ ...PAIR, paused: true, status: "PAUSED" }],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/activity": [],
+      "POST /api/sync-pairs/7/resume": PAIR,
+    });
+    renderApp(<ActivityPage />);
+    const sw = await screen.findByRole("switch", { name: "Sync off, My Drive" });
+    sw.focus();
+    await userEvent.keyboard(" ");
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/api/sync-pairs/7/resume"]));
+    expect(await screen.findByText("Sync is on.")).toBeInTheDocument();
+  });
+
+  it("keeps the switch as the server says when the call fails, and says so", async () => {
+    mockApi({
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/activity": [],
+      "POST /api/sync-pairs/7/pause": json(500, { detail: "Something broke" }),
+    });
+    renderApp(<ActivityPage />);
+    const sw = await screen.findByRole("switch", { name: "Sync on, My Drive" });
+    await userEvent.click(sw);
+    expect(await screen.findByText(/Something broke|went wrong|failed/i)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Sync on, My Drive" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "Sync on, My Drive" })).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("keeps focus on the switch while the call is running and disables Sync now", async () => {
+    let release: (v: unknown) => void = () => {};
+    const gate = new Promise((r) => (release = r));
+    mockApi({
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/activity": [],
+      "POST /api/sync-pairs/7/pause": async () => {
+        await gate;
+        return { ...PAIR, paused: true };
+      },
+    });
+    renderApp(<ActivityPage />);
+    const sw = await screen.findByRole("switch", { name: "Sync on, My Drive" });
+    sw.focus();
+    await userEvent.click(sw);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-disabled", "true"));
+    expect(sw).toHaveFocus();
+    expect(sw).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Sync now, My Drive" })).toBeDisabled();
+    release(null);
+    await waitFor(() => expect(sw).not.toHaveAttribute("aria-disabled", "true"));
+  });
+
+  it("shows every switch as stopped while the storage disk is missing, and sends nothing", async () => {
+    const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart DriveSync.";
+    const { calls } = mockApi({
+      "GET /api/sync-pairs": [PAIR, { ...PAIR, id: 8, name: "Photos", paused: true, status: "PAUSED" }],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/sync-pairs/8/catalog": CATALOG,
+      "GET /api/activity": [],
+      "GET /api/status": { accounts: 1, accounts_attention: 0, pairs: 2, new: 0, healthy: 1, attention: 0, running: 0, paused: 1, conflicts: 0, sync_stopped: MSG },
+    });
+    renderApp(<ActivityPage />);
+    for (const name of ["My Drive", "Photos"]) {
+      const sw = await screen.findByRole("switch", { name: `Stopped — storage disk missing, ${name}` });
+      expect(sw).toHaveTextContent("Stopped — storage disk missing");
+      expect(sw).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(sw);
+    }
+    expect(screen.getByRole("button", { name: "Sync now, My Drive" })).toBeDisabled();
+    expect(calls.filter((c) => c.method === "POST")).toEqual([]);
+  });
+
+  it("calls a pair with syncing off 'Sync off', not 'Paused'", async () => {
+    mockApi({
+      "GET /api/sync-pairs": [{ ...PAIR, paused: true, status: "PAUSED" }],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/activity": [],
+    });
+    renderApp(<ActivityPage />);
+    const card = (await screen.findByRole("heading", { name: "My Drive" })).closest("article") as HTMLElement;
+    expect(within(card).getAllByText("Sync off").length).toBe(3); // status pill, next sync, switch
+    expect(within(card).queryByText("Paused")).not.toBeInTheDocument();
   });
 });
 

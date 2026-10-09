@@ -66,6 +66,8 @@ def test_app_startup_recovers_and_starts_scheduler(settings, layout, db, make_ac
     app = create_app(settings)
 
     class RecordingQueue:
+        disabled_reason = None  # syncing is on, like the real queue on a sound disk
+
         def __init__(self):
             self.requests = []
 
