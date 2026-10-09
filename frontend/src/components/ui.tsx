@@ -73,13 +73,22 @@ export function Dialog({
   wide?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  // Once, when it opens: focus the first field or marked button. A new onClose on a re-render
+  // (a poll, a typed letter) must not pull focus back. When it closes, focus goes back to
+  // what had it before, if that is still on the page.
   useEffect(() => {
+    const back = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const first = box.current?.querySelector<HTMLElement>("input, select, textarea, button[data-autofocus]");
     first?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close.current();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (back?.isConnected && back !== document.body) back.focus();
+    };
+  }, []);
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-ink/30 p-4" onMouseDown={onClose}>
       <div

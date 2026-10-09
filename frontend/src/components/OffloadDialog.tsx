@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 
 import { api, friendlyError } from "../api/client";
 import { useOffloadBatch } from "../api/queries";
@@ -24,11 +24,13 @@ const files = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
 /** Spec §7.2a: one preview and one confirm for any number of items, then each item's result. */
 export function OffloadDialog({ accountId, paths, onClose }: { accountId: number; paths: string[]; onClose: () => void }) {
   const qc = useQueryClient();
-  const preview = useQuery({
-    queryKey: ["offload-preview", accountId, paths],
-    queryFn: () => api<OffloadPreview>("/api/offloads/preview", { method: "POST", body: { account_id: accountId, paths } }),
-    gcTime: 0,
+  // Asked once when the dialog opens: what the person confirms must not change under them
+  // (no refetch on focus, reconnect or a live update), so this is not a cached query.
+  const preview = useMutation({
+    mutationFn: () => api<OffloadPreview>("/api/offloads/preview", { method: "POST", body: { account_id: accountId, paths } }),
   });
+  const loadPreview = preview.mutate;
+  useEffect(() => loadPreview(), [loadPreview]);
   const [batchId, setBatchId] = useState<string | null>(null);
   const batch = useOffloadBatch(batchId);
   const ready = (preview.data?.items ?? []).filter((i) => !i.blocked);
@@ -47,8 +49,11 @@ export function OffloadDialog({ accountId, paths, onClose }: { accountId: number
 
   if (batchId) {
     const b = batch.data;
+    const lost = batch.isError && !b?.done;
     return (
+      // A new key: the results view opens as a fresh dialog, so focus lands on its button.
       <Dialog
+        key="results"
         title={title}
         onClose={close}
         wide
@@ -58,19 +63,30 @@ export function OffloadDialog({ accountId, paths, onClose }: { accountId: number
           </Button>
         }
       >
-        <p aria-live="polite">{b?.done ? "Finished." : "Working on it. You can close this; the work goes on."}</p>
-        <ul className="max-h-80 space-y-2 overflow-y-auto">
-          {(b?.items ?? []).map((i) => (
-            <li key={i.path} className="rounded-ctl border border-line px-3 py-2">
-              <p className="break-all font-medium">{i.path}</p>
-              <p className={`text-table ${i.state === "failed" || i.state === "attention" ? "text-err" : "text-ink-2"}`}>
-                {RESULT[i.state]}
-                {i.message ? `: ${i.message}` : ""}
+        <div aria-live="polite" className="space-y-3">
+          {!lost && <p>{b?.done ? "Finished." : "Working on it. You can close this; the work goes on."}</p>}
+          <ul aria-label="Results" className="max-h-80 space-y-2 overflow-y-auto">
+            {(b?.items ?? []).map((i) => (
+              <li key={i.path} className="rounded-ctl border border-line px-3 py-2">
+                <p className="break-all font-medium">{i.path}</p>
+                <p className={`text-table ${i.state === "failed" || i.state === "attention" ? "text-err" : "text-ink-2"}`}>
+                  {RESULT[i.state]}
+                  {i.message ? `: ${i.message}` : ""}
+                </p>
+              </li>
+            ))}
+          </ul>
+          {lost && (
+            <Notice tone="err">
+              <p>
+                Lost track of this offload: {friendlyError(batch.error)}. The work may still be going on.
               </p>
-            </li>
-          ))}
-        </ul>
-        {batch.isError && <Notice tone="err">{friendlyError(batch.error)}</Notice>}
+              <Button className="mt-2" icon="refresh" onClick={() => batch.refetch()}>
+                Retry
+              </Button>
+            </Notice>
+          )}
+        </div>
       </Dialog>
     );
   }
@@ -78,6 +94,7 @@ export function OffloadDialog({ accountId, paths, onClose }: { accountId: number
   const p = preview.data;
   return (
     <Dialog
+      key="preview"
       title={title}
       onClose={close}
       wide
@@ -96,7 +113,7 @@ export function OffloadDialog({ accountId, paths, onClose }: { accountId: number
         Offloaded files stay on this server and are removed from Google Drive, into Drive's trash. They stop syncing. You can put
         them back any time with Restore to Drive.
       </p>
-      {preview.isPending && <p className="text-ink-2">Checking what can be offloaded…</p>}
+      {(preview.isIdle || preview.isPending) && <p className="text-ink-2">Checking what can be offloaded…</p>}
       {preview.isError && <Notice tone="err">{friendlyError(preview.error)}</Notice>}
       {p?.stopped && <Notice tone="err">{p.stopped}</Notice>}
       {p && (

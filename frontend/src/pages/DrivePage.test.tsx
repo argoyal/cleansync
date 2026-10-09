@@ -261,6 +261,10 @@ describe("Accessible tiles and keyboard", () => {
     await screen.findByRole("button", { name: "Work" });
     screen.getByRole("button", { name: "Work" }).focus();
     await userEvent.keyboard("{ArrowRight}");
+    expect(screen.getByRole("button", { name: "photo.jpg" })).toHaveAttribute("aria-pressed", "true");
+    // Space adds or removes the focused item from the selection.
+    await userEvent.keyboard(" ");
+    expect(screen.getByRole("button", { name: "photo.jpg" })).toHaveAttribute("aria-pressed", "false");
     await userEvent.keyboard(" ");
     expect(screen.getByRole("button", { name: "photo.jpg" })).toHaveAttribute("aria-pressed", "true");
     await userEvent.keyboard("{Enter}");
@@ -590,8 +594,10 @@ describe("Several items, offload and restore", () => {
     expect(calls.find((c) => c.path === "/api/offloads/preview")?.body).toEqual({ account_id: 1, paths: ["Work", "photo.jpg"] });
     await userEvent.click(within(dialog).getByRole("button", { name: "Offload" }));
     expect(calls.find((c) => c.method === "POST" && c.path === "/api/offloads")?.body).toEqual({ account_id: 1, paths: ["Work"] });
-    expect(await within(dialog).findByText(/Removed from Google Drive/, {}, { timeout: 3000 })).toBeInTheDocument();
-    expect(within(dialog).getByText("Finished.")).toBeInTheDocument();
+    // The results open as a fresh dialog with the same title.
+    const results = await screen.findByRole("dialog", { name: "Offload 2 items?" });
+    expect(await within(results).findByText(/Removed from Google Drive/, {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(within(results).getByText("Finished.")).toBeInTheDocument();
   });
 
   it("Ctrl-click on a selected item takes it out of the selection", async () => {
@@ -705,5 +711,169 @@ describe("Several items, offload and restore", () => {
     const dialog = screen.getByRole("dialog", { name: "Restore to Drive?" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Restore to Drive" }));
     expect(await within(dialog).findByText("This synced folder is busy. Try again in a moment.")).toBeInTheDocument();
+  });
+  const OFFLOADED = item({ name: "Old", path: "Work/Old", is_dir: true, size: null, status: "offloaded", mime: null });
+
+  it("Shift with the arrow keys selects a range", async () => {
+    setup();
+    const work = await screen.findByRole("button", { name: "Work" });
+    work.focus();
+    await userEvent.keyboard("{ArrowRight}{ArrowLeft}");
+    await userEvent.keyboard("{Shift>}{ArrowRight}{ArrowRight}{/Shift}");
+    for (const name of ["Work", "photo.jpg", "Budget.xlsx"]) {
+      expect(screen.getByRole("button", { name })).toHaveAttribute("aria-pressed", "true");
+    }
+    expect(screen.getByRole("button", { name: "Budget.xlsx" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Plan" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("Ctrl or ⌘ with an arrow moves without changing the selection, and Space adds the item", async () => {
+    setup();
+    const work = await screen.findByRole("button", { name: "Work" });
+    work.focus();
+    await userEvent.keyboard(" ");
+    expect(work).toHaveAttribute("aria-pressed", "true");
+    await userEvent.keyboard("{Control>}{ArrowRight}{ArrowRight}{/Control}");
+    expect(screen.getByRole("button", { name: "Budget.xlsx" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "photo.jpg" })).toHaveAttribute("aria-pressed", "false");
+    await userEvent.keyboard(" ");
+    expect(work).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Budget.xlsx" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.keyboard("{Meta>}{ArrowLeft}{/Meta} ");
+    expect(screen.getByRole("button", { name: "photo.jpg" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Escape closes the Offload dialog and focus goes back to the item", async () => {
+    setup("/drive", { "POST /api/offloads/preview": PREVIEW });
+    const work = await screen.findByRole("button", { name: "Work" });
+    work.focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Offload…" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Offload "Work"?' });
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(work).toHaveFocus();
+  });
+
+  it("Escape closes the Restore and Delete dialogs and focus goes back to the item", async () => {
+    setup("/drive?path=Work", { "GET /api/browse": browse("Work", [OFFLOADED]), "GET /api/offloads": [OFFLOAD] });
+    const old = await screen.findByRole("button", { name: "Old" });
+    old.focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Restore to Drive" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("menuitem", { name: "Restore to Drive" }));
+    expect(screen.getByRole("dialog", { name: "Restore to Drive?" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(old).toHaveFocus();
+    await userEvent.keyboard("{Delete}");
+    expect(screen.getByRole("dialog", { name: 'Delete "Old"?' })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(old).toHaveFocus();
+  });
+
+  it("keeps focus inside the dialog when the results replace the buttons, and reads results out", async () => {
+    setup("/drive", {
+      "POST /api/offloads/preview": { ...PREVIEW, items: [PREVIEW.items[0]] },
+      "POST /api/offloads": { id: "b2", account_id: 1, done: false, items: [{ path: "Work", state: "running", message: null, offload_id: null }] },
+      "GET /api/offloads/batches/b2": { id: "b2", account_id: 1, done: false, items: [{ path: "Work", state: "running", message: null, offload_id: null }] },
+    });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Work" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Offload…" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Offload "Work"?' });
+    await within(dialog).findByText(/12 files, 3.0 MB freed/);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Offload" }));
+    const hide = await within(screen.getByRole("dialog")).findByRole("button", { name: "Hide" });
+    expect(hide).toHaveFocus();
+    const results = screen.getByRole("list", { name: "Results" });
+    expect(results.closest("[aria-live]")).not.toBeNull();
+    expect(within(results).getByText(/Working on it/)).toBeInTheDocument();
+  });
+
+  it("says when it lost track of an offload and offers Retry", async () => {
+    let fail = true;
+    setup("/drive", {
+      "POST /api/offloads/preview": { ...PREVIEW, items: [PREVIEW.items[0]] },
+      "POST /api/offloads": { id: "b3", account_id: 1, done: false, items: [{ path: "Work", state: "running", message: null, offload_id: null }] },
+      "GET /api/offloads/batches/b3": () =>
+        fail
+          ? json(500, { detail: "the server could not answer" })
+          : { id: "b3", account_id: 1, done: true, items: [{ path: "Work", state: "done", message: "Kept on this server.", offload_id: 4 }] },
+    });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Work" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Offload…" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Offload "Work"?' });
+    await within(dialog).findByText(/12 files, 3.0 MB freed/);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Offload" }));
+    expect(await screen.findByText(/the server could not answer/, {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByText("Working on it. You can close this; the work goes on.")).not.toBeInTheDocument();
+    fail = false;
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Finished.")).toBeInTheDocument();
+  });
+
+  it("doesn't ask for the preview again while the dialog is open", async () => {
+    const { calls } = setup("/drive", { "POST /api/offloads/preview": PREVIEW });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Work" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Offload…" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Offload "Work"?' });
+    await within(dialog).findByText(/12 files, 3.0 MB freed/);
+    fireEvent.focus(window);
+    window.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("online"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls.filter((c) => c.path === "/api/offloads/preview")).toHaveLength(1);
+  });
+
+  it("offers no Rename or Move for an offloaded item and says why", async () => {
+    setup("/drive?path=Work", { "GET /api/browse": browse("Work", [OFFLOADED]), "GET /api/offloads": [OFFLOAD] });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Old" }));
+    expect(screen.queryByRole("menuitem", { name: "Rename" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Move" })).not.toBeInTheDocument();
+    expect(screen.getByText("Offloaded: restore it to Drive to rename or move it.")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeEnabled();
+  });
+
+  it("warns that deleting an offloaded item deletes the only copy", async () => {
+    const { calls } = setup("/drive?path=Work", {
+      "GET /api/browse": browse("Work", [OFFLOADED]),
+      "GET /api/offloads": [OFFLOAD],
+      "GET /api/sync-pairs": [{ ...PAIR, id: 7, backup_retention_days: 30 }],
+      "POST /api/files/delete": { paths: ["Work/Old"], syncs: {} },
+    });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Old" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog", { name: 'Delete "Old"?' });
+    await waitFor(() =>
+      expect(dialog).toHaveTextContent(
+        "This is the only copy: it's no longer on Google Drive. It goes to Recovery and is removed for good after 30 days.",
+      ),
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/files/delete")?.body).toEqual({ account_id: 1, paths: ["Work/Old"] }));
+  });
+
+  it("a mixed selection: Move is off, and Delete lists what it leaves out and why", async () => {
+    const { calls } = setup("/drive?path=Work", {
+      "GET /api/browse": browse("Work", [OFFLOADED, item({ name: "far.pdf", path: "Work/far.pdf", local: false, status: "download" }), item({ name: "b.txt", path: "Work/b.txt" })]),
+      "GET /api/offloads": [OFFLOAD],
+      "POST /api/files/delete": { paths: ["Work/Old", "Work/b.txt"], syncs: {} },
+    });
+    const old = await screen.findByRole("button", { name: "Old" });
+    fireEvent.click(old);
+    fireEvent.click(screen.getByRole("button", { name: "b.txt" }), { shiftKey: true });
+    fireEvent.contextMenu(old);
+    const menu = screen.getByRole("menu", { name: "Actions for 3 items" });
+    expect(within(menu).getByRole("menuitem", { name: "Move" })).toBeDisabled();
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 2 items?" });
+    expect(dialog).toHaveTextContent("Not deleted: far.pdf: only on Google Drive so far, nothing here to delete.");
+    expect(dialog).toHaveTextContent("This is the only copy");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === "/api/files/delete")?.body).toEqual({ account_id: 1, paths: ["Work/Old", "Work/b.txt"] }),
+    );
   });
 });

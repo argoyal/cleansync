@@ -119,8 +119,13 @@ export function useFileActions(accountId: number | null) {
     }
     items.push({ label: item.is_dir ? "Download as zip" : "Download", icon: "download", onSelect: () => download(item), disabled: !local });
     items.push({ separator: true });
-    items.push({ label: "Rename", icon: "edit", onSelect: () => setDialog({ kind: "rename", item }), disabled: !changeable });
-    items.push({ label: "Move", icon: "drive_file_move", onSelect: () => setDialog({ kind: "move", items: [item] }), disabled: !changeable });
+    if (item.status === "offloaded") {
+      // It keeps its place until restored (the server refuses a rename or move).
+      items.push({ note: OFFLOADED_NO_MOVE });
+    } else {
+      items.push({ label: "Rename", icon: "edit", onSelect: () => setDialog({ kind: "rename", item }), disabled: !changeable });
+      items.push({ label: "Move", icon: "drive_file_move", onSelect: () => setDialog({ kind: "move", items: [item] }), disabled: !changeable });
+    }
     if (item.is_dir && item.local && item.status === "unsynced") {
       items.push({ label: "Start syncing this folder", icon: "cloud_sync", onSelect: () => setDialog({ kind: "startSync", item }) });
     }
@@ -149,25 +154,24 @@ export function useFileActions(accountId: number | null) {
   if (accountId !== null && dialog?.kind === "offload") dialogs = <OffloadDialog accountId={accountId} paths={dialog.paths} onClose={close} />;
   if (dialog?.kind === "restore") dialogs = <RestoreDialog offload={dialog.offload} onClose={close} />;
 
+  /** Opens the delete dialog, which lists what it leaves out; with nothing to delete it says why. */
   const askDelete = (items: FileItem[]) => {
-    if (items.some(oneWay)) {
-      toast(ONE_WAY_NOTE);
-      return;
-    }
-    setDialog({ kind: "delete", items });
+    if (items.some((i) => deleteBlock(i, oneWay) === null)) setDialog({ kind: "delete", items });
+    else if (items.some(oneWay)) toast(ONE_WAY_NOTE);
   };
 
   /** The right-click menu for several selected items at once. */
   const menuForMany = (list: FileItem[]): MenuItem[] => {
-    const local = list.filter((i) => i.local);
-    const changeable = local.length === list.length && !list.some(oneWay);
+    const changeable = list.every((i) => i.local && !oneWay(i) && i.status !== "offloaded");
+    const deletable = list.some((i) => deleteBlock(i, oneWay) === null);
     // The preview says, item by item, what can't go and why; only offer it when something might.
     const offloadable = list.some((i) => i.local && i.pair_id !== null && !i.native && !oneWay(i) && i.status !== "offloaded");
     return [
       { label: "Offload…", icon: "inventory_2", onSelect: () => setDialog({ kind: "offload", paths: list.map((i) => i.path) }), disabled: !offloadable },
       { label: "Move", icon: "drive_file_move", onSelect: () => setDialog({ kind: "move", items: list }), disabled: !changeable },
+      ...(list.some((i) => i.status === "offloaded") ? [{ note: OFFLOADED_NO_MOVE_MANY }] : []),
       { separator: true },
-      { label: "Delete", icon: "delete", danger: true, onSelect: () => askDelete(local), disabled: local.length === 0 },
+      { label: "Delete", icon: "delete", danger: true, onSelect: () => askDelete(list), disabled: !deletable },
     ];
   };
 
@@ -192,6 +196,16 @@ function useFileOp(path: string, done: string | ((out: OpOut) => string), onClos
 }
 
 const names = (paths: string[]) => paths.join(", ");
+
+const OFFLOADED_NO_MOVE = "Offloaded: restore it to Drive to rename or move it.";
+const OFFLOADED_NO_MOVE_MANY = "Offloaded items can't be moved until they are restored to Drive.";
+
+/** Why an item can't be deleted from here, or null when it can. */
+function deleteBlock(item: FileItem, oneWay: (i: FileItem) => boolean): string | null {
+  if (!item.local) return "only on Google Drive so far, nothing here to delete";
+  if (oneWay(item)) return "in a folder that only receives changes from Google Drive";
+  return null;
+}
 
 /** The server's message, plus which items were done, failed or left alone when it stopped half way. */
 function OpError({ error, pairId = null }: { error: unknown; pairId?: number | null }) {
@@ -296,8 +310,15 @@ function MoveDialog({ accountId, items, onClose }: { accountId: number; items: F
 }
 
 function DeleteDialog({ accountId, items, onClose }: { accountId: number; items: FileItem[]; onClose: () => void }) {
+  const oneWay = useOneWay();
+  const pairs = usePairs().data;
   const op = useFileOp("delete", "Moved to Recovery. It leaves Google Drive (to Drive's trash) at the next sync.", onClose);
-  const what = items.length === 1 ? `"${items[0].name}"` : `${items.length} items`;
+  // The dialog deletes exactly what it lists; anything else is named with the reason.
+  const going = items.filter((i) => deleteBlock(i, oneWay) === null);
+  const left = items.filter((i) => deleteBlock(i, oneWay) !== null);
+  const offloaded = going.filter((i) => i.status === "offloaded");
+  const synced = going.some((i) => i.status !== "offloaded");
+  const what = going.length === 1 ? `"${going[0].name}"` : `${going.length} items`;
   return (
     <Dialog
       title={`Delete ${what}?`}
@@ -307,19 +328,47 @@ function DeleteDialog({ accountId, items, onClose }: { accountId: number; items:
           <Button onClick={onClose} data-autofocus>
             Cancel
           </Button>
-          <Button tone="danger" disabled={op.isPending} onClick={() => op.mutate({ account_id: accountId, paths: items.map((i) => i.path) })}>
+          <Button
+            tone="danger"
+            disabled={op.isPending || going.length === 0}
+            onClick={() => op.mutate({ account_id: accountId, paths: going.map((i) => i.path) })}
+          >
             Delete
           </Button>
         </>
       }
     >
-      <p>
-        DriveSync moves it into Recovery on this server first, so you can get it back. At the next sync it is removed
-        from Google Drive too, into Drive's trash.
-      </p>
+      {synced && (
+        <p>
+          DriveSync moves it into Recovery on this server first, so you can get it back. At the next sync it is removed
+          from Google Drive too, into Drive's trash.
+        </p>
+      )}
+      {offloaded.length > 0 && (
+        <Notice tone="warn">
+          {going.length > 1 && `Offloaded: ${names(offloaded.map((i) => i.name))}. `}
+          {onlyCopyNote(offloaded, pairs)}
+        </Notice>
+      )}
+      {going.length > 1 && <p className="break-all text-table text-ink-2">Deleting: {names(going.map((i) => i.name))}</p>}
+      {left.length > 0 && (
+        <p className="text-table text-ink-2">
+          Not deleted: {left.map((i) => `${i.name}: ${deleteBlock(i, oneWay)}`).join("; ")}.
+        </p>
+      )}
       {op.isError && <OpError error={op.error} />}
     </Dialog>
   );
+}
+
+/** Offloaded items exist only here: say so, with how long Recovery keeps them (the pair's setting). */
+function onlyCopyNote(items: FileItem[], pairs: Pair[] | undefined): string {
+  const start = "This is the only copy: it's no longer on Google Drive. It goes to Recovery and ";
+  const kept = items.map((i) => pairs?.find((p) => p.id === i.pair_id));
+  if (kept.some((p) => p === undefined)) return `${start}is removed for good when Recovery's keep time runs out.`;
+  const days = kept.map((p) => p?.backup_retention_days).filter((d): d is number => d !== null && d !== undefined);
+  if (days.length === 0) return `${start}stays there until you remove it.`;
+  return `${start}is removed for good after ${Math.min(...days)} days.`;
 }
 
 /** "Start syncing this folder": a new sync pair whose Drive folder has the same path, then its preview. */

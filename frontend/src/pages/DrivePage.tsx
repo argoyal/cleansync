@@ -8,7 +8,7 @@ import { useFileActions } from "../components/FileActions";
 import { FileView } from "../components/FileView";
 import { Icon } from "../components/Icon";
 import { PairStatusPill } from "../components/StatusBadge";
-import { Empty, IconButton, Menu, Notice } from "../components/ui";
+import { Empty, IconButton, Menu, type MenuItem, Notice } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { NOT_SYNCED_NOTE, ONE_WAY_NOTE } from "../lib/files";
 
@@ -40,6 +40,23 @@ export function ViewToggle({ view, onChange }: { view: "grid" | "list"; onChange
     <IconButton icon="view_list" label="Show as list" onClick={() => onChange("list")} />
   ) : (
     <IconButton icon="grid_view" label="Show as grid" onClick={() => onChange("grid")} />
+  );
+}
+
+/** Picking a menu entry puts focus back on the item first, so a dialog it opens returns there. */
+function returnFocusTo(items: MenuItem[], opener: HTMLElement | null): MenuItem[] {
+  return items.map((m) =>
+    "onSelect" in m
+      ? {
+          ...m,
+          onSelect: () => {
+            if (opener?.isConnected) opener.focus();
+            m.onSelect();
+          },
+        }
+      : "submenu" in m
+        ? { ...m, submenu: returnFocusTo(m.submenu, opener) }
+        : m,
   );
 }
 
@@ -79,7 +96,8 @@ export function FileArea({ items, showFolder = false, view }: { items: FileItem[
       const focused = target.closest<HTMLElement>("[data-path]")?.dataset.path;
       // The focused item and, when it is part of the selection, the rest of the selection too.
       const paths = focused === undefined ? selected : selected.includes(focused) ? selected : [focused];
-      const chosen = items.filter((i) => paths.includes(i.path) && i.local);
+      // The delete dialog lists anything it leaves out, and why.
+      const chosen = items.filter((i) => paths.includes(i.path));
       if (chosen.length > 0) askDelete(chosen);
     };
     window.addEventListener("keydown", onKey);
@@ -103,7 +121,7 @@ export function FileArea({ items, showFolder = false, view }: { items: FileItem[
         <Menu
           key={`${menu.item.path}:${menu.x}:${menu.y}`}
           label={menuTargets.length > 1 ? `Actions for ${menuTargets.length} items` : `Actions for ${menu.item.name}`}
-          items={menuTargets.length > 1 ? actions.menuForMany(menuTargets) : actions.menuFor(menu.item)}
+          items={returnFocusTo(menuTargets.length > 1 ? actions.menuForMany(menuTargets) : actions.menuFor(menu.item), menu.opener)}
           x={menu.x}
           y={menu.y}
           opener={menu.opener}

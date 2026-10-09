@@ -37,6 +37,8 @@ function Thumb({ accountId, item }: { accountId: number; item: FileItem }) {
 }
 
 const SYNCED_FOLDER = "Synced folder: kept in step with Google Drive.";
+const KEYS_HELP =
+  "Arrow keys move and select. Shift with an arrow selects a range. Ctrl or Command with an arrow moves without selecting. Space adds or removes the item from the selection. Enter opens it.";
 const NOT_SYNCED_FOLDER = "Not synced: only on this server. Open its menu to start syncing it.";
 
 /** What screen readers hear about an item: its sync state, plus what a folder's mark means. */
@@ -103,7 +105,11 @@ export function FileView(p: Props) {
   const keyOf = (i: FileItem) => i.path + (i.native ?? "");
   const stop = ordered.some((i) => keyOf(i) === focusKey) ? focusKey : ordered[0] ? keyOf(ordered[0]) : null;
 
-  /** One Tab stop for the whole view; arrows, Home and End move between items. */
+  /**
+   * One Tab stop for the whole view; arrows, Home and End move between items and select the
+   * one they land on. Shift with an arrow selects a range, Ctrl/⌘ with an arrow only moves,
+   * Space adds or removes the focused item, Enter opens it.
+   */
   const nav = (item: FileItem): Nav => ({
     tabIndex: keyOf(item) === stop ? 0 : -1,
     onFocus: () => setFocusKey(keyOf(item)),
@@ -120,7 +126,8 @@ export function FileView(p: Props) {
         e.preventDefault();
         els[to]?.focus();
         const target = ordered[to];
-        if (target) p.onSelect(target.path, e.shiftKey ? "range" : "only");
+        // Shift extends the selection; Ctrl/⌘ only moves, so Space can then add the item.
+        if (target && !(e.ctrlKey || e.metaKey)) p.onSelect(target.path, e.shiftKey ? "range" : "only");
         return;
       }
       if (e.key === "Enter") {
@@ -128,7 +135,7 @@ export function FileView(p: Props) {
         p.onOpen(item);
       } else if (e.key === " ") {
         e.preventDefault();
-        p.onSelect(item.path, e.ctrlKey || e.metaKey ? "toggle" : "only");
+        p.onSelect(item.path, "toggle");
       } else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
         e.preventDefault();
@@ -168,6 +175,7 @@ export function FileView(p: Props) {
   if (p.view === "list") {
     return (
       <div ref={root}>
+        <p className="sr-only">{KEYS_HELP}</p>
         <table className="w-full table-fixed text-table">
           <thead className="text-left text-meta text-ink-2">
             <tr className="border-b border-line">
@@ -268,6 +276,7 @@ export function FileView(p: Props) {
           </div>
         </section>
       )}
+      <p className="sr-only">{KEYS_HELP}</p>
     </div>
   );
 }
