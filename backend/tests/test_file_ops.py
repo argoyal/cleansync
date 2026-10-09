@@ -958,7 +958,7 @@ def test_done_actions_update_the_cached_listing(
 
 
 def test_disk_gone_refuses_drive_moves_before_any_rclone_call(
-    auth_client, app, make_account, make_pair, fake_rclone, save_catalog
+    auth_client, app, make_account, make_pair, fake_rclone, save_catalog, monkeypatch
 ):
     # The real queue, and no sync has been asked for since the disk went away.
     from app.services.queue import MISSING_DISK_MSG
@@ -981,6 +981,26 @@ def test_disk_gone_refuses_drive_moves_before_any_rclone_call(
         r = _post(auth_client, action, account_id=acc.id, **body)
         assert r.status_code == 503, (action, r.text)
         assert r.json()["detail"] == MISSING_DISK_MSG
+    # A new Google file is made on Drive itself, and an upload ends up there: both refused.
+    made: list[object] = []
+
+    async def create_native(*args):
+        made.append(args)
+        return {"id": "G1"}
+
+    monkeypatch.setattr(app.state.drive_api, "create_native", create_native)
+    r = auth_client.post(
+        "/api/files/new", json={"account_id": acc.id, "path": "Drive", "kind": "document"}
+    )
+    assert r.status_code == 503 and r.json()["detail"] == MISSING_DISK_MSG
+    r = auth_client.post(
+        "/api/files/upload",
+        params={"account_id": acc.id, "path": "Drive", "name": "up.txt"},
+        content=b"data",
+    )
+    assert r.status_code == 503 and r.json()["detail"] == MISSING_DISK_MSG
+    assert made == []
     assert fake_rclone.calls() == []
     assert (root / "Drive/a.txt").exists() and not (root / "Drive/New").exists()
+    assert not (root / "Drive/up.txt").exists()
     assert app.state.queue.disabled_reason == MISSING_DISK_MSG

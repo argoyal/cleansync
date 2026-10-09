@@ -92,6 +92,13 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         elif app.state.queue.disabled_reason is not None:
             # No recovery runs, no schedule, no watcher, no walking a disk that isn't there.
             logger.error("%s", app.state.queue.disabled_reason)
+            # The database itself is sound: close jobs a crash left "running", so no pair shows
+            # as running forever. Nothing is queued to run again.
+            try:
+                with session_factory() as db:
+                    recover_interrupted(db)
+            except Exception:
+                logger.exception("could not close jobs left running")
         elif start_background:
             # Walking all of storage/ can take a while on a slow disk: don't hold up startup.
             sweep = asyncio.ensure_future(asyncio.to_thread(sweep_upload_leftovers, layout.storage))

@@ -33,6 +33,12 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_disk_retry_pause(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The disk check reads its file again after a pause; tests need not wait for it.
+    monkeypatch.setattr("app.services.volume.RETRY_PAUSE_S", 0.0)
+
+
 @pytest.fixture(scope="session")
 def office_templates(tmp_path_factory) -> Path:
     from scripts.make_office_templates import make

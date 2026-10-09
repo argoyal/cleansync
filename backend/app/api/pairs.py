@@ -34,13 +34,21 @@ def list_pairs(
     ]
 
 
+async def _refuse_when_stopped(request: Request) -> None:
+    """Spec §6.9: while syncing is stopped, nothing may be switched on or added."""
+    queue = request.app.state.queue
+    if await is_stopped(queue):  # checks the disk now
+        raise HTTPException(503, stop_message(queue))
+
+
 @router.post("", response_model=PairOut, status_code=201)
-def create(
+async def create(
     body: PairCreate,
     request: Request,
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
+    await _refuse_when_stopped(request)
     try:
         pair = create_pair(db, request.app.state.layout, body)
     except PairError as e:
@@ -112,12 +120,13 @@ def pause(
 
 
 @router.post("/{pair_id}/resume", response_model=PairOut)
-def resume(
+async def resume(
     pair_id: int,
     request: Request,
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
+    await _refuse_when_stopped(request)
     pair, acc = load_pair(db, pair_id)
     pair.paused = False
     if pair.attention_reason in _ATTENTION:

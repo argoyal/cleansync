@@ -138,15 +138,18 @@ async def test_the_disk_check_reads_the_file_off_the_event_loop(tmp_path):
     assert q.disabled_reason == MISSING_DISK_MSG
 
 
-def test_disk_missing_at_startup_skips_recovery_schedule_and_watcher(settings, monkeypatch):
+def test_disk_missing_at_startup_queues_no_recovery_and_skips_schedule_and_watcher(
+    settings, monkeypatch
+):
     first = create_app(settings, start_background=False)  # writes the volume file
     first.state.layout.volume_file.unlink()
     recovered: list[object] = []
-    monkeypatch.setattr("app.main.recover_interrupted", lambda db: recovered.append(db) or [])
+    monkeypatch.setattr("app.main.recover_interrupted", lambda db: recovered.append(db) or [1])
     app = create_app(settings)  # background services on, as in production
     with TestClient(app):
         assert app.state.queue.disabled_reason == MISSING_DISK_MSG
-        assert recovered == []
+        assert len(recovered) == 1  # left-over jobs are closed...
+        assert not app.state.queue.is_busy(1)  # ...but nothing is queued to run again
         assert not app.state.scheduler.aps.running
         assert app.state.watcher._observer is None
     assert not app.state.scheduler.aps.running  # and it shut down cleanly
@@ -168,3 +171,71 @@ def test_first_start_that_cannot_write_the_file_stops_syncing_and_retries_later(
     again = create_app(settings, start_background=False)
     assert again.state.queue.disabled_reason is None
     assert read_volume_file(again.state.layout.volume_file) is not None
+
+
+def _reads(monkeypatch, *results):
+    """Make the volume file read return these results in turn; record each pause."""
+    seq = iter(results)
+    monkeypatch.setattr("app.services.volume.read_volume_file", lambda path: next(seq))
+    monkeypatch.setattr("app.services.volume.RETRY_PAUSE_S", 1.0)
+    pauses: list[float] = []
+    monkeypatch.setattr("app.services.volume.time.sleep", pauses.append)
+    return pauses
+
+
+async def test_one_failed_read_is_tried_again_and_syncing_carries_on(tmp_path, monkeypatch):
+    # A short hiccup on the disk (a virus scan, a slow mount) must not stop syncing.
+    pauses = _reads(monkeypatch, None, ID_A, ID_A)
+    q = SyncQueue(lambda *a: asyncio.sleep(0), guard=VolumeGuard(tmp_path / "v", ID_A).check)
+    assert await q.check() is False
+    assert q.disabled_reason is None
+    assert pauses == [1.0]
+    assert await q.check() is False  # a good read needs no pause
+    assert pauses == [1.0]
+
+
+async def test_two_failed_reads_in_a_row_stop_syncing(tmp_path, monkeypatch):
+    pauses = _reads(monkeypatch, None, None)
+    q = SyncQueue(lambda *a: asyncio.sleep(0), guard=VolumeGuard(tmp_path / "v", ID_A).check)
+    assert await q.check() is True
+    assert q.disabled_reason == MISSING_DISK_MSG
+    assert pauses == [1.0]
+
+
+def test_disk_missing_at_startup_still_closes_jobs_left_running(
+    settings, db, make_account, make_pair
+):
+    # The database is fine, only the disk ID is gone: no pair may show "running" forever.
+    from sqlalchemy import select
+
+    from app.models import SyncJob, SyncPair
+
+    first = create_app(settings, start_background=False)
+    pair = make_pair(make_account(), initialized=True, status="RUNNING")
+    db.add(SyncJob(pair_id=pair.id, kind="BISYNC", trigger="SCHEDULE", state="RUNNING"))
+    db.commit()
+    first.state.layout.volume_file.unlink()
+    app = create_app(settings)
+    with TestClient(app):
+        assert app.state.queue.disabled_reason == MISSING_DISK_MSG
+        assert not app.state.queue.is_busy(pair.id)  # nothing queued
+    db.expire_all()
+    assert [j.state for j in db.scalars(select(SyncJob))] == ["INTERRUPTED"]
+    assert db.get(SyncPair, pair.id).status == "HEALTHY"
+    assert not app.state.layout.volume_file.exists()
+
+
+def test_resume_and_new_pairs_are_refused_while_syncing_is_stopped(
+    auth_client, app, make_account, make_pair
+):
+    acc = make_account()
+    pair = make_pair(acc, initialized=True, paused=True, status="PAUSED")
+    app.state.layout.volume_file.unlink()
+    r = auth_client.post(f"/api/sync-pairs/{pair.id}/resume")
+    assert r.status_code == 503 and r.json()["detail"] == MISSING_DISK_MSG
+    r = auth_client.post("/api/sync-pairs", json={"account_id": acc.id, "name": "More"})
+    assert r.status_code == 503 and r.json()["detail"] == MISSING_DISK_MSG
+    pairs = auth_client.get("/api/sync-pairs").json()
+    assert [(p["id"], p["paused"]) for p in pairs] == [(pair.id, True)]
+    # Turning a pair off is always allowed: it can only make DriveSync do less.
+    assert auth_client.post(f"/api/sync-pairs/{pair.id}/pause").status_code == 200

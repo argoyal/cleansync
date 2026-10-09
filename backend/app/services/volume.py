@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import secrets
+import time
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -20,6 +21,9 @@ from app.services.queue import MISSING_DISK_MSG
 log = logging.getLogger(__name__)
 VOLUME_KEY = "volume_id"
 _ID = re.compile(r"[0-9a-f]{32}")
+# One bad read can be a short hiccup (a virus scan, a slow network mount): read again after
+# this pause before stopping all syncing until a restart.
+RETRY_PAUSE_S = 1.0
 
 
 def read_volume_file(path: Path) -> str | None:
@@ -47,8 +51,13 @@ class VolumeGuard:
 
     def check(self) -> str | None:
         """None while the right disk is there; the stop message otherwise."""
-        if self.expected is not None and read_volume_file(self.path) == self.expected:
-            return None
+        if self.expected is not None:
+            if read_volume_file(self.path) == self.expected:
+                return None
+            time.sleep(RETRY_PAUSE_S)  # runs in a worker thread, never on the event loop
+            if read_volume_file(self.path) == self.expected:
+                log.warning("%s could not be read once; it was fine a moment later", self.path)
+                return None
         log.error(
             "%s is missing or does not hold the expected ID %s",
             self.path,
