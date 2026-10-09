@@ -34,7 +34,11 @@ describe("live updates", () => {
     const { spy, source } = setup();
     expect(source.url).toBe("/api/events");
     act(() => source.emit("files", { account_id: 1 }));
-    expect(keys(spy)).toEqual(expect.arrayContaining(["browse", "recent", "starred", "search", "storage"]));
+    // A delete or a sync puts copies in Recovery.
+    expect(keys(spy)).toEqual(expect.arrayContaining(["browse", "recent", "starred", "search", "storage", "recovery"]));
+    spy.mockClear();
+    act(() => source.emit("job", { pair_id: 3, job_id: 9, state: "SUCCESS" }));
+    expect(keys(spy)).toContain("recovery");
     spy.mockClear();
     act(() => source.emit("account", { account_id: 1, status: "NEEDS_REAUTH" }));
     expect(keys(spy)).toEqual(expect.arrayContaining(["accounts", "status"]));

@@ -17,6 +17,7 @@ import type {
   Pair,
   Planned,
   Preview,
+  RecoveryList,
   Setup,
   Status,
   Storage,
@@ -165,3 +166,24 @@ export const useOffloadBatch = (batchId: string | null) =>
     retry: false,
     refetchInterval: (q) => (q.state.data?.done || q.state.error ? false : 1000),
   });
+
+export type RecoveryFilters = { pair: string; kind: string; path: string; limit: number };
+/** Empty filters mean "all" to the API. "Show more" keeps the current page on screen while it loads. */
+export const useRecovery = (accountId: number | null, f: RecoveryFilters) =>
+  useQuery({
+    queryKey: ["recovery", accountId, f.pair, f.kind, f.path, f.limit],
+    queryFn: () =>
+      api<RecoveryList>(`/api/recovery${query({ account_id: accountId, pair: f.pair, kind: f.kind, path: f.path, limit: f.limit })}`),
+    enabled: accountId !== null,
+    // Only for a bigger limit with the same filters: other filters must not show old rows.
+    placeholderData: (prev, prevQuery) => {
+      const same = [accountId, f.pair, f.kind, f.path];
+      return prevQuery && same.every((v, i) => prevQuery.queryKey[i + 1] === v) ? prev : undefined;
+    },
+  });
+export const recoveryFileUrl = (accountId: number, id: string) => `/api/recovery/file${query({ account_id: accountId, id })}`;
+export function recoveryZipUrl(accountId: number, ids: string[]): string {
+  const q = new URLSearchParams({ account_id: String(accountId) });
+  ids.forEach((id) => q.append("ids", id));
+  return `/api/recovery/zip?${q.toString()}`;
+}

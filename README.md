@@ -4,7 +4,7 @@ Keep a folder on your own server and Google Drive in two-way sync, with a web pa
 
 DriveSync is a control panel around [rclone](https://rclone.org) `bisync`. rclone moves the files; DriveSync decides when, checks every plan before it runs, and asks you when something needs a human.
 
-> Status: early development. Backend and web UI are in; offload, Office conversion and the Recovery view come next.
+> Status: early development. Backend, web UI, offload and the Recovery page are in; Office conversion comes next.
 
 ## What it does
 - Connect one or more Google accounts. Each syncs into its own folder: `storage/<email>/`.
@@ -16,6 +16,9 @@ DriveSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 - **Before every sync**, does a dry run. If it would delete more files than your limit (default 10), it stops and shows you the list.
 - Files replaced or deleted locally are copied to a backup folder first. Files deleted on Drive go to Drive's trash.
 - If a file changed on both sides, both versions are kept and you choose.
+- **Offload:** keep files on the server and remove them from Google Drive (into Drive's trash) to free Drive space. Only when you ask, checked file by file before and after. Right-click, or pick many at once on the Offloaded page. Google Docs, Sheets and Slides stay on Drive. Restore to Drive any time.
+- **Recovery:** every copy DriveSync kept, with where it came from and when it is cleaned up. Restore one or many (never overwrites), or download them.
+- New files and uploads only go into synced folders.
 
 ## Quick start
 1. Create a Google OAuth client: [docs/google-oauth-setup.md](docs/google-oauth-setup.md).

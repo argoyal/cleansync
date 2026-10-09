@@ -274,3 +274,24 @@ export type OffloadBatchItem = {
   offload_id: number | null;
 };
 export type OffloadBatch = { id: string; account_id: number; done: boolean; items: OffloadBatchItem[] };
+
+/** Where a Recovery entry came from (spec §8). "resync": set aside in a safe resync. */
+export type RecoveryKind = "sync_backup" | "deleted" | "first_sync" | "resync" | "conflict" | "offload";
+export type RecoveryEntry = {
+  /** Its path under the account's backups folder, or "offload:<id>". */
+  id: string;
+  kind: RecoveryKind;
+  pair_id: number | null;
+  pair_name: string | null;
+  name: string;
+  /** Account path it came from; null when its sync folder was removed. */
+  original_path: string | null;
+  size: number | null;
+  day: string; // YYYY-MM-DD
+  /** First day it may be cleaned up (YYYY-MM-DD); null = kept until deleted. */
+  expires_on: string | null;
+  restorable: boolean;
+  offload_id: number | null;
+};
+export type RecoveryList = { total: number; entries: RecoveryEntry[] };
+export type RestoreResult = { id: string; restored_to: string | null; error: string | null };

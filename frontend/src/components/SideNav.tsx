@@ -29,20 +29,6 @@ function Item({ to, icon, label, badge, end }: { to: string; icon: IconName; lab
   );
 }
 
-/** Features of a later version: shown so the layout is complete, but not clickable yet. */
-function Later({ icon, label }: { icon: IconName; label: string }) {
-  return (
-    <span
-      aria-disabled="true"
-      title="Not available yet"
-      className="flex h-9 cursor-default items-center gap-3.5 rounded-full pl-4 pr-3 text-ink-2/60"
-    >
-      <Icon name={icon} className="text-[20px]" />
-      {label}
-    </span>
-  );
-}
-
 export function SideNav({ newButton }: { newButton?: ReactNode }) {
   const { data: status } = useStatus();
   const { accountId } = useCurrentAccount();
@@ -57,7 +43,7 @@ export function SideNav({ newButton }: { newButton?: ReactNode }) {
       <div className="my-2 border-t border-line" />
       <Item to="/conflicts" icon="compare_arrows" label="Conflicts" badge={status?.conflicts} />
       <Item to="/activity" icon="sync" label="Sync activity" />
-      <Later icon="history" label="Recovery" />
+      <Item to="/recovery" icon="history" label="Recovery" />
       <div className="my-2 border-t border-line" />
       <Item to="/storage" icon="storage" label="Storage" />
       <div className="mt-2">

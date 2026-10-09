@@ -38,7 +38,8 @@ function clearProgress(pairId: number) {
   }
 }
 
-const FILE_KEYS = ["browse", "recent", "starred", "search", "storage", "catalog"];
+// "recovery": a delete or a sync puts copies there.
+const FILE_KEYS = ["browse", "recent", "starred", "search", "storage", "catalog", "recovery"];
 
 /**
  * Keeps the UI live from /api/events (server-sent events). On a dropped connection it

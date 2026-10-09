@@ -14,6 +14,7 @@ import { DrivePage } from "./pages/DrivePage";
 import { HomePage, RecentPage, SearchPage, StarredPage } from "./pages/ListPages";
 import { OffloadedPage, OffloadPickPage } from "./pages/OffloadedPage";
 import { BlockedPage, PairDetailPage } from "./pages/PairDetailPage";
+import { RecoveryPage } from "./pages/RecoveryPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupWizard, setupSkipped } from "./pages/SetupWizard";
 import { StoragePage } from "./pages/StoragePage";
@@ -79,6 +80,7 @@ export function AppRoutes() {
           <Route path="activity" element={<ActivityPage />} />
           <Route path="activity/:pairId" element={<PairDetailPage />} />
           <Route path="activity/:pairId/blocked" element={<BlockedPage />} />
+          <Route path="recovery" element={<RecoveryPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="storage" element={<StoragePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

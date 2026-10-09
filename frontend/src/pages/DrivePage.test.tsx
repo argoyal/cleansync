@@ -143,6 +143,20 @@ describe("My Drive", () => {
     expect(within(nav).getByRole("link", { name: "Work" })).toHaveAttribute("href", "/drive?path=Work");
     expect(within(nav).getByText("Deep")).toHaveAttribute("aria-current", "page");
   });
+
+  it("shows an item's history in Recovery", async () => {
+    setup();
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "photo.jpg" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Show in Recovery" }));
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/recovery?path=photo.jpg"));
+  });
+
+  it("offers Show in Recovery for an item only on Google Drive too", async () => {
+    setup();
+    await userEvent.click(await screen.findByRole("button", { name: "More actions for incoming.pdf" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Show in Recovery" }));
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/recovery?path=incoming.pdf"));
+  });
 });
 
 describe("Not synced", () => {
@@ -192,6 +206,8 @@ describe("Menus and errors", () => {
     await userEvent.keyboard("{ArrowDown}");
     expect(screen.getByRole("menuitem", { name: "Download" })).toHaveFocus();
     await userEvent.keyboard("{ArrowUp}{ArrowUp}");
+    expect(screen.getByRole("menuitem", { name: "Show in Recovery" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
     expect(screen.getByRole("menuitem", { name: "Delete" })).toHaveFocus();
   });
 

@@ -16,6 +16,17 @@
 - Changing only the letter case of a folder name (for example `photos` to `Photos`) can fail on case-insensitive storage. If it does, nothing changes and you see an error.
 - A development build that was made without the Office template generator cannot create blank Word, Excel or PowerPoint files (the container image always includes them).
 - Google Docs, Sheets and Slides are recognised in the Drive listing by their Google file type or their missing size; this is still to be confirmed against a real Drive.
+- Offloading changes the sync rules of its folder, so the next sync is a safe resync. A file deleted on one side whose deletion had not synced yet comes back (see "After an upgrade that changes the sync rules" below). Sync before offloading to avoid it.
+- Offloading a folder also sends its empty sub-folders to Google Drive's trash; "Empty from trash now" deletes the offloaded files, not those empty folders, so Google removes them when it empties its trash.
+- An offload that needs a look ("Needs a look") stays out of sync until you restore it to Drive. There is no "check again" button yet.
+- A sync folder that has offloaded items can't be removed until they are restored to Drive (otherwise syncing that folder again later would upload them again).
+- You can't add files inside an offloaded folder (new items, uploads or moves into it) until it is restored to Drive.
+- An offloaded item can't be renamed or moved until it is restored. Deleting it moves it to Recovery as usual; after the backup retention it is gone for good, because Drive no longer has it.
+- A pretend local account (used for testing) has no Drive IDs and no trash, so offload skips the trash check there and says so.
+- The automated tests use a local folder in place of Google Drive, which has no trash; Drive's trash is checked with the Drive API and in the manual end-to-end test with a real Google account.
+- A folder named `conflicts` at the top of a sync folder shares its backup folder name with the versions not kept in conflicts; the Recovery page then lists its backups as conflict versions.
+- A restored file keeps the date it had when it was saved. If Google Drive has a newer file with the same name that hasn't synced down yet, the next sync treats it as a conflict and keeps both.
+- The Recovery page reads the whole backups folder each time it opens, so a very large backups folder makes it slow.
 
 ## After an upgrade that changes the sync rules
 

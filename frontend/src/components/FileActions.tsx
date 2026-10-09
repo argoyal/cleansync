@@ -142,6 +142,9 @@ export function useFileActions(accountId: number | null) {
     }
     items.push({ separator: true });
     items.push({ label: "Delete", icon: "delete", danger: true, onSelect: () => setDialog({ kind: "delete", items: [item] }), disabled: !changeable });
+    items.push({ separator: true });
+    // Copies DriveSync kept of it (or of anything inside it).
+    items.push({ label: "Show in Recovery", icon: "history", onSelect: () => navigate(`/recovery?path=${encodeURIComponent(item.path)}`) });
     return items;
   };
 
