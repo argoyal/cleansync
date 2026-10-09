@@ -27,6 +27,12 @@ INTERRUPTED_NOTE = (
     "of sync. Use Restore to Drive to put back anything that left Google Drive."
 )
 
+# Nothing new goes into an offloaded folder (new files, folders, uploads, Recovery restores).
+IN_OFFLOADED_MSG = (
+    "This folder is offloaded: it's kept only on this server and doesn't sync with Google "
+    "Drive. Restore it to Drive to add files here."
+)
+
 Paths = tuple[tuple[str, bool], ...]
 
 

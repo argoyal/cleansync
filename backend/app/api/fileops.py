@@ -40,7 +40,7 @@ from app.services.files.names import validate_name
 from app.services.files.scope import Scope, join_rel, pair_for, to_pair_rel
 from app.services.files.status import load_overlay
 from app.services.files.upload import new_temp, plan_target, publish, save_stream
-from app.services.offload.store import covers, has_inside, open_paths
+from app.services.offload.store import IN_OFFLOADED_MSG, covers, has_inside, open_paths
 from app.services.queue import is_stopped, stop_message
 
 log = logging.getLogger(__name__)
@@ -49,10 +49,6 @@ OFFICE_KINDS = ("docx", "xlsx", "pptx")
 OFFLOADED_MSG = (
     "This is offloaded (kept only on this server). Restore it to Drive first, then rename or "
     "move it."
-)
-IN_OFFLOADED_MSG = (
-    "This folder is offloaded: it's kept only on this server and doesn't sync with Google "
-    "Drive. Restore it to Drive to add files here."
 )
 
 
