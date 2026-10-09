@@ -61,8 +61,10 @@ def create_pair(db: Session, layout: Layout, data: PairCreate) -> SyncPair:
     if acc is None:
         raise PairError("account not found")
     try:
-        local = normalize_rel(data.local_subpath)
         remote = validate_remote_path(data.remote_path)
+        # Spec §6.10: left out, the local folder is the Drive path under the account folder.
+        wanted = data.local_subpath if "local_subpath" in data.model_fields_set else remote
+        local = normalize_rel(wanted)
         if local.split("/")[0] == ".google-exports":
             raise PairError("that folder name is reserved")
         local_dir = safe_join(layout.account_dir(acc.email), local)

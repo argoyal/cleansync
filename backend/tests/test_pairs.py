@@ -193,3 +193,25 @@ def test_delete_is_refused_while_the_pair_is_running_or_queued(auth_client, app,
     finally:
         queue._pending.pop(pid)
     assert auth_client.delete(f"/api/sync-pairs/{pid}").status_code == 204
+
+
+def test_local_folder_follows_the_drive_path_when_left_out(auth_client, app, make_account):
+    acc = make_account()
+    r = _create(auth_client, acc.id, remote_path="/Projects/2026/Work/")
+    assert r.status_code == 201, r.text
+    assert r.json()["local_subpath"] == "Projects/2026/Work"
+    assert (app.state.layout.storage / "alice@example.com" / "Projects/2026/Work").is_dir()
+
+
+def test_an_empty_local_folder_given_on_purpose_is_kept(auth_client, make_account):
+    r = _create(auth_client, make_account().id, remote_path="Work", local_subpath="")
+    assert r.status_code == 201 and r.json()["local_subpath"] == ""
+
+
+def test_a_following_local_folder_still_cannot_overlap(auth_client, make_account):
+    acc = make_account()
+    assert (
+        _create(auth_client, acc.id, local_subpath="Work", remote_path="Other").status_code == 201
+    )
+    r = _create(auth_client, acc.id, remote_path="Work")
+    assert r.status_code == 422 and "local folder overlaps" in r.json()["detail"]

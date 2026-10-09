@@ -166,7 +166,9 @@ function FoldersStep({ onCreated }: { onCreated: (pair: Pair) => void }) {
   const [accountId, setAccountId] = useState<number | null>(null);
   const acc = accounts.find((a) => a.id === accountId) ?? accounts[0];
   const [remote, setRemote] = useState("");
-  const [local, setLocal] = useState("");
+  // Spec §6.10: the local folder follows the Drive folder until it is picked by hand.
+  const [localPicked, setLocalPicked] = useState<string | null>(null);
+  const local = localPicked ?? remote;
   const [name, setName] = useState("My Drive");
   const qc = useQueryClient();
   const create = useMutation({
@@ -209,7 +211,10 @@ function FoldersStep({ onCreated }: { onCreated: (pair: Pair) => void }) {
         </div>
         <div>
           <p className="mb-2 text-table font-medium text-ink-2">Folder on this server</p>
-          <FolderPicker source="local" accountId={acc.id} value={local} onChange={setLocal} rootLabel={acc.email} />
+          <FolderPicker source="local" accountId={acc.id} value={local} onChange={setLocalPicked} rootLabel={acc.email} />
+          <p className="mt-2 text-meta text-ink-2">
+            {localPicked === null ? "Follows the Drive folder until you pick one here. " : ""}A folder that doesn't exist yet is created.
+          </p>
         </div>
       </div>
       <p className="text-ink-2">
