@@ -27,6 +27,7 @@ from app.schemas.files import (
     RenameIn,
     UploadOut,
 )
+from app.services.accounts.service import is_pretend
 from app.services.catalog.model import EXPORT_EXT, CatalogEntry, google_url
 from app.services.drive_api.client import DEFAULT_NAMES
 from app.services.drive_api.tokens import (
@@ -37,9 +38,10 @@ from app.services.drive_api.tokens import (
 )
 from app.services.files import moves, ops
 from app.services.files.names import validate_name
-from app.services.files.scope import Scope, join_rel, pair_for, to_pair_rel
+from app.services.files.scope import Scope, join_rel, pair_for, to_account_rel, to_pair_rel
 from app.services.files.status import load_overlay
 from app.services.files.upload import new_temp, plan_target, publish, save_stream
+from app.services.offload.service import names
 from app.services.offload.store import IN_OFFLOADED_MSG, covers, has_inside, open_paths
 from app.services.queue import is_stopped, stop_message
 
@@ -47,6 +49,10 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files")
 OFFICE_KINDS = ("docx", "xlsx", "pptx")
 PRETEND_NATIVE_MSG = "Google Docs, Sheets and Slides need a real Google account."
+ONLY_COPY_MSG = (
+    "This deletes offloaded items, whose only copy is on this server. Read the warning, then "
+    "delete again:"
+)
 OFFLOADED_MSG = (
     "This is offloaded (kept only on this server). Restore it to Drive first, then rename or "
     "move it."
@@ -80,6 +86,22 @@ def refuse_offloaded(
         prel = to_pair_rel(pair, rel)
         if covers(paths, prel) or (inside and has_inside(paths, prel)):
             raise HTTPException(409, message)
+
+
+def offloaded_in(db: Session, scope: Scope, rels: list[str]) -> list[str]:
+    """Account paths of the offloaded items these paths are, or are inside, or hold."""
+    found: list[str] = []
+    for rel in rels:
+        pair = pair_for(scope.pairs, rel)
+        if pair is None:
+            continue
+        paths = open_paths(db, pair.id)
+        prel = to_pair_rel(pair, rel)
+        if covers(paths, prel):
+            found.append(rel)
+            continue
+        found.extend(to_account_rel(pair, p) for p, _ in paths if has_inside([(p, False)], prel))
+    return list(dict.fromkeys(found))
 
 
 def refuse_adding_to_offloaded(db: Session, scope: Scope, folder: str) -> None:
@@ -251,6 +273,11 @@ async def delete(
     await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
     rels = ops.prune_selection([clean_path(p) for p in body.paths])
+    offloaded = offloaded_in(db, scope, rels)
+    if offloaded and not body.only_copy_ok:
+        # Their Drive copy is in the trash (or gone): the copy here may be the only one left.
+        message = f"{ONLY_COPY_MSG} {names(offloaded)}."
+        raise HTTPException(409, {"message": message, "offloaded": offloaded})
     queue = request.app.state.queue
     pair_ids = moves.touched_pairs(scope, rels)
     try:
@@ -383,7 +410,7 @@ async def new_file(
     pair = pair_for(scope.pairs, folder)
     if pair is None:
         raise HTTPException(409, ops.NOT_SYNCED_MSG)
-    if scope.account.remote_name.startswith("local_"):
+    if is_pretend(scope.account, state.settings.allow_local_accounts):
         # A pretend local account (development and CI only) has no Google behind it.
         raise HTTPException(409, PRETEND_NATIVE_MSG)
     if scope.account.status != AccountStatus.CONNECTED:

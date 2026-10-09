@@ -93,6 +93,8 @@ class MoveIn(BaseModel):
 class DeleteIn(BaseModel):
     account_id: int
     paths: list[str] = Field(min_length=1, max_length=1000)
+    # Set once the person saw the warning that offloaded items in it are the only copy.
+    only_copy_ok: bool = False
 
 
 class OpOut(BaseModel):

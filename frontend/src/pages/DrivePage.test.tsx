@@ -868,7 +868,54 @@ describe("Several items, offload and restore", () => {
       ),
     );
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/files/delete")?.body).toEqual({ account_id: 1, paths: ["Work/Old"] }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === "/api/files/delete")?.body).toEqual({ account_id: 1, paths: ["Work/Old"], only_copy_ok: true }),
+    );
+  });
+
+  it("warns that deleting a folder holding an offloaded item deletes its only copy, also with the Delete key", async () => {
+    const { calls } = setup("/drive", {
+      "GET /api/offloads": [OFFLOAD],
+      "GET /api/sync-pairs": [{ ...PAIR, id: 7, backup_retention_days: 14 }],
+      "POST /api/files/delete": { paths: ["Work"], syncs: {} },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Work" }));
+    await userEvent.keyboard("{Delete}");
+    const dialog = screen.getByRole("dialog", { name: 'Delete "Work"?' });
+    await waitFor(() =>
+      expect(dialog).toHaveTextContent(
+        "Offloaded inside it: Work/Old. This is the only copy: it's no longer on Google Drive. It goes to Recovery and is removed for good after 14 days.",
+      ),
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === "/api/files/delete")?.body).toEqual({ account_id: 1, paths: ["Work"], only_copy_ok: true }),
+    );
+  });
+
+  it("when the server finds offloaded items the dialog didn't know about, it shows them and asks again", async () => {
+    let offloads: unknown[] = [];
+    const { calls } = setup("/drive", {
+      "GET /api/offloads": () => offloads,
+      "POST /api/files/delete": ({ body }: { body: { only_copy_ok?: boolean } }) => {
+        if (body.only_copy_ok) return { paths: ["Work"], syncs: {} };
+        offloads = [OFFLOAD];
+        return json(409, { detail: { message: "This deletes offloaded items, whose only copy is on this server. Read the warning, then delete again: Work/Old.", offloaded: ["Work/Old"] } });
+      },
+    });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Work" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog", { name: 'Delete "Work"?' });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(await within(dialog).findByText(/Read the warning, then delete again/)).toBeInTheDocument();
+    await waitFor(() => expect(dialog).toHaveTextContent("Offloaded inside it: Work/Old."));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === "/api/files/delete").map((c) => c.body)).toEqual([
+        { account_id: 1, paths: ["Work"] },
+        { account_id: 1, paths: ["Work"], only_copy_ok: true },
+      ]),
+    );
   });
 
   it("a mixed selection: Move is off, and Delete lists what it leaves out and why", async () => {
@@ -889,7 +936,7 @@ describe("Several items, offload and restore", () => {
     expect(dialog).toHaveTextContent("This is the only copy");
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() =>
-      expect(calls.find((c) => c.path === "/api/files/delete")?.body).toEqual({ account_id: 1, paths: ["Work/Old", "Work/b.txt"] }),
+      expect(calls.find((c) => c.path === "/api/files/delete")?.body).toEqual({ account_id: 1, paths: ["Work/Old", "Work/b.txt"], only_copy_ok: true }),
     );
   });
 });

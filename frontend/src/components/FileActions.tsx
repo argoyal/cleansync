@@ -316,13 +316,26 @@ function MoveDialog({ accountId, items, onClose }: { accountId: number; items: F
 function DeleteDialog({ accountId, items, onClose }: { accountId: number; items: FileItem[]; onClose: () => void }) {
   const oneWay = useOneWay();
   const pairs = usePairs().data;
+  const offloads = useOffloads(accountId).data ?? [];
+  const qc = useQueryClient();
   const op = useFileOp("delete", "Moved to Recovery. It leaves Google Drive (to Drive's trash) at the next sync.", onClose);
   // The dialog deletes exactly what it lists; anything else is named with the reason.
   const going = items.filter((i) => deleteBlock(i, oneWay) === null);
   const left = items.filter((i) => deleteBlock(i, oneWay) !== null);
-  const offloaded = going.filter((i) => i.status === "offloaded");
-  const synced = going.some((i) => i.status !== "offloaded");
+  const isOffloaded = (i: FileItem) =>
+    i.status === "offloaded" || offloads.some((o) => i.path === o.path || (o.is_dir && i.path.startsWith(`${o.path}/`)));
+  const offloaded = going.filter(isOffloaded);
+  // Offloaded items inside a folder being deleted go too: they are the only copy as well.
+  const inside = offloads.filter((o) => going.some((i) => i.is_dir && !isOffloaded(i) && o.path.startsWith(`${i.path}/`)));
+  const warned = offloaded.length > 0 || inside.length > 0;
+  const synced = going.some((i) => !isOffloaded(i));
   const what = going.length === 1 ? `"${going[0].name}"` : `${going.length} items`;
+  const remove = () =>
+    op.mutate(
+      { account_id: accountId, paths: going.map((i) => i.path), ...(warned ? { only_copy_ok: true } : {}) },
+      // The server found offloaded items this dialog didn't know of: load them so the warning shows.
+      { onError: () => qc.invalidateQueries({ queryKey: ["offloads"] }) },
+    );
   return (
     <Dialog
       title={`Delete ${what}?`}
@@ -332,11 +345,7 @@ function DeleteDialog({ accountId, items, onClose }: { accountId: number; items:
           <Button onClick={onClose} data-autofocus>
             Cancel
           </Button>
-          <Button
-            tone="danger"
-            disabled={op.isPending || going.length === 0}
-            onClick={() => op.mutate({ account_id: accountId, paths: going.map((i) => i.path) })}
-          >
+          <Button tone="danger" disabled={op.isPending || going.length === 0} onClick={remove}>
             Delete
           </Button>
         </>
@@ -351,7 +360,13 @@ function DeleteDialog({ accountId, items, onClose }: { accountId: number; items:
       {offloaded.length > 0 && (
         <Notice tone="warn">
           {going.length > 1 && `Offloaded: ${names(offloaded.map((i) => i.name))}. `}
-          {onlyCopyNote(offloaded, pairs)}
+          {onlyCopyNote(offloaded.map((i) => i.pair_id), pairs, false)}
+        </Notice>
+      )}
+      {inside.length > 0 && (
+        <Notice tone="warn">
+          {`Offloaded inside ${going.length === 1 ? "it" : "them"}: ${names(inside.map((o) => o.path))}. `}
+          {onlyCopyNote(inside.map((o) => o.pair_id), pairs, inside.length > 1)}
         </Notice>
       )}
       {going.length > 1 && <p className="break-all text-table text-ink-2">Deleting: {names(going.map((i) => i.name))}</p>}
@@ -366,13 +381,16 @@ function DeleteDialog({ accountId, items, onClose }: { accountId: number; items:
 }
 
 /** Offloaded items exist only here: say so, with how long Recovery keeps them (the pair's setting). */
-function onlyCopyNote(items: FileItem[], pairs: Pair[] | undefined): string {
-  const start = "This is the only copy: it's no longer on Google Drive. It goes to Recovery and ";
-  const kept = items.map((i) => pairs?.find((p) => p.id === i.pair_id));
-  if (kept.some((p) => p === undefined)) return `${start}is removed for good when Recovery's keep time runs out.`;
+function onlyCopyNote(pairIds: (number | null)[], pairs: Pair[] | undefined, many: boolean): string {
+  const start = many
+    ? "Their only copy is here: they're no longer on Google Drive. They go to Recovery and "
+    : "This is the only copy: it's no longer on Google Drive. It goes to Recovery and ";
+  const verb = many ? "are" : "is";
+  const kept = pairIds.map((id) => pairs?.find((p) => p.id === id));
+  if (kept.some((p) => p === undefined)) return `${start}${verb} removed for good when Recovery's keep time runs out.`;
   const days = kept.map((p) => p?.backup_retention_days).filter((d): d is number => d !== null && d !== undefined);
-  if (days.length === 0) return `${start}stays there until you remove it.`;
-  return `${start}is removed for good after ${Math.min(...days)} days.`;
+  if (days.length === 0) return `${start}${many ? "stay" : "stays"} there until you remove ${many ? "them" : "it"}.`;
+  return `${start}${verb} removed for good after ${Math.min(...days)} days.`;
 }
 
 /** "Start syncing this folder": a new sync pair whose Drive folder has the same path, then its preview. */

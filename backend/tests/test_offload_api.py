@@ -258,12 +258,65 @@ def test_deleting_an_offloaded_file_still_goes_to_recovery(auth_client, env, db,
     db.add(Offload(pair_id=pair.id, path="Old", is_dir=True, state=S.ACTIVE))
     db.commit()
     r = auth_client.post(
-        "/api/files/delete", json={"account_id": acc.id, "paths": ["Drive/Old/a.txt"]}
+        "/api/files/delete",
+        json={"account_id": acc.id, "paths": ["Drive/Old/a.txt"], "only_copy_ok": True},
     )
     assert r.status_code == 200, r.text
     assert not (root / "Drive" / "Old" / "a.txt").exists()
     kept = list((app.state.layout.backups_dir / acc.email / str(pair.id)).rglob("a.txt"))
     assert len(kept) == 1
+
+
+@pytest.mark.parametrize(
+    ("paths", "named"),
+    [
+        (["Drive/Old/a.txt"], "Drive/Old/a.txt"),  # inside an offloaded folder
+        (["Drive/Old"], "Drive/Old"),  # the offloaded folder itself
+        (["Drive"], "Drive/Old"),  # a folder holding it
+        (["Drive/Keep.txt", "Drive"], "Drive/Old"),  # a selection holding it
+    ],
+)
+def test_deleting_an_offloaded_item_needs_the_only_copy_warning_first(
+    auth_client, env, db, app, stub_queue, paths, named
+):
+    # Its Drive copy is in the trash (or gone): what is here may be the only copy left.
+    acc, pair, root = env
+    (root / "Drive" / "Keep.txt").write_text("k")
+    db.add(Offload(pair_id=pair.id, path="Old", is_dir=True, state=S.ACTIVE))
+    db.commit()
+    r = auth_client.post("/api/files/delete", json={"account_id": acc.id, "paths": paths})
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["message"].startswith("This deletes offloaded items")
+    assert named in detail["message"] and detail["offloaded"] == [named]
+    assert (root / "Drive" / "Old" / "a.txt").exists() and (root / "Drive" / "Keep.txt").exists()
+    assert stub_queue.requests == []
+
+
+def test_deleting_a_folder_holding_an_offloaded_item_after_the_warning(auth_client, env, db, app):
+    acc, pair, root = env
+    (root / "Drive" / "Work").mkdir()
+    (root / "Drive" / "Old").rename(root / "Drive" / "Work" / "Old")
+    db.add(Offload(pair_id=pair.id, path="Work/Old/a.txt", is_dir=False, state=S.ACTIVE))
+    db.commit()
+    body = {"account_id": acc.id, "paths": ["Drive/Work"]}
+    r = auth_client.post("/api/files/delete", json=body)
+    assert r.status_code == 409 and r.json()["detail"]["offloaded"] == ["Drive/Work/Old/a.txt"]
+    r = auth_client.post("/api/files/delete", json=body | {"only_copy_ok": True})
+    assert r.status_code == 200, r.text
+    assert not (root / "Drive" / "Work").exists()
+    kept = list((app.state.layout.backups_dir / acc.email / str(pair.id)).rglob("a.txt"))
+    assert len(kept) == 1
+
+
+def test_deleting_next_to_an_offloaded_folder_needs_no_warning(auth_client, env, db):
+    acc, pair, root = env
+    (root / "Drive" / "Older").mkdir()
+    db.add(Offload(pair_id=pair.id, path="Old", is_dir=True, state=S.ACTIVE))
+    db.add(Offload(pair_id=pair.id, path="Gone", is_dir=True, state=S.RESTORED))
+    db.commit()
+    r = auth_client.post("/api/files/delete", json={"account_id": acc.id, "paths": ["Drive/Older"]})
+    assert r.status_code == 200, r.text
 
 
 def test_a_pairs_direction_cannot_be_changed_through_the_api(auth_client, env, db):

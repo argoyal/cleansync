@@ -380,6 +380,7 @@ def test_every_blank_google_file_is_made_and_opens_in_its_editor(
 def test_google_files_on_a_pretend_account_say_they_need_real_google(
     auth_client, app, make_account, make_pair, save_catalog
 ):
+    app.state.settings.allow_local_accounts = True
     acc = make_account(email="bob@example.com", remote_name="local_abc123")
     pair = make_pair(acc, initialized=True)
     root = app.state.layout.account_dir(acc.email)
@@ -389,3 +390,19 @@ def test_google_files_on_a_pretend_account_say_they_need_real_google(
         r = _new(auth_client, acc, kind)
         assert r.status_code == 409
         assert r.json()["detail"] == "Google Docs, Sheets and Slides need a real Google account."
+
+
+def test_a_local_name_counts_as_pretend_only_with_the_setting(
+    auth_client, app, make_account, make_pair, save_catalog
+):
+    # The same check as offload's: the "local_" name and DRIVESYNC_ALLOW_LOCAL_ACCOUNTS.
+    app.state.settings.allow_local_accounts = False
+    acc = make_account(email="bob@example.com", remote_name="local_abc123")
+    pair = make_pair(acc, initialized=True)
+    (app.state.layout.account_dir(acc.email) / "Work").mkdir(parents=True)
+    save_catalog(pair.id, [CatalogEntry("Work", True, 0, None, id="WORK1")], root_id="root")
+    fake = FakeDriveApi()
+    app.state.drive_api = fake
+    r = _new(auth_client, acc, "document")
+    assert r.status_code == 200, r.text
+    assert fake.made == [(acc.remote_name, "document", "Untitled document", "WORK1")]
