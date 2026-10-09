@@ -1,9 +1,9 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { type KeyboardEvent, type Ref, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api, friendlyError } from "../api/client";
-import { useBrowse, useOffloads, useStatus } from "../api/queries";
+import { browseOptions, useBrowse, useOffloads, useStatus } from "../api/queries";
 import type { Browse, FileItem, Offload, OffloadPreview, OffloadState } from "../api/types";
 import { FILE_QUERY_KEYS, RESTORE_NEWER_NOTE, RestoreDialog, useOneWay } from "../components/FileActions";
 import { Icon } from "../components/Icon";
@@ -307,17 +307,19 @@ function EmptyTrashDialog({ offload, onClose }: { offload: Offload; onClose: () 
       onClose();
     },
   });
+  // While the request is on its way the dialog stays, so its answer (or refusal) is seen.
+  const close = empty.isPending ? () => undefined : onClose;
   return (
     <Dialog
       title="Delete these from Google Drive's trash for good?"
-      onClose={onClose}
+      onClose={close}
       footer={
         <>
-          <Button onClick={onClose} data-autofocus>
+          <Button onClick={close} disabled={empty.isPending} data-autofocus>
             Cancel
           </Button>
           <Button tone="danger" disabled={empty.isPending} onClick={() => empty.mutate()}>
-            Empty from trash now
+            {empty.isPending ? "Emptying…" : "Empty from trash now"}
           </Button>
         </>
       }
@@ -334,14 +336,24 @@ function EmptyTrashDialog({ offload, onClose }: { offload: Offload; onClose: () 
 }
 
 // ---- Offload files…: a tree of the account's folders with checkboxes -----------------------
+//
+// An ARIA tree (role tree / treeitem / group): one Tab stop (roving tabindex), Up/Down move,
+// Right opens a folder or steps into it, Left closes it or steps out, Home/End, Space picks,
+// Enter opens or closes. Each item says checked, not checked or partly checked ("mixed").
 
 const under = (path: string, folder: string) => path.startsWith(`${folder}/`);
+const keyOf = (i: FileItem) => i.path + (i.native ? `#${i.native}` : "");
+const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
+const canOpen = (i: FileItem) => i.is_dir && i.local;
 
 type Pick = {
-  picked: string[];
   isPickable: (i: FileItem) => boolean;
   stateOf: (i: FileItem) => boolean | "mixed";
   toggle: (i: FileItem) => void;
+  open: string[];
+  setOpen: (path: string, open: boolean) => void;
+  focus: string | null;
+  setFocus: (key: string) => void;
 };
 
 function useDebounced<T>(value: T, ms: number): T {
@@ -353,41 +365,92 @@ function useDebounced<T>(value: T, ms: number): T {
   return out;
 }
 
-function Folder({ accountId, path, pick, label }: { accountId: number; path: string; pick: Pick; label?: string }) {
+function noteFor(i: FileItem, pickable: boolean, oneWay: boolean): string | null {
+  if (i.native) return "Stays on Drive";
+  if (i.status === "unsynced" || (!i.pair_id && !pickable)) return "Not synced";
+  if (i.status === "offloaded") return "Offloaded";
+  if (i.pair_root) return "Synced folder: pick what's inside it";
+  if (oneWay) return "Only receives changes from Google Drive";
+  if (!i.local) return "Only on Google Drive";
+  return null;
+}
+
+function Folder({
+  accountId,
+  path,
+  level,
+  pick,
+  oneWay,
+  tree,
+}: {
+  accountId: number;
+  path: string;
+  level: number;
+  pick: Pick;
+  oneWay: (i: FileItem) => boolean;
+  tree?: { label: string; onKeyDown: (e: KeyboardEvent<HTMLUListElement>) => void; ref: Ref<HTMLUListElement> };
+}) {
   const browse = useBrowse(accountId, path);
-  const [open, setOpen] = useState<string[]>([]);
   if (browse.isPending) return <p className="py-1 pl-10 text-ink-2">Loading…</p>;
   if (browse.isError) return <Notice tone="err">{friendlyError(browse.error)}</Notice>;
   if (browse.data.items.length === 0) return <p className="py-1 pl-10 text-ink-2">Empty folder</p>;
+  const list = browse.data.items;
   return (
-    <ul className={path ? "pl-6" : ""} aria-label={label}>
-      {browse.data.items.map((i) => {
-        const isOpen = open.includes(i.path);
-        const noteId = `pick-note-${i.path}-${i.native ?? ""}`;
-        const note = i.native ? "Stays on Drive" : i.status === "unsynced" ? "Not synced" : i.status === "offloaded" ? "Offloaded" : null;
+    <ul
+      role={tree ? "tree" : "group"}
+      aria-label={tree?.label}
+      aria-multiselectable={tree ? true : undefined}
+      ref={tree?.ref}
+      onKeyDown={tree?.onKeyDown}
+      className={tree ? "" : "pl-6"}
+    >
+      {list.map((i, n) => {
+        const key = keyOf(i);
+        const isOpen = canOpen(i) && pick.open.includes(i.path);
+        const pickable = pick.isPickable(i);
+        const note = noteFor(i, pickable, oneWay(i));
+        const noteId = `pick-note-${key}`;
+        // The one Tab stop: the item last focused, or the first item at the top.
+        const stop = pick.focus === key || (pick.focus === null && level === 1 && n === 0);
         return (
-          <li key={i.path + (i.native ?? "")}>
-            <div className="flex min-h-9 items-center gap-2 py-0.5">
-              {i.is_dir && i.local ? (
-                <button
-                  type="button"
-                  aria-label={`${isOpen ? "Close" : "Open"} ${i.name}`}
-                  aria-expanded={isOpen}
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-ink-2 hover:bg-sunken"
-                  onClick={() => setOpen((o) => (isOpen ? o.filter((x) => x !== i.path) : [...o, i.path]))}
+          <li
+            key={key}
+            role="treeitem"
+            aria-label={i.name}
+            aria-level={level}
+            aria-checked={pick.stateOf(i)}
+            aria-expanded={canOpen(i) ? isOpen : undefined}
+            aria-disabled={!pickable && !canOpen(i) ? true : undefined}
+            aria-describedby={note ? noteId : undefined}
+            data-key={key}
+            data-path={i.path}
+            data-native={i.native ?? ""}
+            tabIndex={stop ? 0 : -1}
+            onFocus={(e) => e.target === e.currentTarget && pick.setFocus(key)}
+            className="outline-none [&:focus-visible>div]:ring-2 [&:focus-visible>div]:ring-accent"
+          >
+            <div
+              data-row
+              className={`flex min-h-9 items-center gap-2 rounded-ctl py-0.5 ${pickable ? "cursor-pointer hover:bg-sunken" : ""}`}
+              onClick={() => pickable && pick.toggle(i)}
+            >
+              {canOpen(i) ? (
+                <span
+                  data-arrow
+                  aria-hidden="true"
+                  title={isOpen ? "Close" : "Open"}
+                  className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-full text-ink-2 hover:bg-line"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    pick.setOpen(i.path, !isOpen);
+                  }}
                 >
                   <Icon name={isOpen ? "keyboard_arrow_down" : "chevron_right"} />
-                </button>
+                </span>
               ) : (
                 <span className="w-7 shrink-0" />
               )}
-              <TriBox
-                label={`Select ${i.name}`}
-                checked={pick.stateOf(i)}
-                disabled={!pick.isPickable(i)}
-                onToggle={() => pick.toggle(i)}
-                describedBy={note ? noteId : undefined}
-              />
+              <CheckMark state={pick.stateOf(i)} dim={!pickable} />
               <Icon name={i.is_dir ? "folder" : "draft"} className="text-ink-2" />
               <span className="min-w-0 truncate">{i.name}</span>
               {note && (
@@ -399,11 +462,27 @@ function Folder({ accountId, path, pick, label }: { accountId: number; path: str
                 <span className="ml-auto shrink-0 pr-2 text-meta tabular text-ink-2">{formatBytes(i.size)}</span>
               )}
             </div>
-            {isOpen && <Folder accountId={accountId} path={i.path} pick={pick} />}
+            {isOpen && <Folder accountId={accountId} path={i.path} level={level + 1} pick={pick} oneWay={oneWay} />}
           </li>
         );
       })}
     </ul>
+  );
+}
+
+/** The look of a tree item's checkbox; the state itself is the item's aria-checked. */
+function CheckMark({ state, dim }: { state: boolean | "mixed"; dim: boolean }) {
+  const on = state !== false;
+  return (
+    <span
+      aria-hidden="true"
+      className={`grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[4px] border-2 ${
+        on ? "border-accent bg-accent text-accent-ink" : "border-ink-2 bg-surface"
+      } ${dim ? "opacity-40" : ""}`}
+    >
+      {state === true && <Icon name="check" className="text-[16px]" />}
+      {state === "mixed" && <Icon name="check_indeterminate_small" className="text-[16px]" />}
+    </span>
   );
 }
 
@@ -414,59 +493,142 @@ export function OffloadPickPage() {
   const oneWay = useOneWay();
   const stopped = useStatus().data?.sync_stopped ?? null;
   const [picked, setPicked] = useState<string[]>([]);
+  const pickedNow = useRef(picked);
+  pickedNow.current = picked;
   const [confirm, setConfirm] = useState<string[] | null>(null);
+  const [open, setOpenList] = useState<string[]>([]);
+  const [focus, setFocus] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const treeRef = useRef<HTMLUListElement>(null);
 
   // What could go: on this server, in a two-way synced folder, not a Google Doc, not offloaded
   // already, and not a synced folder's own top (offload what is inside it). The server checks
   // all of this again in the preview.
   const isPickable = (i: FileItem) =>
     i.local && i.pair_id !== null && !i.native && i.status !== "offloaded" && !i.pair_root && !oneWay(i);
-  const listing = (path: string) => qc.getQueryData<Browse>(["browse", accountId, path])?.items;
 
   const stateOf = (i: FileItem): boolean | "mixed" => {
-    if (!isPickable(i)) return false;
+    const inside = i.is_dir && picked.some((p) => under(p, i.path));
+    if (!isPickable(i)) return inside ? "mixed" : false; // e.g. a folder that isn't synced, above a synced one
     if (picked.some((p) => p === i.path || under(i.path, p))) return true;
-    return i.is_dir && picked.some((p) => under(p, i.path)) ? "mixed" : false;
+    return inside ? "mixed" : false;
   };
 
-  const toggle = (i: FileItem) => {
-    if (picked.includes(i.path)) {
-      setPicked(picked.filter((p) => p !== i.path));
+  const toggle = async (i: FileItem) => {
+    setProblem(null);
+    const before = pickedNow.current;
+    if (before.includes(i.path)) {
+      setPicked(before.filter((p) => p !== i.path));
       return;
     }
-    const above = picked.find((p) => under(i.path, p));
+    const above = before.find((p) => under(i.path, p));
     if (above === undefined) {
       // Picking a folder covers everything in it, so drop anything picked inside it.
-      setPicked([...picked.filter((p) => !under(p, i.path)), i.path]);
+      setPicked([...before.filter((p) => !under(p, i.path)), i.path]);
       return;
     }
     // Taking one item out of a picked folder: pick the rest of that folder, level by level.
-    const next = picked.filter((p) => p !== above);
+    // A listing that isn't loaded is loaded first.
+    const next = before.filter((p) => p !== above);
     let level = above;
-    while (level !== i.path) {
-      const children = listing(level);
-      if (!children) return; // not on screen: nothing to split
-      const step = children.find((c) => c.path === i.path || under(i.path, c.path));
-      if (!step) return;
-      next.push(...children.filter((c) => c !== step && isPickable(c)).map((c) => c.path));
-      level = step.path;
+    try {
+      while (level !== i.path) {
+        const listing = await qc.fetchQuery({ ...browseOptions(accountId, level), staleTime: Infinity });
+        const step = listing.items.find((c) => c.path === i.path || under(i.path, c.path));
+        if (!step) throw new Error(`it is no longer in ${nameOf(level)}`);
+        next.push(...listing.items.filter((c) => c !== step && isPickable(c)).map((c) => c.path));
+        level = step.path;
+      }
+    } catch (e) {
+      setProblem(`Couldn't leave out ${i.name}: ${friendlyError(e)}. ${nameOf(above)} is still picked as a whole.`);
+      return;
     }
-    setPicked(next);
+    // Only if nothing else changed the picks while a listing loaded.
+    if (pickedNow.current === before) setPicked(next);
+    else setProblem(`Couldn't leave out ${i.name}: the picks changed meanwhile. Try again.`);
+  };
+
+  const setOpen = (path: string, isOpen: boolean) => {
+    setOpenList((o) => (isOpen ? [...o, path] : o.filter((x) => x !== path && !under(x, path))));
+    // Closing a folder that holds the focus stop moves the stop to the folder.
+    if (!isOpen && focus && under(focus, path)) setFocus(path);
+  };
+
+  // If the focused item went away (moved, or a listing changed), the first item takes the stop.
+  // Runs after every render on purpose: any listing can change it. It only ever sets null once.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (focus !== null && treeRef.current && !treeRef.current.querySelector('[role="treeitem"][tabindex="0"]')) setFocus(null);
+  });
+
+  const itemOf = (el: HTMLElement): FileItem | undefined =>
+    qc
+      .getQueryData<Browse>(["browse", accountId, parentOf(el.dataset.path ?? "")])
+      ?.items.find((c) => c.path === el.dataset.path && (c.native ?? "") === el.dataset.native);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLUListElement>) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>('[role="treeitem"]');
+    if (!el || e.altKey || e.ctrlKey || e.metaKey) return;
+    const all = Array.from(treeRef.current?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? []);
+    const at = all.indexOf(el);
+    const path = el.dataset.path ?? "";
+    const expandable = el.hasAttribute("aria-expanded");
+    const isOpen = el.getAttribute("aria-expanded") === "true";
+    const go = (target: HTMLElement | undefined) => target?.focus();
+    switch (e.key) {
+      case "ArrowDown":
+        go(all[at + 1]);
+        break;
+      case "ArrowUp":
+        go(all[at - 1]);
+        break;
+      case "Home":
+        go(all[0]);
+        break;
+      case "End":
+        go(all[all.length - 1]);
+        break;
+      case "ArrowRight":
+        if (!expandable) return;
+        if (!isOpen) setOpen(path, true);
+        else if (all[at + 1] && parentOf(all[at + 1].dataset.path ?? "") === path) go(all[at + 1]);
+        break;
+      case "ArrowLeft":
+        if (isOpen) setOpen(path, false);
+        else go(all.find((x) => x.dataset.path === parentOf(path) && !x.dataset.native));
+        break;
+      case "Enter":
+        if (!expandable) return;
+        setOpen(path, !isOpen);
+        break;
+      case " ": {
+        const i = itemOf(el);
+        if (i && isPickable(i)) void toggle(i);
+        break;
+      }
+      default:
+        return;
+    }
+    e.preventDefault();
   };
 
   const settled = useDebounced(picked, 300);
   const summary = useQuery({
     queryKey: ["offload-preview", accountId, settled],
-    queryFn: () => api<OffloadPreview>("/api/offloads/preview", { method: "POST", body: { account_id: accountId, paths: settled } }),
+    // The signal cancels a total that a newer pick made out of date.
+    queryFn: ({ signal }) =>
+      api<OffloadPreview>("/api/offloads/preview", { method: "POST", body: { account_id: accountId, paths: settled }, signal }),
     enabled: accountId !== null && settled.length > 0,
     placeholderData: keepPreviousData,
     staleTime: 10_000,
+    refetchOnWindowFocus: false,
   });
   const sum = picked.length > 0 ? summary.data : undefined;
   const blocked = sum?.items.filter((x) => x.blocked).length ?? 0;
   const adding = settled !== picked || summary.isFetching;
 
   if (accountId === null) return null;
+  const pick: Pick = { isPickable, stateOf, toggle: (i) => void toggle(i), open, setOpen, focus, setFocus };
   return (
     <div className="p-4 sm:p-6">
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -479,6 +641,9 @@ export function OffloadPickPage() {
       <p className="mb-4 max-w-3xl text-ink-2">
         Pick files and folders in your synced folders. You see what will be removed from Google Drive, and the space freed,
         before anything happens. Google Docs, Sheets and Slides stay on Drive.
+      </p>
+      <p className="sr-only" id="pick-keys">
+        Up and down arrows move, right opens a folder, left closes it, Space picks or unpicks.
       </p>
       {stopped && (
         <div className="mb-4">
@@ -518,8 +683,20 @@ export function OffloadPickPage() {
           Offload selected ({picked.length})…
         </Button>
       </div>
-      <div className="rounded-card border border-line px-2 py-2">
-        <Folder accountId={accountId} path="" pick={{ picked, isPickable, stateOf, toggle }} label="Your folders" />
+      {problem && (
+        <div className="mb-3">
+          <Notice tone="err">{problem}</Notice>
+        </div>
+      )}
+      <div className="rounded-card border border-line px-2 py-2" aria-describedby="pick-keys">
+        <Folder
+          accountId={accountId}
+          path=""
+          level={1}
+          pick={pick}
+          oneWay={oneWay}
+          tree={{ label: "Your folders", onKeyDown, ref: treeRef }}
+        />
       </div>
       {confirm && (
         <OffloadDialog

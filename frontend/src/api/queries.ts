@@ -41,12 +41,13 @@ export const useSystem = () => useQuery({ queryKey: ["system"], queryFn: () => a
 export const useAppSettings = () =>
   useQuery({ queryKey: ["settings"], queryFn: () => api<AppSettings>("/api/settings") });
 
+/** One folder's listing; shared by useBrowse and code that needs a listing outside a component. */
+export const browseOptions = (accountId: number | null, path: string) => ({
+  queryKey: ["browse", accountId, path],
+  queryFn: () => api<Browse>(`/api/browse${query({ account_id: accountId, path })}`),
+});
 export const useBrowse = (accountId: number | null, path: string) =>
-  useQuery({
-    queryKey: ["browse", accountId, path],
-    queryFn: () => api<Browse>(`/api/browse${query({ account_id: accountId, path })}`),
-    enabled: accountId !== null,
-  });
+  useQuery({ ...browseOptions(accountId, path), enabled: accountId !== null });
 export const useRecent = (accountId: number | null, limit = 50) =>
   useQuery({
     queryKey: ["recent", accountId, limit],
