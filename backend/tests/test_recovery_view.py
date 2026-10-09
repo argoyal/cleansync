@@ -162,13 +162,94 @@ def test_download_one_or_several(auth_client, env):
     r = auth_client.get("/api/recovery/file", params={"account_id": acc.id, "id": entries["b.txt"]})
     assert r.status_code == 200 and r.text == "first"
     assert "attachment" in r.headers["content-disposition"]
-    r = auth_client.get(
-        "/api/recovery/zip",
-        params=[("account_id", acc.id), ("ids", entries["b.txt"]), ("ids", entries["c.txt"])],
-    )
+    r = _zip(auth_client, acc, entries["b.txt"], entries["c.txt"])
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    r = auth_client.get(f"/api/recovery/zip/{token}")
     assert r.status_code == 200
+    assert "attachment" in r.headers["content-disposition"]
     names = zipfile.ZipFile(BytesIO(r.content)).namelist()
     assert sorted(names) == ["b.txt", "c.txt"]
+    # One use only.
+    assert auth_client.get(f"/api/recovery/zip/{token}").status_code == 404
+
+
+def _zip(client, acc, *ids):
+    return client.post("/api/recovery/zip", json={"account_id": acc.id, "ids": list(ids)})
+
+
+def test_zip_of_many_long_ids_is_not_a_long_url(auth_client, env, app):
+    # Ids are long paths: hundreds of them must not end up in a URL.
+    acc, pair, _, _ = env
+    b = app.state.layout.backups_dir / acc.email
+    long = "folder-with-a-long-name-" * 4
+    ids = []
+    for i in range(300):
+        _put(b, f"{pair.id}/2026-10-05/{long}/f{i}.txt", str(i))
+        ids.append(f"{pair.id}/2026-10-05/{long}/f{i}.txt")
+    r = _zip(auth_client, acc, *ids)
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    assert len(f"/api/recovery/zip/{token}") < 100
+    r = auth_client.get(f"/api/recovery/zip/{token}")
+    assert len(zipfile.ZipFile(BytesIO(r.content)).namelist()) == 300
+
+
+def test_zip_names_the_items_cleaned_up_meanwhile(auth_client, env, app):
+    acc, pair, _, _ = env
+    entries = {e["name"]: e["id"] for e in _list(auth_client, acc)["entries"]}
+    gone = f"{pair.id}/2026-10-01/gone.txt"
+    r = _zip(auth_client, acc, entries["b.txt"], gone)
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["gone"] == [gone]
+    assert detail["message"] == "1 of the picked items was cleaned up meanwhile."
+
+
+def test_zip_refuses_too_many_with_a_plain_message(auth_client, env):
+    acc, _, _, _ = env
+    r = _zip(auth_client, acc, *[f"7/2026-10-01/{i}.txt" for i in range(1001)])
+    assert r.status_code == 422
+    assert r.json()["detail"] == "At most 1000 files can go in one download. Pick fewer."
+
+
+def test_zip_token_is_for_the_same_login_and_needs_csrf(auth_client, env, client):
+    acc, _, _, _ = env
+    entries = {e["name"]: e["id"] for e in _list(auth_client, acc)["entries"]}
+    csrf = auth_client.headers.pop("X-CSRF-Token")
+    assert _zip(auth_client, acc, entries["b.txt"]).status_code == 403
+    auth_client.headers["X-CSRF-Token"] = csrf
+    token = _zip(auth_client, acc, entries["b.txt"]).json()["token"]
+    assert auth_client.get("/api/recovery/zip/not-a-token").status_code == 404
+    auth_client.cookies.clear()
+    assert auth_client.get(f"/api/recovery/zip/{token}").status_code == 401
+
+
+def test_zip_token_expires(auth_client, env, monkeypatch):
+    import app.api.recovery as rec
+
+    acc, _, _, _ = env
+    entries = {e["name"]: e["id"] for e in _list(auth_client, acc)["entries"]}
+    now = [1000.0]
+    monkeypatch.setattr(rec, "_now", lambda: now[0])
+    token = _zip(auth_client, acc, entries["b.txt"]).json()["token"]
+    now[0] += rec.ZIP_TOKEN_SECONDS + 1
+    r = auth_client.get(f"/api/recovery/zip/{token}")
+    assert r.status_code == 404
+    assert "expired" in r.json()["detail"]
+
+
+def test_file_can_be_checked_before_download(auth_client, env):
+    acc, pair, _, _ = env
+    entries = {e["name"]: e["id"] for e in _list(auth_client, acc)["entries"]}
+    r = auth_client.head(
+        "/api/recovery/file", params={"account_id": acc.id, "id": entries["b.txt"]}
+    )
+    assert r.status_code == 200 and r.content == b""
+    r = auth_client.head(
+        "/api/recovery/file", params={"account_id": acc.id, "id": f"{pair.id}/2026-10-01/gone.txt"}
+    )
+    assert r.status_code == 404
 
 
 def test_name_helpers():
@@ -287,8 +368,10 @@ def test_links_and_odd_ids_are_refused(auth_client, env, app):
         r = auth_client.get("/api/recovery/file", params={"account_id": acc.id, "id": bad})
         assert r.status_code in (404, 422), bad
         assert _restore(auth_client, acc, bad)["results"][0]["restored_to"] is None, bad
-    r = auth_client.get("/api/recovery/zip", params=[("account_id", acc.id), ("ids", bad_ids[0])])
-    assert r.status_code in (404, 422)
+    for bad in bad_ids:
+        assert _zip(auth_client, acc, bad).status_code in (409, 422), bad
+    r = _zip(auth_client, acc, "../../etc/passwd")
+    assert r.status_code == 422
 
 
 def test_another_accounts_backups_are_not_reachable(auth_client, env, app, make_account):

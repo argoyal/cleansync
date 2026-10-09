@@ -34,14 +34,29 @@ describe("live updates", () => {
     const { spy, source } = setup();
     expect(source.url).toBe("/api/events");
     act(() => source.emit("files", { account_id: 1 }));
-    // A delete or a sync puts copies in Recovery.
-    expect(keys(spy)).toEqual(expect.arrayContaining(["browse", "recent", "starred", "search", "storage", "recovery"]));
-    spy.mockClear();
-    act(() => source.emit("job", { pair_id: 3, job_id: 9, state: "SUCCESS" }));
-    expect(keys(spy)).toContain("recovery");
+    expect(keys(spy)).toEqual(expect.arrayContaining(["browse", "recent", "starred", "search", "storage"]));
     spy.mockClear();
     act(() => source.emit("account", { account_id: 1, status: "NEEDS_REAUTH" }));
     expect(keys(spy)).toEqual(expect.arrayContaining(["accounts", "status"]));
+  });
+
+  it("refreshes Recovery after deletes and syncs, at most once every 5 seconds, never for a Drive listing", () => {
+    vi.useFakeTimers();
+    const { spy, source } = setup();
+    const recovery = () => keys(spy).filter((k) => k === "recovery").length;
+    act(() => source.emit("files", { account_id: 1 }));
+    expect(recovery()).toBe(1);
+    act(() => source.emit("job", { pair_id: 3, job_id: 9, state: "SUCCESS" }));
+    act(() => source.emit("files", { account_id: 1 }));
+    expect(recovery()).toBe(1); // held back
+    act(() => vi.advanceTimersByTime(5000));
+    expect(recovery()).toBe(2); // one catch-up refresh for both
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(recovery()).toBe(2);
+    spy.mockClear();
+    act(() => source.emit("catalog", { account_id: 1 }));
+    expect(keys(spy)).toContain("browse");
+    expect(keys(spy)).not.toContain("recovery");
   });
 
   it("refreshes offloads and files on an offload event, also one without a pair", () => {

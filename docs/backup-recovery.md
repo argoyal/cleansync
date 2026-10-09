@@ -16,15 +16,15 @@ Also keep `.drivesync-volume` (in the DriveSync folder, next to `app/` and `stor
 - Files deleted on Drive go to Drive's trash (kept 30 days by Google).
 
 ## Recovery page
-Everything in `app/data/backups/` shows on the Recovery page, one line per file:
+Every copy DriveSync set aside in `app/data/backups/` shows on the Recovery page, one line per file. DriveSync's own hidden files (`RCLONE_TEST`, `.google-exports`, half-finished upload copies), links, and anything DriveSync didn't put there itself are left out. Each line shows:
 - where it came from: replaced or deleted by a sync, deleted in DriveSync, saved before the first sync, saved before a safe resync, or the version not kept in a conflict;
 - where it goes back (the path it had);
 - its size and date;
-- when it will be cleaned up. That follows the sync folder's backup retention, or the default retention in Settings for items that were outside every sync folder. "Kept until you delete it" means no retention applies (it is set to keep forever, or its sync folder was removed); such files stay in `app/data/backups/` until you remove them there yourself.
+- when it will be cleaned up. That follows the sync folder's backup retention, or the default retention in Settings for items that were outside every sync folder. "No clean-up date (automatic clean-up is off)" means no retention applies (it is set to keep forever, or its sync folder was removed); such files stay in `app/data/backups/` until you remove them there yourself.
 
 Files DriveSync sent to Google Drive's trash in an offload are listed too, with the day Google will empty them from its trash. They are not restored here: use Restore to Drive on the Offloaded page.
 
-Restore copies the file back (the copy in Recovery stays) and queues a sync. It never overwrites: if the name is taken, the copy is called `name (restored).ext`, then `name (restored 2).ext`, and so on. You can pick several items and restore them at once, or download them as one zip. Restore is refused, for that item only, when:
+Restore copies the file back (the copy in Recovery stays) and queues a sync. It never overwrites: if the name is taken, the copy is called `name (restored).ext`, then `name (restored 2).ext`, and so on. You can pick several items and restore them at once, or download them as one zip (up to 1000 files at a time). Before a download starts, DriveSync checks the files are still there; if some were cleaned up in the meantime, the page says so and refreshes the list. Restore is refused, for that item only, when:
 - its sync folder was removed (download it instead);
 - the folder it goes back to is gone, for example because the disk is not mounted (download it instead);
 - the folder it goes back to is offloaded (restore that folder to Drive first);
@@ -39,7 +39,7 @@ Offload keeps files on this server and removes them from Google Drive into Drive
 - A sync folder's own top folder can't be offloaded as a whole; pick the files and folders inside it.
 - Offload works only in folders that sync both ways.
 
-Before anything leaves Drive, DriveSync lists the files on Drive (with their Drive IDs), checks that the copy here matches every one of them (size and checksum), and saves that list to `app/data/offloads/<id>.json`. It then removes only the files on that list. Afterwards it checks that every Drive ID is in the trash and is still the file it checked. If anything does not match, the offload is marked "Needs a look" and stays out of sync.
+Before anything leaves Drive, DriveSync lists the files on Drive (with their Drive IDs), checks that the copy here matches every one of them (size and checksum), and saves that list to `app/data/offloads/<id>.json`. It then removes only the files on that list, and after that the folders the offload left empty; those go to Drive's trash too. Afterwards it checks that every Drive ID is in the trash and is still the file it checked. If anything does not match, the offload is marked "Needs a look" and stays out of sync.
 
 Google empties its trash after 30 days. "Empty from trash now" deletes for good straight away, but only the Drive IDs of that one offload, only files that are still in the trash, and only after checking the copy here again. It can't be undone on Google Drive; the copy on this server stays.
 

@@ -18,7 +18,8 @@ export function useInvalidateFiles() {
   return () => FILE_QUERY_KEYS.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
 }
 
-function startDownload(href: string) {
+/** Starts a browser download of href without leaving the page. */
+export function startDownload(href: string) {
   const a = document.createElement("a");
   a.href = href;
   a.download = "";

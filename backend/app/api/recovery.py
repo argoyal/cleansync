@@ -2,10 +2,15 @@
 
 import asyncio
 import os
+import secrets
+import threading
+import time
 from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,6 +26,8 @@ from app.schemas.recovery import (
     RestoreIn,
     RestoreOut,
     RestoreResultOut,
+    ZipIn,
+    ZipOut,
 )
 from app.services.app_settings import get_setting
 from app.services.files.recovery import (
@@ -40,6 +47,52 @@ router = APIRouter(prefix="/api/recovery")
 MAX_ZIP = 1000
 CHUNK = 1024 * 1024
 GONE_MSG = "This file is no longer in Recovery (it was cleaned up or removed)."
+TOO_MANY_MSG = f"At most {MAX_ZIP} files can go in one download. Pick fewer."
+ZIP_GONE_MSG = "This download has expired or was already used. Download the files again."
+ZIP_TOKEN_SECONDS = 300
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+@dataclass
+class _ZipTicket:
+    session_id: str
+    files: list[tuple[Path, str]]
+    expires: float
+
+
+class ZipTickets:
+    """Short-lived, one-use download tickets, so a big pick never has to fit in a URL.
+    Kept in memory: a restart just makes the person click Download again."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._items: dict[str, _ZipTicket] = {}
+
+    def issue(self, session_id: str, files: list[tuple[Path, str]]) -> str:
+        token = secrets.token_urlsafe(24)
+        now = _now()
+        with self._lock:
+            self._items = {k: v for k, v in self._items.items() if v.expires > now}
+            self._items[token] = _ZipTicket(session_id, files, now + ZIP_TOKEN_SECONDS)
+        return token
+
+    def take(self, token: str, session_id: str) -> list[tuple[Path, str]] | None:
+        with self._lock:
+            ticket = self._items.get(token)
+            if ticket is None or ticket.session_id != session_id:
+                return None
+            del self._items[token]
+        return ticket.files if ticket.expires > _now() else None
+
+
+def _tickets(request: Request) -> ZipTickets:
+    tickets = getattr(request.app.state, "recovery_zip_tickets", None)
+    if tickets is None:
+        tickets = request.app.state.recovery_zip_tickets = ZipTickets()
+    return tickets
 
 
 def _default_days(db: Session) -> int | None:
@@ -136,7 +189,7 @@ def _resolve(request: Request, db: Session, scope: Scope, entry_id: str):
         raise HTTPException(e.status, str(e)) from e
 
 
-@router.get("/file")
+@router.api_route("/file", methods=["GET", "HEAD"])
 def download_file(
     account_id: int,
     id: str,
@@ -146,6 +199,8 @@ def download_file(
 ):
     scope = get_scope(request, db, account_id)
     entry, src = _resolve(request, db, scope, id)
+    if request.method == "HEAD":  # the page checks the file is still there before downloading
+        return Response(headers={"Cache-Control": "private, no-store"})
     # Opened here: if retention removes the file now, the open file still reads to the end;
     # if it was removed already, a plain 404.
     try:
@@ -172,21 +227,42 @@ def _read(fh) -> Iterator[bytes]:
             yield chunk
 
 
-@router.get("/zip")
-def download_zip(
-    account_id: int,
+@router.post("/zip", response_model=ZipOut)
+def prepare_zip(
+    body: ZipIn,
     request: Request,
-    ids: list[str] = Query(...),
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    if len(ids) > MAX_ZIP:
-        raise HTTPException(422, f"at most {MAX_ZIP} files in one download")
-    scope = get_scope(request, db, account_id)
-    files = []
-    for entry_id in dict.fromkeys(ids):
-        entry, src = _resolve(request, db, scope, entry_id)
+    """Checks every picked file is still there and hands back a one-use ticket for the zip."""
+    if len(body.ids) > MAX_ZIP:
+        raise HTTPException(422, TOO_MANY_MSG)
+    scope = get_scope(request, db, body.account_id)
+    days = _default_days(db)
+    files: list[tuple[Path, str]] = []
+    gone: list[str] = []
+    for entry_id in dict.fromkeys(body.ids):
+        try:
+            entry, src = resolve(request.app.state.layout, scope, entry_id, default_days=days)
+        except RecoveryError as e:
+            if e.status != 404:
+                raise HTTPException(e.status, str(e)) from e
+            gone.append(entry_id)
+            continue
         files.append((src, entry.name))
+    if gone:
+        n = len(gone)
+        message = f"{n} of the picked items {'was' if n == 1 else 'were'} cleaned up meanwhile."
+        raise HTTPException(409, {"message": message, "gone": gone})
+    return ZipOut(token=_tickets(request).issue(ctx.session.id, files))
+
+
+@router.get("/zip/{token}")
+def download_zip(token: str, request: Request, ctx: AuthContext = Depends(require_user)):
+    files = _tickets(request).take(token, ctx.session.id)
+    if files is None:
+        raise HTTPException(404, ZIP_GONE_MSG)
+    # A file removed since the check stops the download (zip_files raises), never a broken zip.
     return StreamingResponse(
         zip_files(files),
         media_type="application/zip",

@@ -1474,3 +1474,40 @@ async def test_real_start_syncing_merges_with_an_existing_drive_folder(tmp_path)
             assert (side / "plan.txt").read_text() == "new plan"
     finally:
         eng.dispose()
+
+
+async def test_real_restored_file_meets_a_newer_drive_file_of_the_same_name(tmp_path):
+    """What docs/limitations.md says about a Recovery restore racing a newer Drive file."""
+    env, t, p1, p2 = _setup(tmp_path)
+    backup = tmp_path / "backup"
+    t = c.BisyncTarget(
+        local=t.local,
+        remote=t.remote,
+        workdir=t.workdir,
+        filters_file=t.filters_file,
+        backup_dir=backup,
+    )
+    await _run(env, t, tmp_path, dry_run=False, resync=True)
+    old = 1_700_000_000
+    # 1) A name new on both sides: Drive got a new file, Recovery put an older copy here.
+    (p2 / "new.txt").write_text("newer on Drive")
+    (p1 / "new.txt").write_text("restored copy")
+    os.utime(p1 / "new.txt", (old, old))
+    # 2) A synced file deleted here and put back from Recovery before the next sync: the
+    # restore keeps the saved bytes and date, so it looks untouched. Meanwhile Drive changed it.
+    saved = (p1 / "keep.txt").stat()
+    (p1 / "keep.txt").unlink()
+    (p1 / "keep.txt").write_text("same")
+    os.utime(p1 / "keep.txt", ns=(saved.st_atime_ns, saved.st_mtime_ns))
+    (p2 / "keep.txt").write_text("newer on Drive, changed")
+    res, counters = await _run(env, t, tmp_path, dry_run=False)
+    assert res.exit_code == 0, (tmp_path / "log.txt").read_text()
+    names = sorted(p.name for p in p1.iterdir())
+    # 1) Both copies are kept under conflict names; nothing is lost; the plain name is gone.
+    assert "new.txt" not in names, names
+    assert (p1 / "new.conflict1.txt").read_text() == "restored copy"
+    assert (p1 / "new.conflict2.txt").read_text() == "newer on Drive"
+    assert counters.conflict_paths == ["new.txt"]
+    # 2) Drive's version wins the name; the copy that was here goes to the backup folder.
+    assert (p1 / "keep.txt").read_text() == "newer on Drive, changed"
+    assert [p.read_text() for p in backup.rglob("keep.txt")] == ["same"]

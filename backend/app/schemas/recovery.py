@@ -36,3 +36,13 @@ class RestoreResultOut(BaseModel):
 class RestoreOut(BaseModel):
     results: list[RestoreResultOut]
     syncs: dict[int, str]
+
+
+class ZipIn(BaseModel):
+    account_id: int
+    # The count limit is checked by the route, for a plain message.
+    ids: list[str] = Field(min_length=1)
+
+
+class ZipOut(BaseModel):
+    token: str

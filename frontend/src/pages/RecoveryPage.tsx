@@ -2,10 +2,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { api, friendlyError } from "../api/client";
+import { api, ApiError, friendlyError } from "../api/client";
 import { recoveryFileUrl, recoveryZipUrl, usePairs, useRecovery, useStatus } from "../api/queries";
 import type { RecoveryEntry, RecoveryKind, RestoreResult } from "../api/types";
-import { FILE_QUERY_KEYS } from "../components/FileActions";
+import { FILE_QUERY_KEYS, startDownload } from "../components/FileActions";
 import { Button, Empty, Notice, inputClass } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { formatBytes } from "../lib/format";
@@ -27,7 +27,7 @@ function day(iso: string): string {
 function cleanup(e: RecoveryEntry): string {
   if (e.kind === "offload") return e.expires_on ? `Google empties its trash around ${day(e.expires_on)}` : "";
   // expires_on is the first day the clean-up may remove it.
-  return e.expires_on ? `Cleaned up on or after ${day(e.expires_on)}` : "Kept until you delete it";
+  return e.expires_on ? `Cleaned up on or after ${day(e.expires_on)}` : "No clean-up date (automatic clean-up is off)";
 }
 
 /** Only these can be picked: offloads go back from the Offloaded page; orphans are downloaded from their row. */
@@ -60,6 +60,37 @@ export function RecoveryPage() {
       [...FILE_QUERY_KEYS, "recovery"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
     },
   });
+  const refresh = () => qc.invalidateQueries({ queryKey: ["recovery"] });
+  // Download problems: said in plain words on the page, never a raw error page.
+  const [problem, setProblem] = useState<string | null>(null);
+  const zip = useMutation({
+    // The ids go in the body: hundreds of long paths would not fit in an address.
+    mutationFn: (ids: string[]) =>
+      api<{ token: string }>("/api/recovery/zip", { method: "POST", body: { account_id: accountId, ids } }),
+    onMutate: () => setProblem(null),
+    onSuccess: (out) => startDownload(recoveryZipUrl(out.token)),
+    onError: (e) => {
+      setProblem(friendlyError(e));
+      if (e instanceof ApiError && e.status === 409) void refresh(); // the cleaned-up ones drop out
+    },
+  });
+  const downloadOne = async (e: RecoveryEntry) => {
+    if (accountId === null) return;
+    setProblem(null);
+    const href = recoveryFileUrl(accountId, e.id);
+    let res: Response;
+    try {
+      res = await fetch(href, { method: "HEAD", credentials: "same-origin" });
+    } catch {
+      setProblem("Can't reach DriveSync. Check your connection and try again.");
+      return;
+    }
+    if (res.ok) startDownload(href);
+    else if (res.status === 404) {
+      setProblem(`${e.name} is no longer in Recovery (it was cleaned up or removed).`);
+      void refresh();
+    } else setProblem(`Couldn't download ${e.name} (error ${res.status}).`);
+  };
   const set = (key: string, value: string) => {
     const next = new URLSearchParams(params);
     if (value) next.set(key, value);
@@ -115,12 +146,9 @@ export function RecoveryPage() {
             Restore selected ({restorable.length})
           </Button>
           {picked.length > 0 && (
-            <a
-              className="inline-flex h-9 items-center gap-2 rounded-ctl border border-line bg-surface px-3.5 text-body font-medium text-ink hover:bg-sunken"
-              href={recoveryZipUrl(accountId, picked)}
-            >
+            <Button icon="download" disabled={zip.isPending} onClick={() => zip.mutate(picked)}>
               Download selected ({picked.length})
-            </a>
+            </Button>
           )}
         </div>
       </div>
@@ -140,6 +168,11 @@ export function RecoveryPage() {
         </div>
       )}
       <div aria-live="polite">
+        {problem && (
+          <div className="mb-4">
+            <Notice tone="warn">{problem}</Notice>
+          </div>
+        )}
         {restore.isError && (
           <div className="mb-4">
             <Notice tone="err">{friendlyError(restore.error)}</Notice>
@@ -215,9 +248,9 @@ export function RecoveryPage() {
                           Restore
                         </button>
                       )}
-                      <a className="font-semibold text-accent" aria-label={`Download ${e.name}`} href={recoveryFileUrl(accountId, e.id)}>
+                      <button type="button" className="font-semibold text-accent" aria-label={`Download ${e.name}`} onClick={() => void downloadOne(e)}>
                         Download
-                      </a>
+                      </button>
                     </div>
                   )}
                 </td>

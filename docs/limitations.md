@@ -25,7 +25,7 @@
 - A pretend local account (used for testing) has no Drive IDs and no trash, so offload skips the trash check there and says so.
 - The automated tests use a local folder in place of Google Drive, which has no trash; Drive's trash is checked with the Drive API and in the manual end-to-end test with a real Google account.
 - A folder named `conflicts` at the top of a sync folder shares its backup folder name with the versions not kept in conflicts; the Recovery page then lists its backups as conflict versions.
-- A restored file keeps the date it had when it was saved. If Google Drive has a newer file with the same name that hasn't synced down yet, the next sync treats it as a conflict and keeps both.
+- A file restored from Recovery keeps the date it had when it was saved. If Google Drive has a file with the same name that hasn't synced here yet, nothing is lost, but the result depends on the case. If the name is new on both sides, the next sync keeps both copies as a conflict (`name.conflict1.ext` is the restored one, `name.conflict2.ext` is Drive's) and you choose in Conflicts. If it is a file that was already synced and Drive changed it, Drive's version keeps the name and the restored copy goes back into Recovery (when backups are on for that folder).
 - The Recovery page reads the whole backups folder each time it opens, so a very large backups folder makes it slow.
 
 ## After an upgrade that changes the sync rules

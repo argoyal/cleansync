@@ -182,8 +182,5 @@ export const useRecovery = (accountId: number | null, f: RecoveryFilters) =>
     },
   });
 export const recoveryFileUrl = (accountId: number, id: string) => `/api/recovery/file${query({ account_id: accountId, id })}`;
-export function recoveryZipUrl(accountId: number, ids: string[]): string {
-  const q = new URLSearchParams({ account_id: String(accountId) });
-  ids.forEach((id) => q.append("ids", id));
-  return `/api/recovery/zip?${q.toString()}`;
-}
+/** Where a ticket from POST /api/recovery/zip is downloaded (one use, a few minutes). */
+export const recoveryZipUrl = (token: string) => `/api/recovery/zip/${encodeURIComponent(token)}`;

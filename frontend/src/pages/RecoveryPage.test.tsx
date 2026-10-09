@@ -1,9 +1,9 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { RecoveryEntry } from "../api/types";
-import { ACCOUNT, mockApi, PAIR, renderApp } from "../test/utils";
+import { ACCOUNT, json, mockApi, PAIR, renderApp } from "../test/utils";
 import { RecoveryPage } from "./RecoveryPage";
 
 const entry = (over: Partial<RecoveryEntry> & { id: string; name: string }): RecoveryEntry => ({
@@ -38,7 +38,7 @@ describe("Recovery", () => {
     expect(within(table).getByText("Conflict: the version not kept")).toBeInTheDocument();
     expect(within(table).getByText("Offloaded, in Drive's trash")).toBeInTheDocument();
     expect(within(table).getByText("Docs/a.txt")).toBeInTheDocument();
-    expect(within(table).getByText("Kept until you delete it")).toBeInTheDocument();
+    expect(within(table).getByText("No clean-up date (automatic clean-up is off)")).toBeInTheDocument();
     expect(within(table).getByText(/sync folder was removed/)).toBeInTheDocument();
     expect(within(table).getByRole("link", { name: "Open Offloaded" })).toHaveAttribute("href", "/offloaded");
     expect(within(table).getByRole("checkbox", { name: "Select z.txt" })).toBeDisabled();
@@ -76,21 +76,65 @@ describe("Recovery", () => {
     expect(await screen.findByText(/a\.txt: not restored\. The folder it came from can't be used any more/)).toBeInTheDocument();
   });
 
-  it("downloads several as one zip", async () => {
-    setup();
+  it("downloads several as one zip without putting the ids in the address", async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const { calls } = setup({ "POST /api/recovery/zip": { token: "tok123" } });
     await userEvent.click(await screen.findByRole("checkbox", { name: "Select a.txt" }));
-    const link = screen.getByRole("link", { name: "Download selected (1)" });
-    expect(link.getAttribute("href")).toBe(`/api/recovery/zip?account_id=1&ids=${encodeURIComponent(ENTRIES[0].id)}`);
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select notes.txt" }));
+    await userEvent.click(screen.getByRole("button", { name: "Download selected (2)" }));
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect(calls.find((c) => c.path === "/api/recovery/zip")?.body).toEqual({ account_id: 1, ids: [ENTRIES[0].id, ENTRIES[1].id] });
+    expect((click.mock.contexts[0] as HTMLAnchorElement).getAttribute("href")).toBe("/api/recovery/zip/tok123");
+    click.mockRestore();
+  });
+
+  it("says when picked items were cleaned up meanwhile, and refreshes the list", async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const { calls } = setup({
+      "POST /api/recovery/zip": () => json(409, { detail: { message: "1 of the picked items was cleaned up meanwhile.", gone: [ENTRIES[0].id] } }),
+    });
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select a.txt" }));
+    const before = calls.filter((c) => c.path === "/api/recovery").length;
+    await userEvent.click(screen.getByRole("button", { name: "Download selected (1)" }));
+    expect(await screen.findByText(/1 of the picked items was cleaned up meanwhile\./)).toBeInTheDocument();
+    await waitFor(() => expect(calls.filter((c) => c.path === "/api/recovery").length).toBeGreaterThan(before));
+    expect(click).not.toHaveBeenCalled();
+    click.mockRestore();
+  });
+
+  it("shows the plain message when too many are picked for one download", async () => {
+    setup({ "POST /api/recovery/zip": () => json(422, { detail: "At most 1000 files can go in one download. Pick fewer." }) });
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select a.txt" }));
+    await userEvent.click(screen.getByRole("button", { name: "Download selected (1)" }));
+    expect(await screen.findByText("At most 1000 files can go in one download. Pick fewer.")).toBeInTheDocument();
+  });
+
+  it("checks a single file is still there before downloading it", async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const { calls } = setup({ "HEAD /api/recovery/file": {} });
+    await userEvent.click(await screen.findByRole("button", { name: "Download a.txt" }));
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect(calls.some((c) => c.method === "HEAD" && c.url.searchParams.get("id") === ENTRIES[0].id)).toBe(true);
+    expect((click.mock.contexts[0] as HTMLAnchorElement).getAttribute("href")).toBe(
+      `/api/recovery/file?account_id=1&id=${encodeURIComponent(ENTRIES[0].id)}`,
+    );
+    click.mockRestore();
+  });
+
+  it("says so in plain words when a single file was cleaned up meanwhile", async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    setup({ "HEAD /api/recovery/file": () => new Response(null, { status: 404 }) });
+    await userEvent.click(await screen.findByRole("button", { name: "Download a.txt" }));
+    expect(await screen.findByText("a.txt is no longer in Recovery (it was cleaned up or removed).")).toBeInTheDocument();
+    expect(click).not.toHaveBeenCalled();
+    click.mockRestore();
   });
 
   it("lets an item whose sync folder was removed be downloaded, not restored", async () => {
     setup();
     const table = await screen.findByRole("table");
     expect(within(table).queryByRole("button", { name: "Restore z.txt" })).toBeNull();
-    expect(within(table).getByRole("link", { name: "Download z.txt" })).toHaveAttribute(
-      "href",
-      `/api/recovery/file?account_id=1&id=${encodeURIComponent(ENTRIES[3].id)}`,
-    );
+    expect(within(table).getByRole("button", { name: "Download z.txt" })).toBeEnabled();
   });
 
   it("filters by the path it was opened with, and can show everything again", async () => {
@@ -126,7 +170,7 @@ describe("Recovery", () => {
     expect(screen.getByRole("button", { name: "Restore selected (1)" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Restore a.txt" })).toBeDisabled();
     // Downloading still works.
-    expect(screen.getByRole("link", { name: "Download selected (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download selected (1)" })).toBeEnabled();
   });
 
   it("says when there is nothing", async () => {
