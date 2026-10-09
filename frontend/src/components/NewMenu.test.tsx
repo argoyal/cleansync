@@ -14,7 +14,9 @@ afterEach(() => {
 });
 
 function setup(extra: Record<string, unknown> = {}) {
-  const api = mockApi({ "GET /api/accounts": [ACCOUNT], ...extra });
+  // By default the folder being viewed is inside a sync pair, so New works.
+  const synced = { account_id: 1, path: "Work", pair: { id: 7, name: "My Drive", status: "HEALTHY", initialized: true, local_subpath: "" }, items: [] };
+  const api = mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/browse": synced, ...extra });
   const view = renderApp(
     <>
       <NewMenu />
@@ -309,5 +311,21 @@ describe("+ New in a Drive-to-here folder", () => {
     const sub = screen.getByRole("menu", { name: "Google Docs" });
     expect(within(sub).getByRole("menuitem", { name: "Blank Google Doc" })).toBeDisabled();
     expect(within(sub).getByRole("menuitem", { name: "Word file (.docx)" })).toBeDisabled();
+  });
+
+  it("keeps everything on, with no note, in a synced folder", async () => {
+    setup({ "GET /api/browse": { account_id: 1, path: "Work", pair: { id: 7, name: "My Drive", status: "HEALTHY", initialized: true, local_subpath: "" }, items: [] } });
+    const menu = await openMenu();
+    await waitFor(() => expect(within(menu).getByRole("menuitem", { name: "New folder" })).toBeEnabled());
+    expect(within(menu).queryByText(/isn't synced/)).toBeNull();
+    expect(within(menu).getByRole("menuitem", { name: "Upload files" })).toBeEnabled();
+  });
+
+  it("keeps add items off while the folder is still loading", async () => {
+    setup({ "GET /api/browse": () => new Promise(() => undefined) });
+    const menu = await openMenu();
+    for (const name of ["New folder", "Upload files", "Upload folder"]) {
+      expect(within(menu).getByRole("menuitem", { name })).toBeDisabled();
+    }
   });
 });

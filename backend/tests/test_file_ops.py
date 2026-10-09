@@ -319,19 +319,6 @@ def test_move_between_pairs_is_refused(auth_client, env, make_pair, stub_queue):
     assert (root / "Drive/a.txt").exists() and stub_queue.requests == []
 
 
-def test_move_out_of_a_pair_is_local_and_syncs_the_pair(
-    auth_client, env, fake_rclone, save_catalog, stub_queue
-):
-    acc, root, pair = env
-    _put(root, "Drive/a.txt")
-    (root / "Loose").mkdir()
-    save_catalog(pair.id, [_entry("a.txt")])
-    r = _post(auth_client, "move", account_id=acc.id, paths=["Drive/a.txt"], to="Loose")
-    assert r.status_code == 200, r.text
-    assert r.json() == {"paths": ["Loose/a.txt"], "syncs": {str(pair.id): "queued"}, "drive": []}
-    assert _moves(fake_rclone) == []
-
-
 def test_delete_moves_items_into_recovery(auth_client, app, env):
     acc, root, pair = env
     _put(root, "Drive/Work/report.pdf", b"PDF")
@@ -930,7 +917,7 @@ def test_done_actions_update_the_cached_listing(
     auth_client, app, env, fake_rclone, save_catalog, refreshes
 ):
     acc, root, pair = env
-    for rel in ("Drive/Old/x.txt", "Drive/gone.txt", "Drive/out.txt"):
+    for rel in ("Drive/Old/x.txt", "Drive/gone.txt"):
         _put(root, rel)
     save_catalog(
         pair.id,
@@ -939,7 +926,6 @@ def test_done_actions_update_the_cached_listing(
             _entry("Old/x.txt", id="X1"),
             CatalogEntry(path="Old/Plan.docx", is_dir=False, size=0, mtime=None, native="document"),
             _entry("gone.txt"),
-            _entry("out.txt"),
         ],
     )
     _stat_missing(fake_rclone)
@@ -947,9 +933,6 @@ def test_done_actions_update_the_cached_listing(
         _post(auth_client, "delete", account_id=acc.id, paths=["Drive/gone.txt"]).status_code == 200
     )
     r = _post(auth_client, "rename", account_id=acc.id, path="Drive/Old", new_name="New")
-    assert r.status_code == 200, r.text
-    (root / "Loose").mkdir()
-    r = _post(auth_client, "move", account_id=acc.id, paths=["Drive/out.txt"], to="Loose")
     assert r.status_code == 200, r.text
     assert _catalog_paths(app, pair) == ["New", "New/Plan.docx", "New/x.txt"]
     assert app.state.catalog.store.load(pair.id).files["New/x.txt"].id == "X1"
@@ -1038,3 +1021,38 @@ def test_nothing_new_outside_synced_folders(auth_client, env, stub_queue, call):
     assert r.json()["detail"] == NOT_SYNCED
     assert sorted(p.name for p in root.rglob("*")) == before  # not even a folder was made
     assert stub_queue.requests == []
+
+
+def test_move_into_an_unsynced_folder_is_refused(auth_client, env, fake_rclone, stub_queue):
+    acc, root, _ = env
+    _put(root, "Drive/a.txt")
+    (root / "Loose").mkdir()
+    r = _post(auth_client, "move", account_id=acc.id, paths=["Drive/a.txt"], to="Loose")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == NOT_SYNCED
+    assert (root / "Drive/a.txt").exists() and not (root / "Loose/a.txt").exists()
+    assert fake_rclone.calls() == [] and stub_queue.requests == []
+
+
+def test_adding_still_works_in_a_whole_account_pair_and_deep_folders(
+    auth_client, app, make_account, make_pair, stub_queue
+):
+    whole = make_account(email="whole@example.com")
+    root = app.state.layout.account_dir(whole.email)
+    make_pair(whole, name="All", local_subpath="", remote_path="", initialized=True)
+    deep = make_account(email="deep@example.com")
+    droot = app.state.layout.account_dir(deep.email)
+    make_pair(deep, name="D", local_subpath="A", remote_path="", initialized=True)
+    (droot / "A/B/C").mkdir(parents=True)
+    for acc, folder in ((whole, ""), (deep, "A/B/C")):
+        r = _post(auth_client, "mkdir", account_id=acc.id, path=folder, name="Made")
+        assert r.status_code == 200, r.text
+        r = _post(auth_client, "new", account_id=acc.id, path=folder, kind="docx")
+        assert r.status_code == 200, r.text
+        r = auth_client.post(
+            "/api/files/upload",
+            params={"account_id": acc.id, "path": folder, "name": "u.txt"},
+            content=b"x",
+        )
+        assert r.status_code == 200, r.text
+    assert (root / "Made").is_dir() and (droot / "A/B/C/u.txt").exists()

@@ -35,7 +35,8 @@ export function NewMenu() {
   const oneWay = browse?.pair?.direction === "REMOTE_TO_LOCAL";
   // Outside every sync pair nothing new would ever reach Drive (spec §8).
   const notSynced = browse !== undefined && !browse.pair;
-  const off = oneWay || notSynced;
+  const loading = browse === undefined; // nothing is known about the folder yet
+  const off = oneWay || notSynced || loading;
 
   const create = useMutation({
     mutationFn: ({ kind }: { kind: Kind; tab: Window | null }) =>
@@ -85,7 +86,7 @@ export function NewMenu() {
       label: "Google Docs",
       icon: "article",
       submenu: [
-        { label: "Blank Google Doc", onSelect: () => newFile("document"), disabled: notSynced },
+        { label: "Blank Google Doc", onSelect: () => newFile("document"), disabled: notSynced || loading },
         { label: "Word file (.docx)", onSelect: () => newFile("docx"), disabled: off },
       ],
     },
@@ -93,7 +94,7 @@ export function NewMenu() {
       label: "Google Sheets",
       icon: "table_chart",
       submenu: [
-        { label: "Blank Google Sheet", onSelect: () => newFile("spreadsheet"), disabled: notSynced },
+        { label: "Blank Google Sheet", onSelect: () => newFile("spreadsheet"), disabled: notSynced || loading },
         { label: "Excel file (.xlsx)", onSelect: () => newFile("xlsx"), disabled: off },
       ],
     },
@@ -101,7 +102,7 @@ export function NewMenu() {
       label: "Google Slides",
       icon: "slideshow",
       submenu: [
-        { label: "Blank Google Slides", onSelect: () => newFile("presentation"), disabled: notSynced },
+        { label: "Blank Google Slides", onSelect: () => newFile("presentation"), disabled: notSynced || loading },
         { label: "PowerPoint file (.pptx)", onSelect: () => newFile("pptx"), disabled: off },
       ],
     },

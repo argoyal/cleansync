@@ -108,6 +108,20 @@ describe("My Drive", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/api/files/move")?.body).toEqual({ account_id: 1, paths: ["photo.jpg"], to: "Work" }));
   });
 
+  it("won't move into a folder that isn't synced, and says why", async () => {
+    setup("/drive", {
+      "GET /api/local-browse": [{ name: "Loose", path: "Loose" }],
+      "GET /api/browse": ({ url }: { url: URL }) =>
+        url.searchParams.get("path") === "Loose" ? { account_id: 1, path: "Loose", pair: null, items: [] } : browse(""),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "More actions for photo.jpg" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Move" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Loose" }));
+    expect(await within(dialog).findByText("This folder isn't synced with Google Drive. Open a synced folder to move items.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Move here" })).toBeDisabled();
+  });
+
   it("downloads folders as zip", async () => {
     setup();
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);

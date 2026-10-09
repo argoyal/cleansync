@@ -193,6 +193,8 @@ def plan_rename(scope: Scope, rel: str, new_name: str) -> MoveStep:
 def plan_move(scope: Scope, rels: list[str], to: str) -> list[MoveStep]:
     refuse_one_way(scope, [*rels, to])
     _folder(scope, to)
+    # Out of a pair into plain disk would take the file off Google Drive and leave it only here.
+    require_synced(scope, to)
     plan: list[MoveStep] = []
     names: set[str] = set()
     for rel in prune_selection(rels):

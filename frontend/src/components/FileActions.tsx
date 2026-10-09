@@ -3,9 +3,9 @@ import { type FormEvent, type ReactNode, useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError, api, friendlyError } from "../api/client";
-import { fileUrl, usePairs, zipUrl } from "../api/queries";
+import { fileUrl, useBrowse, usePairs, zipUrl } from "../api/queries";
 import type { FileItem, OpOut } from "../api/types";
-import { isOffice, isWaitingToSync, ONE_WAY_NOTE, opensInBrowser, parentOf } from "../lib/files";
+import { isOffice, isWaitingToSync, NOT_SYNCED_MOVE_NOTE, ONE_WAY_NOTE, opensInBrowser, parentOf } from "../lib/files";
 import { FolderPicker } from "./FolderPicker";
 import { useToast } from "./Toasts";
 import { Button, Dialog, Field, inputClass, type MenuItem, Notice } from "./ui";
@@ -213,6 +213,9 @@ function RenameDialog({ accountId, item, onClose }: { accountId: number; item: F
 
 function MoveDialog({ accountId, items, onClose }: { accountId: number; items: FileItem[]; onClose: () => void }) {
   const [to, setTo] = useState(parentOf(items[0].path));
+  // Moving out of a synced folder into one that isn't would take the file off Google Drive.
+  const target = useBrowse(accountId, to).data;
+  const unsynced = target !== undefined && !target.pair;
   const op = useFileOp(
     "move",
     (out) => {
@@ -234,7 +237,7 @@ function MoveDialog({ accountId, items, onClose }: { accountId: number; items: F
           <Button
             tone="primary"
             data-autofocus
-            disabled={op.isPending || to === parentOf(items[0].path)}
+            disabled={op.isPending || unsynced || to === parentOf(items[0].path)}
             onClick={() => op.mutate({ account_id: accountId, paths: items.map((i) => i.path), to })}
           >
             Move here
@@ -243,6 +246,7 @@ function MoveDialog({ accountId, items, onClose }: { accountId: number; items: F
       }
     >
       <FolderPicker source="local" accountId={accountId} value={to} onChange={setTo} rootLabel="My Drive" />
+      {unsynced && <Notice tone="warn">{NOT_SYNCED_MOVE_NOTE}</Notice>}
       {op.isError && <OpError error={op.error} pairId={items[0].pair_id} />}
     </Dialog>
   );
