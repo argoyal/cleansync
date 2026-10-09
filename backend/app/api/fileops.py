@@ -40,6 +40,7 @@ from app.services.files.names import validate_name
 from app.services.files.scope import Scope, join_rel, pair_for, to_pair_rel
 from app.services.files.status import load_overlay
 from app.services.files.upload import new_temp, plan_target, publish, save_stream
+from app.services.queue import stop_message
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files")
@@ -48,8 +49,9 @@ OFFICE_KINDS = ("docx", "xlsx", "pptx")
 
 def refuse_when_disabled(request: Request) -> None:
     # With syncing switched off nothing would carry the change to Drive: refuse up front.
-    if getattr(request.app.state.queue, "disabled_reason", None) is not None:
-        raise HTTPException(503, moves.DISABLED_MSG)
+    queue = request.app.state.queue
+    if getattr(queue, "disabled_reason", None) is not None:
+        raise HTTPException(503, stop_message(queue))
 
 
 def os_error(e: OSError) -> HTTPException:

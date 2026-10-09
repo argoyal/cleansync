@@ -41,12 +41,13 @@ from app.services.files.moves import DriveMover
 from app.services.files.status import StatusIndexes
 from app.services.files.thumbs import Thumbnails
 from app.services.files.upload import clear_uploads, sweep_upload_leftovers
-from app.services.queue import SyncQueue, make_handler
+from app.services.queue import DB_BROKEN_MSG, SyncQueue, make_handler
 from app.services.rclone.setup import build_rclone_env, ensure_config_encrypted
 from app.services.scheduler import Scheduler
 from app.services.sync.engine import SyncEngine
 from app.services.sync.initial import InitialSync
 from app.services.sync.recovery import recover_interrupted
+from app.services.volume import open_volume
 from app.services.watcher import LocalWatcher, self_test
 from app.web.security import SecurityHeaders
 from app.web.spa import mount_spa
@@ -88,6 +89,9 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 "database integrity check failed; syncing is disabled. "
                 "Restore a copy from app/data/db-backups (see docs/backup-recovery.md)."
             )
+        elif app.state.queue.disabled_reason is not None:
+            # No recovery runs, no schedule, no watcher, no walking a disk that isn't there.
+            logger.error("%s", app.state.queue.disabled_reason)
         elif start_background:
             # Walking all of storage/ can take a while on a slow disk: don't hold up startup.
             sweep = asyncio.ensure_future(asyncio.to_thread(sweep_upload_leftovers, layout.storage))
@@ -138,8 +142,11 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     app.state.db_ok = integrity_ok(engine)
     with session_factory() as db:
         ensure_admin(db, settings, layout)
+        # Only trust the database's ID when the database itself is sound.
+        volume = open_volume(db, layout) if app.state.db_ok else None
         max_parallel = int(get_setting(db, "max_parallel_pairs"))  # type: ignore[arg-type]
         debounce = int(get_setting(db, "watcher_debounce_s"))  # type: ignore[arg-type]
+    app.state.volume = volume
     app.state.login_limiter = LoginLimiter()
     app.state.bus = EventBus()
     app.state.rclone_env = build_rclone_env(settings, layout)
@@ -199,9 +206,14 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             on_change=_on_change,
         ),
         max_parallel=max_parallel,
+        guard=volume.check if volume is not None else None,
+        # Nothing is written to the database here: it lives on the disk that just went away.
+        on_stop=lambda reason: app.state.bus.publish("pair", {"sync_stopped": reason}),
     )
     if not app.state.db_ok:
-        app.state.queue.disabled_reason = "database integrity check failed"
+        app.state.queue.disabled_reason = DB_BROKEN_MSG
+    elif volume is not None:
+        app.state.queue.disabled_reason = volume.check()
     app.state.scheduler = Scheduler(
         session_factory=session_factory,
         queue=app.state.queue,

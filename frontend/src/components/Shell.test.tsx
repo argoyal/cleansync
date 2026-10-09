@@ -219,3 +219,20 @@ describe("mobile drawer", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
+
+describe("stopped syncing", () => {
+  const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart DriveSync.";
+
+  it("says so on every page", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": { ...STATUS, sync_stopped: MSG } });
+    renderApp(<AppShell />, { withAccount: true, route: "/recent" });
+    expect(await screen.findByRole("alert")).toHaveTextContent(MSG);
+  });
+
+  it("shows nothing while syncing runs", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": { ...STATUS, sync_stopped: null } });
+    renderApp(<AppShell />, { withAccount: true, route: "/recent" });
+    await screen.findByText("3 open conflicts");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});

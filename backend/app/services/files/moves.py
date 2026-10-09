@@ -22,6 +22,7 @@ from app.services.files import ops
 from app.services.files.ops import FileOpError, MoveStep, PartialError, UndoFailed
 from app.services.files.scope import Scope, join_rel, pair_for, to_pair_rel
 from app.services.files.status import has_pending_changes
+from app.services.queue import stop_message
 from app.services.rclone.commands import RcloneEnv, lsjson_args, moveto_args, remote_target
 from app.services.rclone.errors import Failure, classify_failure
 from app.services.rclone.runner import RunResult, run_rclone
@@ -29,7 +30,6 @@ from app.services.rclone.runner import RunResult, run_rclone
 log = logging.getLogger(__name__)
 
 BUSY_MSG = "this sync pair is busy; try again when the current job finishes"
-DISABLED_MSG = "database integrity check failed; restore a backup (see docs/backup-recovery.md)"
 AUTH_REASON = "Google says the login expired or was revoked"
 DRIVE_TIMEOUT_S = 120.0
 PENDING_MSG = "This has changes waiting to sync. Sync now, then try again."
@@ -164,7 +164,7 @@ def touched_pairs(scope: Scope, rels: Iterable[str]) -> list[int]:
 def check_pairs(queue, pair_ids: Iterable[int]) -> None:
     """Refuse when syncing is off or a pair is busy; before anything changes."""
     if getattr(queue, "disabled_reason", None) is not None:
-        raise FileOpError(DISABLED_MSG, 503)
+        raise FileOpError(stop_message(queue), 503)
     for pid in pair_ids:
         if queue.is_busy(pid):
             raise FileOpError(BUSY_MSG)

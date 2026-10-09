@@ -7,6 +7,7 @@ from app.auth.deps import AuthContext, get_db, require_user
 from app.models import Account, SyncPair
 from app.models.enums import AttentionReason, Direction, PairStatus
 from app.schemas.pairs import PairCreate, PairOut, PairUpdate
+from app.services.queue import stop_message
 from app.services.sync.pairs import PairError, create_pair, delete_pair, to_out, update_pair
 
 router = APIRouter(prefix="/api/sync-pairs")
@@ -149,9 +150,7 @@ def _queue(request: Request, pair_id: int, trigger: str, action: str = "sync") -
     if result == "busy":
         raise HTTPException(409, "this pair is busy; try again when the current job finishes")
     if result == "disabled":
-        raise HTTPException(
-            503, "database integrity check failed; restore a backup (see docs/backup-recovery.md)"
-        )
+        raise HTTPException(503, stop_message(request.app.state.queue))
     return {"result": result}
 
 

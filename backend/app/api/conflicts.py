@@ -11,6 +11,7 @@ from app.core.clock import utcnow
 from app.models import Conflict
 from app.models.enums import ConflictState
 from app.schemas.jobs import ConflictOut, ResolvedOut
+from app.services.queue import stop_message
 from app.services.sync.conflicts import ConflictError, resolve_conflict
 
 router = APIRouter()
@@ -50,9 +51,7 @@ async def resolve(
     queue = request.app.state.queue
     # Refuse before moving any files: with syncing disabled nothing would pick the result up.
     if getattr(queue, "disabled_reason", None) is not None:
-        raise HTTPException(
-            503, "database integrity check failed; restore a backup (see docs/backup-recovery.md)"
-        )
+        raise HTTPException(503, stop_message(queue))
     if queue.is_running(pair.id):
         raise HTTPException(409, "this pair is busy; try again when the current job finishes")
     # Note: each resolution removes two conflict copies on Drive, so resolving many conflicts

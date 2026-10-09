@@ -85,6 +85,11 @@ class Layout:
     def storage(self) -> Path:
         return self.root / "storage"
 
+    @property
+    def volume_file(self) -> Path:
+        # Spec §6.9: marks the right disk; checked at startup and before every job.
+        return self.root / ".drivesync-volume"
+
     def ensure(self) -> None:
         for d in (
             self.db_backups,

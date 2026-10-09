@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 
+import { useStatus } from "../api/queries";
 import { useLiveEvents } from "../hooks/live";
 import { SideNav } from "./SideNav";
 import { TopBar } from "./TopBar";
+import { Notice } from "./ui";
 
 export function AppShell({ newButton }: { newButton?: React.ReactNode }) {
   useLiveEvents();
   const [navOpen, setNavOpen] = useState(false);
+  const stopped = useStatus().data?.sync_stopped;
   const location = useLocation();
   const drawer = useRef<HTMLElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -29,6 +32,11 @@ export function AppShell({ newButton }: { newButton?: React.ReactNode }) {
   return (
     <div className="flex h-full flex-col">
       <TopBar onMenu={() => setNavOpen(true)} />
+      {stopped && (
+        <div className="px-3 pb-2">
+          <Notice tone="err">{stopped}</Notice>
+        </div>
+      )}
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-[256px] shrink-0 pl-3 pt-1 lg:block">
           {/* While the drawer is open it holds the one + New button, so there is never a second one. */}

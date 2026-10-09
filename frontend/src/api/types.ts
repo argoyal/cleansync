@@ -48,6 +48,7 @@ export type Status = {
   running: number;
   paused: number;
   conflicts: number;
+  sync_stopped: string | null;
 };
 
 /** Per-item status in the file browser ("offloaded" arrives in a later version). */
