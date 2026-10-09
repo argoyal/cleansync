@@ -25,7 +25,7 @@ function PairCard({ pair }: { pair: Pair }) {
         <dt className="text-ink-2">Last sync</dt>
         <dd>{formatRelative(pair.last_sync_at)}</dd>
         <dt className="text-ink-2">Next sync</dt>
-        <dd>{pair.paused ? "Paused" : pair.next_sync_at ? formatRelative(pair.next_sync_at) : formatInterval(pair.schedule_interval_s)}</dd>
+        <dd>{pair.paused ? "Sync off" : pair.next_sync_at ? formatRelative(pair.next_sync_at) : formatInterval(pair.schedule_interval_s)}</dd>
         <dt className="text-ink-2">On Drive</dt>
         <dd className="tabular">{catalog.data ? `${catalog.data.files.toLocaleString()} files` : ""}</dd>
       </dl>

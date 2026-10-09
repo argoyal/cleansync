@@ -46,7 +46,7 @@ const PAIR: Record<PairStatus, { label: string; dot: string; text: string }> = {
   RUNNING: { label: "Syncing", dot: "bg-run", text: "text-run" },
   ATTENTION: { label: "Needs attention", dot: "bg-warn", text: "text-warn" },
   ERROR: { label: "Error", dot: "bg-err", text: "text-err" },
-  PAUSED: { label: "Paused", dot: "bg-paused", text: "text-paused" },
+  PAUSED: { label: "Sync off", dot: "bg-paused", text: "text-paused" },
 };
 
 export function pairStatusLabel(status: PairStatus): string {

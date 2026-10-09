@@ -20,7 +20,35 @@ export function usePairAction(pairId: number) {
   });
 }
 
-/** Sync now / Pause / Resume, plus the one action the pair's current problem calls for. */
+/** Spec §6.9: one switch per pair. Off is the existing pause; on is resume. */
+export function SyncSwitch({ pair }: { pair: Pair }) {
+  const act = usePairAction(pair.id);
+  const on = !pair.paused;
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={`Sync, ${pair.name}`}
+      disabled={act.isPending}
+      className="inline-flex h-9 items-center gap-2 rounded-ctl px-3 text-body font-medium hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-50"
+      onClick={() =>
+        act.mutate(
+          on
+            ? { action: "pause", done: "Sync is off. Nothing syncs until you turn it back on." }
+            : { action: "resume", done: "Sync is on." },
+        )
+      }
+    >
+      <span aria-hidden="true" className={`relative h-5 w-9 rounded-full transition-colors ${on ? "bg-accent" : "bg-line"}`}>
+        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-surface shadow-float transition-[left] ${on ? "left-[18px]" : "left-0.5"}`} />
+      </span>
+      {on ? "Sync on" : "Sync off"}
+    </button>
+  );
+}
+
+/** Sync now / the Sync on-off switch, plus the one action the pair's current problem calls for. */
 export function PairActions({ pair, details = true }: { pair: Pair; details?: boolean }) {
   const act = usePairAction(pair.id);
   const busy = act.isPending || pair.status === "RUNNING";
@@ -35,15 +63,7 @@ export function PairActions({ pair, details = true }: { pair: Pair; details?: bo
           Sync now
         </Button>
       )}
-      {pair.paused ? (
-        <Button icon="play_arrow" aria-label={`Resume, ${pair.name}`} disabled={act.isPending} onClick={() => act.mutate({ action: "resume", done: "Resumed." })}>
-          Resume
-        </Button>
-      ) : (
-        <Button icon="pause" aria-label={`Pause, ${pair.name}`} disabled={act.isPending} onClick={() => act.mutate({ action: "pause", done: "Paused. Nothing syncs until you resume." })}>
-          Pause
-        </Button>
-      )}
+      <SyncSwitch pair={pair} />
       {pair.attention_reason === "BLOCKED" && (
         <Link to={`/activity/${pair.id}/blocked`} aria-label={`Review blocked sync, ${pair.name}`} className="inline-flex h-9 items-center rounded-ctl bg-warn px-3.5 font-medium text-white">
           Review blocked sync

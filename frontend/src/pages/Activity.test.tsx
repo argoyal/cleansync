@@ -26,7 +26,10 @@ describe("sync activity", () => {
     expect(await within(card).findByText("1,234 files")).toBeInTheDocument();
     await userEvent.click(within(card).getByRole("button", { name: "Sync now, My Drive" }));
     const photos = screen.getByRole("heading", { name: "Photos" }).closest("article") as HTMLElement;
-    await userEvent.click(within(photos).getByRole("button", { name: "Resume, Photos" }));
+    const photosSwitch = within(photos).getByRole("switch", { name: "Sync, Photos" });
+    expect(photosSwitch).toHaveAttribute("aria-checked", "false");
+    expect(photosSwitch).toHaveTextContent("Sync off");
+    await userEvent.click(photosSwitch);
     await waitFor(() => expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/api/sync-pairs/7/sync", "/api/sync-pairs/8/resume"]));
     expect(screen.getByText("My Drive sync completed: 2 uploaded")).toBeInTheDocument();
   });
@@ -45,6 +48,36 @@ describe("sync activity", () => {
     expect(await screen.findByRole("link", { name: "Review blocked sync, My Drive" })).toHaveAttribute("href", "/activity/7/blocked");
     expect(screen.getAllByRole("button", { name: "Run safe resync, Old" })).toHaveLength(1);
     expect(screen.getByText("This sync would delete 40 files. Your limit is 10.")).toBeInTheDocument();
+  });
+
+  it("turns syncing off with the switch", async () => {
+    const { calls } = mockApi({
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/activity": [],
+      "POST /api/sync-pairs/7/pause": { ...PAIR, paused: true, status: "PAUSED" },
+    });
+    renderApp(<ActivityPage />);
+    const card = (await screen.findByRole("heading", { name: "My Drive" })).closest("article") as HTMLElement;
+    const sw = within(card).getByRole("switch", { name: "Sync, My Drive" });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(sw).toHaveTextContent("Sync on");
+    expect(within(card).queryByRole("button", { name: /^(Pause|Resume),/ })).not.toBeInTheDocument();
+    await userEvent.click(sw);
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/api/sync-pairs/7/pause"]));
+    expect(await screen.findByText("Sync is off. Nothing syncs until you turn it back on.")).toBeInTheDocument();
+  });
+
+  it("calls a pair with syncing off 'Sync off', not 'Paused'", async () => {
+    mockApi({
+      "GET /api/sync-pairs": [{ ...PAIR, paused: true, status: "PAUSED" }],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/activity": [],
+    });
+    renderApp(<ActivityPage />);
+    const card = (await screen.findByRole("heading", { name: "My Drive" })).closest("article") as HTMLElement;
+    expect(within(card).getAllByText("Sync off").length).toBe(3); // status pill, next sync, switch
+    expect(within(card).queryByText("Paused")).not.toBeInTheDocument();
   });
 });
 

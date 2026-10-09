@@ -21,7 +21,7 @@ function summary(pairs: Pair[], transferring: number) {
   if (attention.length) {
     return { text: `${attention.length} need${attention.length === 1 ? "s" : ""} you`, tone: "text-warn bg-warn-soft", icon: "warning" as const };
   }
-  if (pairs.length && pairs.every((p) => p.paused)) return { text: "Paused", tone: "text-paused bg-sunken", icon: "pause" as const };
+  if (pairs.length && pairs.every((p) => p.paused)) return { text: "Sync off", tone: "text-paused bg-sunken", icon: "pause" as const };
   return { text: pairs.length ? "Up to date" : "Nothing synced yet", tone: "text-ok bg-sunken", icon: "cloud_done" as const };
 }
 
