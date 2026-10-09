@@ -82,11 +82,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Start container
+        # Pretend local accounts on (test only): the e2e test offloads a folder of one.
         run: |
           docker run -d --name ds -p 8080:8080 --read-only --tmpfs /tmp \
             --tmpfs /drivesync:uid=1000,gid=1000 --cap-drop ALL \
             --security-opt no-new-privileges:true \
-            -e PUBLIC_URL=http://localhost:8080 -e ADMIN_PASSWORD=ci-smoke-password drivesync:ci
+            -e PUBLIC_URL=http://localhost:8080 -e ADMIN_PASSWORD=ci-smoke-password \
+            -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 drivesync:ci
           for i in $(seq 1 30); do curl -fsS http://localhost:8080/api/health && break; sleep 1; done
       - name: Health, login and security headers
         run: |

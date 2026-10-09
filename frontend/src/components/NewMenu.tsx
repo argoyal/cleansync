@@ -3,8 +3,8 @@ import { type FormEvent, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api, friendlyError } from "../api/client";
-import { useBrowse } from "../api/queries";
-import { NOT_SYNCED_NOTE } from "../lib/files";
+import { useBrowse, useOffloads } from "../api/queries";
+import { IN_OFFLOADED_NOTE, NOT_SYNCED_NOTE } from "../lib/files";
 import { uploads } from "../hooks/uploads";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { useInvalidateFiles } from "./FileActions";
@@ -37,7 +37,11 @@ export function NewMenu() {
   // Outside every sync pair nothing new would ever reach Drive (spec §8).
   const notSynced = browse !== undefined && !browse.pair;
   const loading = browse === undefined; // nothing is known about the folder yet
-  const off = oneWay || notSynced || loading;
+  // Inside an offloaded folder nothing new would reach Drive: the server refuses it too.
+  const offloads = useOffloads(accountId).data ?? [];
+  const inOffloaded = offloads.some((o) => o.is_dir && (folder === o.path || folder.startsWith(`${o.path}/`)));
+  const off = oneWay || notSynced || loading || inOffloaded;
+  const googleOff = notSynced || loading || inOffloaded;
 
   const create = useMutation({
     mutationFn: ({ kind }: { kind: Kind; tab: Window | null }) =>
@@ -85,6 +89,7 @@ export function NewMenu() {
     },
     { separator: true },
     ...(notSynced ? [{ note: NOT_SYNCED_NOTE }, { separator: true } as const] : []),
+    ...(inOffloaded && !notSynced ? [{ note: IN_OFFLOADED_NOTE }, { separator: true } as const] : []),
     { label: "New folder", icon: "create_new_folder", onSelect: () => setNewFolder(true), disabled: off },
     { separator: true },
     { label: "Upload files", icon: "upload_file", onSelect: () => files.current?.click(), disabled: off },
@@ -94,7 +99,7 @@ export function NewMenu() {
       label: "Google Docs",
       icon: "article",
       submenu: [
-        { label: "Blank Google Doc", onSelect: () => newFile("document"), disabled: notSynced || loading },
+        { label: "Blank Google Doc", onSelect: () => newFile("document"), disabled: googleOff },
         { label: "Word file (.docx)", onSelect: () => newFile("docx"), disabled: off },
       ],
     },
@@ -102,7 +107,7 @@ export function NewMenu() {
       label: "Google Sheets",
       icon: "table_chart",
       submenu: [
-        { label: "Blank Google Sheet", onSelect: () => newFile("spreadsheet"), disabled: notSynced || loading },
+        { label: "Blank Google Sheet", onSelect: () => newFile("spreadsheet"), disabled: googleOff },
         { label: "Excel file (.xlsx)", onSelect: () => newFile("xlsx"), disabled: off },
       ],
     },
@@ -110,7 +115,7 @@ export function NewMenu() {
       label: "Google Slides",
       icon: "slideshow",
       submenu: [
-        { label: "Blank Google Slides", onSelect: () => newFile("presentation"), disabled: notSynced || loading },
+        { label: "Blank Google Slides", onSelect: () => newFile("presentation"), disabled: googleOff },
         { label: "PowerPoint file (.pptx)", onSelect: () => newFile("pptx"), disabled: off },
       ],
     },

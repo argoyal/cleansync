@@ -45,6 +45,10 @@ export function parentOf(path: string): string {
 export const NOT_SYNCED_NOTE = "This folder isn't synced with Google Drive. Open a synced folder to add files.";
 
 /** The same idea for the Move dialog: a move out of Drive's sync would leave the file only here. */
+/** The server's own refusal text (store.IN_OFFLOADED_MSG). */
+export const IN_OFFLOADED_NOTE =
+  "This folder is offloaded: it's kept only on this server and doesn't sync with Google Drive. Restore it to Drive to add files here.";
+
 export const NOT_SYNCED_MOVE_NOTE = "This folder isn't synced with Google Drive. Open a synced folder to move items.";
 
 /** Shown in folders of a Drive-to-here pair: the next sync undoes local changes there. */
