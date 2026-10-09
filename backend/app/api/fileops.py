@@ -40,17 +40,18 @@ from app.services.files.names import validate_name
 from app.services.files.scope import Scope, join_rel, pair_for, to_pair_rel
 from app.services.files.status import load_overlay
 from app.services.files.upload import new_temp, plan_target, publish, save_stream
-from app.services.queue import stop_message
+from app.services.queue import is_stopped, stop_message
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files")
 OFFICE_KINDS = ("docx", "xlsx", "pptx")
 
 
-def refuse_when_disabled(request: Request) -> None:
+async def refuse_when_disabled(request: Request) -> None:
     # With syncing switched off nothing would carry the change to Drive: refuse up front.
     queue = request.app.state.queue
-    if getattr(queue, "disabled_reason", None) is not None:
+    # Checks the disk now, so the first action after it drops out never reaches Drive.
+    if await is_stopped(queue):
         raise HTTPException(503, stop_message(queue))
 
 
@@ -170,7 +171,7 @@ async def mkdir(
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    refuse_when_disabled(request)
+    await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
     rel = await run_op(ops.make_folder, scope, clean_path(body.path), body.name)
     return OpOut(paths=[rel], syncs=after_change(request, scope, [rel]))
@@ -183,7 +184,7 @@ async def rename(
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    refuse_when_disabled(request)
+    await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
     step = await run_op(ops.plan_rename, scope, clean_path(body.path), body.new_name)
     return await _move(request, db, scope, [step])
@@ -196,7 +197,7 @@ async def move(
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    refuse_when_disabled(request)
+    await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
     sources = [clean_path(p) for p in body.paths]
     steps = await run_op(ops.plan_move, scope, sources, clean_path(body.to))
@@ -210,7 +211,7 @@ async def delete(
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    refuse_when_disabled(request)
+    await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
     rels = ops.prune_selection([clean_path(p) for p in body.paths])
     queue = request.app.state.queue
@@ -277,7 +278,7 @@ async def upload(
     `name` may contain '/' for a folder upload ("Trip/day 1/photo.jpg"); folders are created.
     A file never replaces one that is already there: it gets a free name instead.
     """
-    refuse_when_disabled(request)
+    await refuse_when_disabled(request)
     scope = get_scope(request, db, account_id)
     # Adding a whole new file is safe while a sync runs (it appears atomically and the
     # follow-up sync is marked dirty), so unlike moves and deletes there is no busy check.
@@ -324,7 +325,7 @@ async def new_file(
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    refuse_when_disabled(request)
+    await refuse_when_disabled(request)
     state = request.app.state
     scope = get_scope(request, db, body.account_id)
     folder = clean_path(body.path)

@@ -22,7 +22,7 @@ from app.services.files import ops
 from app.services.files.ops import FileOpError, MoveStep, PartialError, UndoFailed
 from app.services.files.scope import Scope, join_rel, pair_for, to_pair_rel
 from app.services.files.status import has_pending_changes
-from app.services.queue import stop_message
+from app.services.queue import is_stopped, stop_message
 from app.services.rclone.commands import RcloneEnv, lsjson_args, moveto_args, remote_target
 from app.services.rclone.errors import Failure, classify_failure
 from app.services.rclone.runner import RunResult, run_rclone
@@ -200,6 +200,8 @@ async def prepare_moves(
     An item with changes still waiting to sync (or an open conflict) is not moved on Drive:
     the sync would then compare the moved copies against an old state of the other side."""
     plan = MovePlan(scope, [_Planned(s) for s in steps])
+    if await is_stopped(queue):  # checks the disk now, before Drive is touched
+        raise FileOpError(stop_message(queue), 503)
     check_pairs(queue, touched_pairs(scope, plan.touched))
     account = scope.account
     connected = account.status == AccountStatus.CONNECTED

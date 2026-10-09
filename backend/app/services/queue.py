@@ -20,6 +20,14 @@ def stop_message(queue) -> str | None:
     return MISSING_DISK_MSG if reason == MISSING_DISK_MSG else DB_BROKEN_MSG
 
 
+async def is_stopped(queue) -> bool:
+    """Ask the queue whether syncing is off, checking the disk now (off the event loop)."""
+    check = getattr(queue, "check", None)
+    if check is not None:
+        return await check()
+    return getattr(queue, "disabled_reason", None) is not None
+
+
 class SyncQueue:
     """At most one job per pair; extra sync requests while running collapse into one re-run.
 
@@ -44,30 +52,35 @@ class SyncQueue:
         self._finish_listeners: list[Callable[[int], None]] = []
         # Set when syncing must stop entirely (e.g. the database failed its integrity check).
         self.disabled_reason: str | None = None
-        # Asked before a job is accepted and before it starts; a reason stops all syncing.
+        # Asked before every job starts and before every file action; a reason stops all
+        # syncing. It reads the disk, so it always runs in a worker thread: a hung disk must
+        # not freeze the app.
         self._guard = guard
         self._on_stop = on_stop
 
-    def _stopped(self) -> bool:
+    async def check(self) -> bool:
         """True when syncing is off. Once the guard objects, it stays off until a restart."""
         if self.disabled_reason is not None:
             return True
         if self._guard is None:
             return False
-        reason = self._guard()
+        reason = await asyncio.to_thread(self._guard)
         if reason is None:
             return False
-        self.disabled_reason = reason
-        log.error("syncing stopped: %s", reason)
-        if self._on_stop is not None:
-            try:
-                self._on_stop(reason)
-            except Exception:
-                log.exception("could not announce that syncing stopped")
+        if self.disabled_reason is None:  # two checks can finish together: say it once
+            self.disabled_reason = reason
+            log.error("syncing stopped: %s", reason)
+            if self._on_stop is not None:
+                try:
+                    self._on_stop(reason)
+                except Exception:
+                    log.exception("could not announce that syncing stopped")
         return True
 
     def request(self, pair_id: int, trigger: str, action: str = "sync") -> str:
-        if self._stopped():
+        # Only the remembered stop here: reading the disk would block the event loop. Every
+        # job checks the disk again before it starts (see _run), and routes call check().
+        if self.disabled_reason is not None:
             return "disabled"
         if pair_id in self._running:
             if action != "sync":
@@ -119,9 +132,17 @@ class SyncQueue:
     async def _run(self, pair_id: int) -> None:
         async with self._sem:
             action, trigger = self._pending.pop(pair_id)
-            if self._stopped():
-                return  # the disk went away while this job waited: run nothing
-            self._running.add(pair_id)
+            self._running.add(pair_id)  # busy while the disk is checked: no second job slips in
+            try:
+                stopped = await self.check()
+            except BaseException:
+                self._running.discard(pair_id)
+                raise
+            if stopped:
+                # The disk went away while this job waited: run nothing, re-run nothing.
+                self._running.discard(pair_id)
+                self._dirty.pop(pair_id, None)
+                return
             try:
                 await self._handler(pair_id, action, trigger)
             except Exception:

@@ -1,4 +1,7 @@
 import asyncio
+import threading
+
+from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.models import SettingRow
@@ -110,3 +113,58 @@ def test_disk_gone_turns_sync_now_into_a_clear_503_and_shows_on_status(
 def test_volume_id_is_not_a_user_setting(auth_client):
     assert VOLUME_KEY not in auth_client.get("/api/settings").json()
     assert auth_client.put("/api/settings", json={VOLUME_KEY: ID_B}).status_code == 422
+
+
+async def test_the_disk_check_reads_the_file_off_the_event_loop(tmp_path):
+    vf = tmp_path / ".drivesync-volume"
+    vf.write_text(ID_A + "\n")
+    guard = VolumeGuard(vf, ID_A)
+    threads: list[bool] = []
+
+    def check():
+        threads.append(threading.current_thread() is threading.main_thread())
+        return guard.check()
+
+    async def handler(pair_id, action, trigger):
+        return None
+
+    q = SyncQueue(handler, guard=check)
+    assert await q.check() is False
+    assert q.request(1, "MANUAL") == "queued"
+    await q.wait_idle()
+    assert threads and not any(threads)  # a hung disk can only block a worker thread
+    vf.unlink()
+    assert await q.check() is True
+    assert q.disabled_reason == MISSING_DISK_MSG
+
+
+def test_disk_missing_at_startup_skips_recovery_schedule_and_watcher(settings, monkeypatch):
+    first = create_app(settings, start_background=False)  # writes the volume file
+    first.state.layout.volume_file.unlink()
+    recovered: list[object] = []
+    monkeypatch.setattr("app.main.recover_interrupted", lambda db: recovered.append(db) or [])
+    app = create_app(settings)  # background services on, as in production
+    with TestClient(app):
+        assert app.state.queue.disabled_reason == MISSING_DISK_MSG
+        assert recovered == []
+        assert not app.state.scheduler.aps.running
+        assert app.state.watcher._observer is None
+    assert not app.state.scheduler.aps.running  # and it shut down cleanly
+
+
+def test_first_start_that_cannot_write_the_file_stops_syncing_and_retries_later(
+    settings, monkeypatch
+):
+    def fail(path, volume_id):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr("app.services.volume._write_volume_file", fail)
+    app = create_app(settings, start_background=False)
+    assert app.state.queue.disabled_reason == MISSING_DISK_MSG
+    assert not app.state.layout.volume_file.exists()
+    with app.state.session_factory() as db:
+        assert db.get(SettingRow, VOLUME_KEY) is None  # nothing stored: the next start retries
+    monkeypatch.undo()
+    again = create_app(settings, start_background=False)
+    assert again.state.queue.disabled_reason is None
+    assert read_volume_file(again.state.layout.volume_file) is not None

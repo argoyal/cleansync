@@ -7,7 +7,7 @@ from app.auth.deps import AuthContext, get_db, require_user
 from app.models import Account, SyncPair
 from app.models.enums import AttentionReason, Direction, PairStatus
 from app.schemas.pairs import PairCreate, PairOut, PairUpdate
-from app.services.queue import stop_message
+from app.services.queue import is_stopped, stop_message
 from app.services.sync.pairs import PairError, create_pair, delete_pair, to_out, update_pair
 
 router = APIRouter(prefix="/api/sync-pairs")
@@ -145,8 +145,12 @@ class ConfirmIn(BaseModel):
     phrase: str
 
 
-def _queue(request: Request, pair_id: int, trigger: str, action: str = "sync") -> dict:
-    result = request.app.state.queue.request(pair_id, trigger, action)
+async def _queue(request: Request, pair_id: int, trigger: str, action: str = "sync") -> dict:
+    queue = request.app.state.queue
+    # Check the disk now: request() only knows about a stop that was already noticed.
+    if await is_stopped(queue):
+        raise HTTPException(503, stop_message(queue))
+    result = queue.request(pair_id, trigger, action)
     if result == "busy":
         raise HTTPException(409, "this pair is busy; try again when the current job finishes")
     if result == "disabled":
@@ -164,7 +168,7 @@ async def sync_now(
     pair, _ = load_pair(db, pair_id)
     if not pair.initialized:
         raise HTTPException(409, "run the first-sync preview and confirm it first")
-    return _queue(request, pair_id, "MANUAL")
+    return await _queue(request, pair_id, "MANUAL")
 
 
 @router.post("/{pair_id}/override-once", status_code=202)
@@ -184,7 +188,7 @@ async def override_once(
     pair.override_next = True
     db.commit()
     try:
-        out = _queue(request, pair_id, "MANUAL")
+        out = await _queue(request, pair_id, "MANUAL")
     except HTTPException:
         pair.override_next = False  # nothing was queued: don't leave an approval lying around
         db.commit()
@@ -209,7 +213,7 @@ async def start_preview(
     pair, _ = load_pair(db, pair_id)
     if pair.initialized:
         raise HTTPException(409, "pair is already initialized")
-    return _queue(request, pair_id, "INITIAL", "preview")
+    return await _queue(request, pair_id, "INITIAL", "preview")
 
 
 @router.get("/{pair_id}/preview")
@@ -244,7 +248,7 @@ async def confirm_initial(
         initial.check_phrase(body.phrase)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
-    return _queue(request, pair_id, "INITIAL", "initial")
+    return await _queue(request, pair_id, "INITIAL", "initial")
 
 
 @router.post("/{pair_id}/resync", status_code=202)
@@ -259,4 +263,4 @@ async def resync(
         raise HTTPException(409, "use the first-sync preview instead")
     if pair.direction != Direction.BIDIRECTIONAL:
         raise HTTPException(409, "one-way pairs don't need a resync")
-    return _queue(request, pair_id, "MANUAL", "resync")
+    return await _queue(request, pair_id, "MANUAL", "resync")

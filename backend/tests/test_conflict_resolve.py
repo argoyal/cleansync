@@ -245,3 +245,17 @@ def test_resolving_the_last_conflict_of_a_paused_pair_keeps_it_paused(db, layout
     _resolve(db, layout, setup, "keep_local")
     db.refresh(pair)
     assert (pair.status, pair.attention_reason) == ("PAUSED", None)
+
+
+def test_resolve_api_refuses_when_the_disk_is_gone(auth_client, app, db, setup):
+    from app.services.queue import MISSING_DISK_MSG
+
+    _, _, c, root = setup
+    app.state.layout.volume_file.unlink()  # no sync has been asked for since
+    r = auth_client.post(f"/api/conflicts/{c.id}/resolve", json={"action": "keep_local"})
+    assert r.status_code == 503
+    assert r.json()["detail"] == MISSING_DISK_MSG
+    assert (root / "d" / "r.conflict1.xlsx").exists()
+    assert (root / "d" / "r.conflict2.xlsx").exists()
+    db.refresh(c)
+    assert c.state == "OPEN"

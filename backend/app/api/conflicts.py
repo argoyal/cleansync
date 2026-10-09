@@ -11,7 +11,7 @@ from app.core.clock import utcnow
 from app.models import Conflict
 from app.models.enums import ConflictState
 from app.schemas.jobs import ConflictOut, ResolvedOut
-from app.services.queue import stop_message
+from app.services.queue import is_stopped, stop_message
 from app.services.sync.conflicts import ConflictError, resolve_conflict
 
 router = APIRouter()
@@ -50,7 +50,7 @@ async def resolve(
     pair, account = load_pair(db, conflict.pair_id)
     queue = request.app.state.queue
     # Refuse before moving any files: with syncing disabled nothing would pick the result up.
-    if getattr(queue, "disabled_reason", None) is not None:
+    if await is_stopped(queue):  # checks the disk now
         raise HTTPException(503, stop_message(queue))
     if queue.is_running(pair.id):
         raise HTTPException(409, "this pair is busy; try again when the current job finishes")
