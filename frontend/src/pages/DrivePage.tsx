@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { friendlyError } from "../api/client";
-import { useBrowse } from "../api/queries";
+import { useBrowse, usePairs } from "../api/queries";
 import type { FileItem } from "../api/types";
 import { useFileActions } from "../components/FileActions";
 import { FileView } from "../components/FileView";
@@ -128,6 +128,7 @@ export function DrivePage() {
   const path = params.get("path") ?? "";
   const { accountId, account } = useCurrentAccount();
   const browse = useBrowse(accountId, path);
+  const pairs = usePairs().data;
   const [view, setView] = useViewMode();
   if (!account) {
     return (
@@ -140,6 +141,7 @@ export function DrivePage() {
   }
   const pair = browse.data?.pair;
   const oneWay = pair?.direction === "REMOTE_TO_LOCAL";
+  const noPairs = pairs !== undefined && !pairs.some((p) => p.account_id === account.id);
   return (
     <div className="p-4 sm:p-6">
       <div className="mb-4 flex items-center gap-3">
@@ -148,6 +150,16 @@ export function DrivePage() {
           <ViewToggle view={view} onChange={setView} />
         </div>
       </div>
+      {noPairs && (
+        <div className="mb-4">
+          <Notice tone="run">
+            Nothing here is synced with Google Drive yet.{" "}
+            <Link to={`/setup?step=folders&account=${account.id}`} className="font-semibold underline">
+              Sync a Drive folder…
+            </Link>
+          </Notice>
+        </div>
+      )}
       {pair && pair.status !== "HEALTHY" && (
         <div className="mb-4 flex flex-wrap items-center gap-3 text-table">
           <PairStatusPill status={pair.status} />

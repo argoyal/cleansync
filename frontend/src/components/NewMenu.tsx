@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { type FormEvent, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api, friendlyError } from "../api/client";
 import { useBrowse } from "../api/queries";
@@ -23,6 +23,7 @@ function useCurrentFolder(): string {
 export function NewMenu() {
   const { accountId } = useCurrentAccount();
   const folder = useCurrentFolder();
+  const navigate = useNavigate();
   const toast = useToast();
   const invalidate = useInvalidateFiles();
   const button = useRef<HTMLButtonElement>(null);
@@ -76,6 +77,13 @@ export function NewMenu() {
   };
 
   const items: MenuItem[] = [
+    // First, and never off: it is the way to sync a folder from anywhere, a not-synced one too.
+    {
+      label: "Sync a Drive folder…",
+      icon: "cloud_sync",
+      onSelect: () => navigate(`/setup?step=folders${accountId !== null ? `&account=${accountId}` : ""}`),
+    },
+    { separator: true },
     ...(notSynced ? [{ note: NOT_SYNCED_NOTE }, { separator: true } as const] : []),
     { label: "New folder", icon: "create_new_folder", onSelect: () => setNewFolder(true), disabled: off },
     { separator: true },

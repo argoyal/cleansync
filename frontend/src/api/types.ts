@@ -78,6 +78,7 @@ export type FileItem = {
   starred: boolean;
   pair_id: number | null;
   thumb: boolean;
+  pair_root?: boolean; // a sync pair's own folder (shown with a sync mark)
 };
 
 export type PairBrief = {

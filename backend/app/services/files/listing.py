@@ -41,6 +41,7 @@ def make_item(
     local: bool,
     entry: CatalogEntry | None,
     pair_id: int | None,
+    pair_root: bool = False,
 ) -> FileItemOut:
     listed = entry.mime if entry else None
     if is_dir:
@@ -64,6 +65,7 @@ def make_item(
         starred=bool(entry and entry.starred),
         pair_id=pair_id,
         thumb=local and not is_dir and can_thumb(mime, size),
+        pair_root=pair_root,
     )
 
 
@@ -83,10 +85,11 @@ def remote_item(path: str, entry: CatalogEntry, status: str, pair_id: int) -> Fi
 
 
 def _outside_status(scope: Scope, path: str, is_dir: bool, views: dict[int, PairView]) -> str:
-    """A folder outside every pair shows the worst state of the pairs inside it."""
+    """A folder outside every pair shows the worst state of the pairs inside it. A pair's own
+    folder, seen from its parent, counts as inside: it shows that pair's state."""
     if not is_dir:
         return "unsynced"
-    inner = pairs_inside(scope.pairs, path)
+    inner = [p for p in scope.pairs if p.local_subpath == path] + pairs_inside(scope.pairs, path)
     if not inner:
         return "unsynced"
     return worst(
@@ -136,6 +139,8 @@ def list_folder(scope: Scope, rel: str, views: dict[int, PairView]) -> list[File
                         else compare(LocalEntry(size, st.st_mtime, is_dir), entry)
                     )
                     status = view.overlay.apply(prel, fresh, is_dir)
+            # A pair that covers the whole account has no folder of its own in any listing.
+            pair_root = is_dir and any(p.local_subpath == path for p in scope.pairs)
             items.append(
                 make_item(
                     path=path,
@@ -147,6 +152,7 @@ def list_folder(scope: Scope, rel: str, views: dict[int, PairView]) -> list[File
                     local=True,
                     entry=entry,
                     pair_id=pair.id if pair else None,
+                    pair_root=pair_root,
                 )
             )
     if pair is not None and view is not None and view.catalog is not None:

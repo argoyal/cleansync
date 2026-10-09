@@ -34,6 +34,32 @@ function Thumb({ accountId, item }: { accountId: number; item: FileItem }) {
   return <Icon name={iconFor(item)} className="text-[44px] text-ink-2/70" />;
 }
 
+/** Folder icon with a mark: synced folder (a sync pair's own folder), or not synced. The title is the legend. */
+function FolderIcon({ item, className }: { item: FileItem; className: string }) {
+  const synced = !!item.pair_root;
+  const notSynced = !synced && item.status === "unsynced";
+  const title = synced
+    ? "Synced folder: kept in step with Google Drive"
+    : notSynced
+      ? "Not synced: only on this server. Right-click to start syncing it."
+      : undefined;
+  return (
+    <span className="relative inline-flex shrink-0" title={title}>
+      <Icon name="folder" className={className} />
+      {synced && (
+        <span className="absolute -bottom-1 -right-1 inline-flex rounded-full bg-surface">
+          <Icon name="sync" label="Synced folder" className="text-[12px] text-ok" />
+        </span>
+      )}
+      {notSynced && (
+        <span aria-hidden="true" className="absolute -bottom-1 -right-1 inline-flex rounded-full bg-surface">
+          <Icon name="cloud_off" className="text-[12px] text-ink-2" />
+        </span>
+      )}
+    </span>
+  );
+}
+
 type Nav = { onKeyDown: (e: React.KeyboardEvent) => void; onFocus: () => void; tabIndex: number };
 
 function MoreButton({ item, p, className = "" }: { item: FileItem; p: Props; className?: string }) {
@@ -149,7 +175,11 @@ export function FileView(p: Props) {
               >
                 <td className="py-1.5 pl-2">
                   <div className="flex items-center gap-3 rounded-ctl outline-none focus-visible:ring-2 focus-visible:ring-accent" {...aria(item)} {...nav(item)}>
-                    <Icon name={iconFor(item)} className="text-[20px] text-ink-2" />
+                    {item.is_dir ? (
+                      <FolderIcon item={item} className="text-[20px] text-ink-2" />
+                    ) : (
+                      <Icon name={iconFor(item)} className="text-[20px] text-ink-2" />
+                    )}
                     <span className={`truncate ${item.local || item.native ? "" : "text-ink-2"}`}>{item.name}</span>
                     {item.starred && <Icon name="star" label="Starred" className="text-[16px] text-ink-2" />}
                     <StatusBadge status={item.status} />
@@ -187,7 +217,7 @@ export function FileView(p: Props) {
                   {...nav(item)}
                   {...mouse(item)}
                 >
-                  <Icon name="folder" className="text-[20px] text-ink-2" />
+                  <FolderIcon item={item} className="text-[20px] text-ink-2" />
                   <span className="min-w-0 flex-1 truncate font-medium">{item.name}</span>
                   <StatusBadge status={item.status} />
                   {status(item)}

@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import { ApiError, api, friendlyError } from "../api/client";
 import { fileUrl, useBrowse, usePairs, zipUrl } from "../api/queries";
-import type { FileItem, OpOut } from "../api/types";
+import type { FileItem, OpOut, Pair } from "../api/types";
 import { isOffice, isWaitingToSync, NOT_SYNCED_MOVE_NOTE, ONE_WAY_NOTE, opensInBrowser, parentOf } from "../lib/files";
 import { FolderPicker } from "./FolderPicker";
 import { useToast } from "./Toasts";
@@ -48,7 +48,12 @@ export function useOneWay() {
   return (item: FileItem) => item.pair_id !== null && ids.has(item.pair_id);
 }
 
-type DialogState = { kind: "rename"; item: FileItem } | { kind: "move"; items: FileItem[] } | { kind: "delete"; items: FileItem[] } | null;
+type DialogState =
+  | { kind: "rename"; item: FileItem }
+  | { kind: "move"; items: FileItem[] }
+  | { kind: "delete"; items: FileItem[] }
+  | { kind: "startSync"; item: FileItem }
+  | null;
 
 /** Open, download and the right-click actions for files in one account, plus their dialogs. */
 export function useFileActions(accountId: number | null) {
@@ -109,6 +114,9 @@ export function useFileActions(accountId: number | null) {
     items.push({ separator: true });
     items.push({ label: "Rename", icon: "edit", onSelect: () => setDialog({ kind: "rename", item }), disabled: !changeable });
     items.push({ label: "Move", icon: "drive_file_move", onSelect: () => setDialog({ kind: "move", items: [item] }), disabled: !changeable });
+    if (item.is_dir && item.local && item.status === "unsynced") {
+      items.push({ label: "Start syncing this folder", icon: "cloud_sync", onSelect: () => setDialog({ kind: "startSync", item }) });
+    }
     items.push({ separator: true });
     items.push({ label: "Delete", icon: "delete", danger: true, onSelect: () => setDialog({ kind: "delete", items: [item] }), disabled: !changeable });
     return items;
@@ -119,6 +127,7 @@ export function useFileActions(accountId: number | null) {
   if (accountId !== null && dialog?.kind === "rename") dialogs = <RenameDialog accountId={accountId} item={dialog.item} onClose={close} />;
   if (accountId !== null && dialog?.kind === "move") dialogs = <MoveDialog accountId={accountId} items={dialog.items} onClose={close} />;
   if (accountId !== null && dialog?.kind === "delete") dialogs = <DeleteDialog accountId={accountId} items={dialog.items} onClose={close} />;
+  if (accountId !== null && dialog?.kind === "startSync") dialogs = <StartSyncDialog accountId={accountId} item={dialog.item} onClose={close} />;
 
   const askDelete = (items: FileItem[]) => {
     if (items.some(oneWay)) {
@@ -275,6 +284,45 @@ function DeleteDialog({ accountId, items, onClose }: { accountId: number; items:
         from Google Drive too, into Drive's trash.
       </p>
       {op.isError && <OpError error={op.error} />}
+    </Dialog>
+  );
+}
+
+/** "Start syncing this folder": a new sync pair whose Drive folder has the same path, then its preview. */
+function StartSyncDialog({ accountId, item, onClose }: { accountId: number; item: FileItem; onClose: () => void }) {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const create = useMutation({
+    mutationFn: () =>
+      api<Pair>("/api/sync-pairs", {
+        method: "POST",
+        body: { account_id: accountId, name: item.name, remote_path: item.path, local_subpath: item.path },
+      }),
+    onSuccess: (pair) => {
+      [...FILE_QUERY_KEYS, "pairs", "setup"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+      onClose();
+      navigate(`/setup?step=preview&pair=${pair.id}`);
+    },
+  });
+  return (
+    <Dialog
+      title={`Start syncing "${item.name}"?`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button tone="primary" data-autofocus disabled={create.isPending} onClick={() => create.mutate()}>
+            Continue
+          </Button>
+        </>
+      }
+    >
+      <p>
+        DriveSync will keep this folder in step with the Google Drive folder <strong>{item.path}</strong>. If Google Drive has no
+        folder there yet, the first sync makes it.
+      </p>
+      <p className="text-ink-2">Nothing moves yet: next you see what is on each side and type a confirmation.</p>
+      {create.isError && <Notice tone="err">{friendlyError(create.error)}</Notice>}
     </Dialog>
   );
 }

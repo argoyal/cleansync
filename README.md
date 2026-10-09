@@ -10,6 +10,7 @@ DriveSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 - Connect one or more Google accounts. Each syncs into its own folder: `storage/<email>/`.
 - A web app that looks and works like Google Drive: browse, open files in a new tab (video can seek), download files and whole folders, upload files and folders of any size, new folders, rename, move, delete, blank Office files and new Google Docs/Sheets/Slides, each item marked synced, syncing, waiting or in conflict.
 - Deleted items first go to a Recovery folder on the server, then to Drive's trash at the next sync.
+- Start syncing any Drive folder from + New, or any local folder from its right-click menu; synced and not-synced folders are marked.
 - Two-way sync on a schedule (every 1–60 minutes), when local files change, or when you click Sync now.
 - **Before the first sync**, shows what is only local, only on Drive, and different on both, and waits for you to type a confirmation.
 - **Before every sync**, does a dry run. If it would delete more files than your limit (default 10), it stops and shows you the list.

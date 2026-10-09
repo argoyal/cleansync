@@ -32,6 +32,7 @@ class FileItemOut(BaseModel):
     starred: bool
     pair_id: int | None
     thumb: bool
+    pair_root: bool = False  # a sync pair's own folder (shown with a sync mark)
 
 
 class PairBrief(BaseModel):

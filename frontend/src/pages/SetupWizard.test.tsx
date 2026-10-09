@@ -308,4 +308,11 @@ describe("first-run wizard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
     expect(await screen.findByText("Copy failed")).toBeInTheDocument();
   });
+
+  it("starts the folder step on the account it was opened for", async () => {
+    const second = { ...ACCOUNT, id: 2, email: "bob@example.com" };
+    mockApi({ ...HEALTH, "GET /api/accounts": [ACCOUNT, second] });
+    renderApp(<SetupWizard />, { route: "/setup?step=folders&account=2", path: "/setup" });
+    expect(await screen.findByLabelText("Google account")).toHaveValue("2");
+  });
 });

@@ -1,8 +1,8 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { ACCOUNT, item, mockApi, renderApp } from "../test/utils";
+import { ACCOUNT, item, json, mockApi, PAIR, renderApp } from "../test/utils";
 import { DrivePage } from "./DrivePage";
 import { RecentPage, SearchPage } from "./ListPages";
 
@@ -442,5 +442,75 @@ describe("Final review fixes", () => {
     await userEvent.type(screen.getByLabelText("New name"), "2");
     await userEvent.click(screen.getByRole("button", { name: "Rename" }));
     expect(await screen.findByText("Renamed. Google Drive gets the change at the next sync.")).toBeInTheDocument();
+  });
+});
+
+describe("Adding folders to sync", () => {
+  const LOOSE = item({ name: "Loose", path: "Loose", is_dir: true, size: null, status: "unsynced", pair_id: null, remote: false, mime: null });
+
+  it("marks synced folders and not-synced folders", async () => {
+    setup("/drive", {
+      "GET /api/browse": { account_id: 1, path: "", pair: null, items: [
+        item({ name: "Projects", path: "Projects", is_dir: true, size: null, pair_root: true, pair_id: null, mime: null }),
+        LOOSE,
+      ] },
+    });
+    const folders = await screen.findByRole("region", { name: "Folders" });
+    expect(within(folders).getByRole("img", { name: "Synced folder" })).toBeInTheDocument();
+    expect(within(folders).getByTitle(/Not synced: only on this server/)).toBeInTheDocument();
+    // A synced folder can't be started again.
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Projects" }));
+    expect(screen.queryByRole("menuitem", { name: "Start syncing this folder" })).not.toBeInTheDocument();
+  });
+
+  it("marks folders in the list view too", async () => {
+    localStorage.setItem("drivesync.view", "list");
+    setup("/drive", {
+      "GET /api/browse": { account_id: 1, path: "", pair: null, items: [
+        item({ name: "Projects", path: "Projects", is_dir: true, size: null, pair_root: true, pair_id: null, mime: null }),
+        LOOSE,
+      ] },
+    });
+    expect(await screen.findByRole("img", { name: "Synced folder" })).toBeInTheDocument();
+    expect(screen.getByTitle(/Not synced: only on this server/)).toBeInTheDocument();
+    localStorage.removeItem("drivesync.view");
+  });
+
+  it("starts syncing a local folder and goes to its preview", async () => {
+    const { calls } = setup("/drive", {
+      "GET /api/browse": { account_id: 1, path: "", pair: null, items: [LOOSE] },
+      "POST /api/sync-pairs": { ...PAIR, id: 12, name: "Loose", local_subpath: "Loose", remote_path: "Loose", initialized: false, status: "NEW" },
+    });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Loose" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Start syncing this folder" }));
+    const dialog = screen.getByRole("dialog", { name: 'Start syncing "Loose"?' });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/setup?step=preview&pair=12"));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/sync-pairs")?.body).toEqual({
+      account_id: 1, name: "Loose", remote_path: "Loose", local_subpath: "Loose" });
+  });
+
+  it("shows why a folder can't start syncing", async () => {
+    setup("/drive", {
+      "GET /api/browse": { account_id: 1, path: "", pair: null, items: [LOOSE] },
+      "POST /api/sync-pairs": () => json(422, { detail: "local folder overlaps the folder of pair 'Docs'" }),
+    });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Loose" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Start syncing this folder" }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByText(/overlaps the folder of pair 'Docs'/)).toBeInTheDocument();
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/drive");
+  });
+
+  it("offers Sync a Drive folder when nothing is synced yet", async () => {
+    setup("/drive", { "GET /api/sync-pairs": [] });
+    const link = await screen.findByRole("link", { name: "Sync a Drive folder…" });
+    expect(link).toHaveAttribute("href", "/setup?step=folders&account=1");
+  });
+
+  it("doesn't offer it once the account has a synced folder", async () => {
+    setup("/drive", { "GET /api/sync-pairs": [PAIR] });
+    await screen.findByRole("region", { name: "Folders" });
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Sync a Drive folder…" })).not.toBeInTheDocument());
   });
 });

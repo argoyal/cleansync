@@ -329,3 +329,17 @@ describe("+ New in a Drive-to-here folder", () => {
     }
   });
 });
+
+describe("+ New: Sync a Drive folder", () => {
+  it("opens the folder step of the wizard to sync a Drive folder", async () => {
+    setup();
+    await userEvent.click(within(await openMenu()).getByRole("menuitem", { name: "Sync a Drive folder…" }));
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/setup?step=folders&account=1"));
+  });
+
+  it("offers Sync a Drive folder even outside synced folders", async () => {
+    setup({ "GET /api/browse": { account_id: 1, path: "Work", pair: null, items: [] } });
+    const menu = await openMenu();
+    expect(within(menu).getByRole("menuitem", { name: "Sync a Drive folder…" })).toBeEnabled();
+  });
+});
