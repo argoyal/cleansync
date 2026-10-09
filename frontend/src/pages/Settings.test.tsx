@@ -90,6 +90,13 @@ describe("settings", () => {
     expect(await screen.findByText("rclone v1.75.1")).toBeInTheDocument();
   });
 
+  it("offers the theme switch under General", async () => {
+    mockApi({ "GET /api/system": SYSTEM, "GET /api/settings": SETTINGS });
+    renderApp(<SettingsPage />, { route: "/settings?tab=general", path: "/settings" });
+    await userEvent.click(within(await screen.findByRole("radiogroup", { name: "Theme" })).getByRole("radio", { name: "Light" }));
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+  });
+
   it("treats an unknown tab as General", async () => {
     mockApi({ "GET /api/system": SYSTEM, "GET /api/settings": SETTINGS });
     renderApp(<SettingsPage />, { route: "/settings?tab=constructor", path: "/settings" });

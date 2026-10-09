@@ -11,6 +11,7 @@ def _dist(root: Path) -> Path:
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text("<!doctype html><div id=root></div>")
     (dist / "assets" / "app-abc123.js").write_text("console.log(1)")
+    (dist / "theme.js").write_text("void 0;")
     (dist / "favicon.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>")
     return dist
 
@@ -54,3 +55,9 @@ def test_missing_build_gives_a_clear_404(settings, tmp_path):
         r = c.get("/")
     assert r.status_code == 404
     assert "not built" in r.json()["detail"]
+
+
+def test_the_theme_script_is_served_as_javascript(spa_client):
+    r = spa_client.get("/theme.js")
+    assert r.status_code == 200
+    assert "javascript" in r.headers["content-type"]

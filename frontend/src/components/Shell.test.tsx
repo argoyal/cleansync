@@ -62,6 +62,19 @@ describe("account switcher", () => {
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/drive"));
   });
 
+  it("switches the theme from the account menu", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT] });
+    renderApp(<AccountSwitcher />, { withAccount: true });
+    await userEvent.click(await screen.findByRole("button", { name: "Account: alice@example.com" }));
+    const theme = screen.getByRole("radiogroup", { name: "Theme" });
+    expect(within(theme).getByRole("radio", { name: "System" })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(within(theme).getByRole("radio", { name: "Dark" }));
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(within(theme).getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(within(theme).getByRole("radio", { name: "System" }));
+    expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
+  });
+
   it("starts Google sign-in for a new account", async () => {
     mockApi({ "GET /api/accounts": [ACCOUNT], "POST /api/accounts/connect": { auth_url: "https://accounts.google.com/o/oauth2/v2/auth?x=1" } });
     const assign = vi.fn();

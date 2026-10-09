@@ -7,6 +7,7 @@ import { useAccounts, useAppSettings, useSystem } from "../api/queries";
 import type { Account, AppSettings } from "../api/types";
 import { Avatar } from "../components/AccountSwitcher";
 import { ACCOUNT_DOT } from "../components/StatusBadge";
+import { ThemeSwitch } from "../components/ThemeSwitch";
 import { useToast } from "../components/Toasts";
 import { Button, Dialog, Field, inputClass, Notice } from "../components/ui";
 import { useConnectGoogle } from "../hooks/useConnect";
@@ -98,6 +99,11 @@ function General() {
         <dd>{Intl.DateTimeFormat().resolvedOptions().timeZone} (this browser; the server logs use its TZ setting)</dd>
       </dl>
       <p className="text-table text-ink-2">The name and time zone come from the APP_NAME and TZ settings of the server.</p>
+      <div>
+        <p className="mb-2 text-table font-medium text-ink-2">Theme</p>
+        <ThemeSwitch />
+        <p className="mt-1 text-meta text-ink-2">Remembered in this browser. System follows your computer's setting.</p>
+      </div>
       {settings && (
         <NumberSetting
           label="Keep sync logs for (days)"
