@@ -8,7 +8,9 @@ import ArrowUpwardSvg from "@material-symbols/svg-400/rounded/arrow_upward.svg?r
 import ArticleSvg from "@material-symbols/svg-400/rounded/article.svg?react";
 import AudioFileSvg from "@material-symbols/svg-400/rounded/audio_file.svg?react";
 import BlockSvg from "@material-symbols/svg-400/rounded/block.svg?react";
+import CheckSvg from "@material-symbols/svg-400/rounded/check.svg?react";
 import CheckCircleSvg from "@material-symbols/svg-400/rounded/check_circle.svg?react";
+import CheckIndeterminateSmallSvg from "@material-symbols/svg-400/rounded/check_indeterminate_small.svg?react";
 import ChevronRightSvg from "@material-symbols/svg-400/rounded/chevron_right.svg?react";
 import CloseSvg from "@material-symbols/svg-400/rounded/close.svg?react";
 import CloudDoneSvg from "@material-symbols/svg-400/rounded/cloud_done.svg?react";
@@ -66,7 +68,9 @@ const ICONS = {
   article: ArticleSvg,
   audio_file: AudioFileSvg,
   block: BlockSvg,
+  check: CheckSvg,
   check_circle: CheckCircleSvg,
+  check_indeterminate_small: CheckIndeterminateSmallSvg,
   chevron_right: ChevronRightSvg,
   close: CloseSvg,
   cloud_done: CloudDoneSvg,

@@ -51,7 +51,7 @@ export function SideNav({ newButton }: { newButton?: ReactNode }) {
       {newButton && <div className="mb-3 pl-1">{newButton}</div>}
       <Item to="/" end icon="home" label="Home" />
       <Item to="/drive" icon="folder" label="My Drive" />
-      <Later icon="inventory_2" label="Offloaded" />
+      <Item to="/offloaded" icon="inventory_2" label="Offloaded" />
       <Item to="/recent" icon="schedule" label="Recent" />
       <Item to="/starred" icon="star" label="Starred" />
       <div className="my-2 border-t border-line" />

@@ -22,7 +22,16 @@ const nameOf = (path: string) => path.split("/").pop() || path;
 const files = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
 
 /** Spec §7.2a: one preview and one confirm for any number of items, then each item's result. */
-export function OffloadDialog({ accountId, paths, onClose }: { accountId: number; paths: string[]; onClose: () => void }) {
+export function OffloadDialog({
+  accountId,
+  paths,
+  onClose,
+}: {
+  accountId: number;
+  paths: string[];
+  /** started: an offload was started (not just looked at and cancelled). */
+  onClose: (started: boolean) => void;
+}) {
   const qc = useQueryClient();
   // Asked once when the dialog opens: what the person confirms must not change under them
   // (no refetch on focus, reconnect or a live update), so this is not a cached query.
@@ -43,7 +52,7 @@ export function OffloadDialog({ accountId, paths, onClose }: { accountId: number
   });
   const close = () => {
     if (batchId) REFRESH.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
-    onClose();
+    onClose(batchId !== null);
   };
   const title = paths.length === 1 ? `Offload "${nameOf(paths[0])}"?` : `Offload ${paths.length} items?`;
 
