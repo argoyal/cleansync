@@ -34,6 +34,16 @@ function Thumb({ accountId, item }: { accountId: number; item: FileItem }) {
   return <Icon name={iconFor(item)} className="text-[44px] text-ink-2/70" />;
 }
 
+const SYNCED_FOLDER = "Synced folder: kept in step with Google Drive.";
+const NOT_SYNCED_FOLDER = "Not synced: only on this server. Open its menu to start syncing it.";
+
+/** What screen readers hear about an item: its sync state, plus what a folder's mark means. */
+function describeItem(item: FileItem): string {
+  if (item.is_dir && item.pair_root) return `${itemStatusLabel(item.status)}. ${SYNCED_FOLDER}`;
+  if (item.is_dir && item.status === "unsynced") return NOT_SYNCED_FOLDER;
+  return itemStatusLabel(item.status);
+}
+
 /** Folder icon with a mark: synced folder (a sync pair's own folder), or not synced. The title is the legend. */
 function FolderIcon({ item, className }: { item: FileItem; className: string }) {
   const synced = !!item.pair_root;
@@ -41,7 +51,7 @@ function FolderIcon({ item, className }: { item: FileItem; className: string }) 
   const title = synced
     ? "Synced folder: kept in step with Google Drive"
     : notSynced
-      ? "Not synced: only on this server. Right-click to start syncing it."
+      ? NOT_SYNCED_FOLDER
       : undefined;
   return (
     <span className="relative inline-flex shrink-0" title={title}>
@@ -139,7 +149,7 @@ export function FileView(p: Props) {
   const describe = (item: FileItem) => `${uid}-${index.get(item)}`;
   const status = (item: FileItem) => (
     <span id={describe(item)} className="sr-only">
-      {itemStatusLabel(item.status)}
+      {describeItem(item)}
     </span>
   );
   const aria = (item: FileItem) => ({

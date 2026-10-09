@@ -240,3 +240,26 @@ def test_a_reserved_name_taken_from_the_drive_folder_says_so(auth_client, make_a
     r = _create(auth_client, make_account().id, remote_path=".google-exports")
     assert r.status_code == 422
     assert "followed the Drive folder" in r.json()["detail"]
+
+
+def test_start_syncing_is_refused_in_or_over_an_offloaded_folder(
+    auth_client, app, db, make_account, make_pair, save_catalog
+):
+    """'Start syncing this folder' posts a pair whose local and Drive folder are the same path.
+    Offloads only live inside pairs, so a folder in or over an offloaded one overlaps that pair,
+    and its browse status is the pair's, never 'unsynced' (so the menu doesn't offer it)."""
+    from app.models import Offload
+    from app.models.enums import OffloadState
+
+    acc = make_account()
+    pair = make_pair(acc, local_subpath="Work/Projects", remote_path="Work/Projects")
+    db.add(Offload(pair_id=pair.id, path="Old", is_dir=True, state=OffloadState.ACTIVE))
+    db.commit()
+    (app.state.layout.account_dir(acc.email) / "Work" / "Projects" / "Old").mkdir(parents=True)
+    save_catalog(pair.id, [])
+    for path in ("Work/Projects/Old", "Work/Projects", "Work"):
+        r = _create(auth_client, acc.id, name=path, local_subpath=path, remote_path=path)
+        assert r.status_code == 422 and "overlaps" in r.json()["detail"], (path, r.text)
+    items = auth_client.get("/api/browse", params={"account_id": acc.id, "path": ""}).json()
+    assert [(i["name"], i["status"] != "unsynced") for i in items["items"]] == [("Work", True)]
+    assert [p["id"] for p in auth_client.get("/api/sync-pairs").json()] == [pair.id]

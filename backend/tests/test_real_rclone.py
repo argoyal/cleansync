@@ -1396,3 +1396,81 @@ async def test_real_start_syncing_a_local_folder_makes_it_on_drive(tmp_path):
         assert (drive / "other.txt").read_text() == "elsewhere on Drive"
     finally:
         eng.dispose()
+
+
+async def test_real_start_syncing_merges_with_an_existing_drive_folder(tmp_path):
+    """'Start syncing this folder' when Drive already has a folder at that path with other
+    content: the preview shows what is only on Drive and what differs, and the first sync
+    merges both sides, deleting nothing on either."""
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, SyncPair
+    from app.paths import Layout
+    from app.services.events.bus import EventBus
+    from app.services.sync.engine import SyncEngine
+    from app.services.sync.initial import InitialSync
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            pass
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    drive = tmp_path / "drive"
+    (drive / "Projects").mkdir(parents=True)
+    (drive / "Projects" / "drive-only.txt").write_text("from Drive")
+    (drive / "Projects" / "plan.txt").write_text("old plan on Drive, longer")
+    os.utime(drive / "Projects" / "plan.txt", (1, 1))  # Drive's copy is older: local wins
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text(f"[gd_t]\ntype = alias\nremote = {drive}\n")
+    try:
+        with sf() as db:
+            acc = Account(email="alice@example.com", remote_name="gd_t")
+            db.add(acc)
+            db.commit()
+            pair = SyncPair(
+                account_id=acc.id, name="Projects", local_subpath="Projects", remote_path="Projects"
+            )
+            db.add(pair)
+            db.commit()
+            pair_id = pair.id
+        local = layout.account_dir("alice@example.com") / "Projects"
+        local.mkdir(parents=True)
+        (local / "plan.txt").write_text("new plan")
+        (local / "local-only.txt").write_text("from here")
+        engine = SyncEngine(
+            layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=_Accounts()
+        )
+        initial = InitialSync(engine)
+        await initial.preview(pair_id)
+        p = initial.load_preview(pair_id)
+        assert p is not None, "preview failed"
+        assert (p["same"], p["only_local"], p["only_remote"], p["different"]) == (0, 1, 1, 1)
+        assert p["samples"]["only_remote"] == ["drive-only.txt"]
+        assert p["samples"]["different"] == ["plan.txt"]
+
+        initial.check_phrase(CONFIRM_PHRASE)
+        await initial.run_initial(pair_id)
+        with sf() as db:
+            assert db.get(SyncPair, pair_id).initialized is True
+        for side in (local, drive / "Projects"):
+            assert sorted(f.name for f in side.iterdir() if f.name != "RCLONE_TEST") == [
+                "drive-only.txt",
+                "local-only.txt",
+                "plan.txt",
+            ]
+            assert (side / "drive-only.txt").read_text() == "from Drive"
+            assert (side / "local-only.txt").read_text() == "from here"
+            assert (side / "plan.txt").read_text() == "new plan"
+    finally:
+        eng.dispose()

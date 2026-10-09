@@ -155,6 +155,20 @@ describe("routes", () => {
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/setup"));
   });
 
+  it("still opens the wizard's folder step on an account after setup is done", async () => {
+    const second = { ...ACCOUNT, id: 2, email: "bob@example.com" };
+    mockApi({
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/accounts": [ACCOUNT, second],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 2, pairs: 1, initialized_pairs: 1 },
+    });
+    renderApp(<AppRoutes />, { route: "/setup?step=folders&account=2" });
+    expect(await screen.findByText("Choose what to sync")).toBeInTheDocument();
+    expect(screen.getByLabelText("Google account")).toHaveValue("2");
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/setup?step=folders&account=2");
+  });
+
   it("shows a sign-in error as plain text and clears the address", async () => {
     sessionStorage.setItem("drivesync.oauthReturn", "/settings?tab=accounts");
     mockApi({

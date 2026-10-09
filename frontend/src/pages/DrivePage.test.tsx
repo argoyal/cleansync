@@ -502,6 +502,41 @@ describe("Adding folders to sync", () => {
     expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/drive");
   });
 
+  it.each([["grid"], ["list"]])("tells screen readers what the folder marks mean (%s)", async (view) => {
+    localStorage.setItem("drivesync.view", view);
+    setup("/drive", {
+      "GET /api/browse": { account_id: 1, path: "", pair: null, items: [
+        item({ name: "Projects", path: "Projects", is_dir: true, size: null, pair_root: true, pair_id: null, mime: null }),
+        LOOSE,
+      ] },
+    });
+    expect(await screen.findByRole("button", { name: "Loose" })).toHaveAccessibleDescription(
+      "Not synced: only on this server. Open its menu to start syncing it.",
+    );
+    expect(screen.getByRole("button", { name: "Projects" })).toHaveAccessibleDescription(
+      "Synced. Synced folder: kept in step with Google Drive.",
+    );
+    localStorage.removeItem("drivesync.view");
+  });
+
+  it("can't be cancelled half way, and a late answer after closing goes nowhere", async () => {
+    let answer: (r: Response) => void = () => {};
+    setup("/drive", {
+      "GET /api/browse": { account_id: 1, path: "", pair: null, items: [LOOSE] },
+      "POST /api/sync-pairs": () => new Promise<Response>((r) => (answer = r)),
+    });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Loose" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Start syncing this folder" }));
+    const dialog = screen.getByRole("dialog", { name: 'Start syncing "Loose"?' });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Continue" }));
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    answer(json(201, { ...PAIR, id: 12, name: "Loose", local_subpath: "Loose", remote_path: "Loose", initialized: false, status: "NEW" }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/drive$/);
+  });
+
   it("offers Sync a Drive folder when nothing is synced yet", async () => {
     setup("/drive", { "GET /api/sync-pairs": [] });
     const link = await screen.findByRole("link", { name: "Sync a Drive folder…" });

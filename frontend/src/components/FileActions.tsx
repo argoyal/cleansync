@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, type ReactNode, useCallback, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError, api, friendlyError } from "../api/client";
@@ -292,6 +292,12 @@ function DeleteDialog({ accountId, items, onClose }: { accountId: number; items:
 function StartSyncDialog({ accountId, item, onClose }: { accountId: number; item: FileItem; onClose: () => void }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  // Closed (Escape or a click outside) while the pair was being made: don't jump to its preview later.
+  const closed = useRef(false);
+  const close = () => {
+    closed.current = true;
+    onClose();
+  };
   const create = useMutation({
     mutationFn: () =>
       api<Pair>("/api/sync-pairs", {
@@ -300,6 +306,7 @@ function StartSyncDialog({ accountId, item, onClose }: { accountId: number; item
       }),
     onSuccess: (pair) => {
       [...FILE_QUERY_KEYS, "pairs", "setup"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+      if (closed.current) return; // still listed under Sync activity, ready to finish setting up
       onClose();
       navigate(`/setup?step=preview&pair=${pair.id}`);
     },
@@ -307,10 +314,12 @@ function StartSyncDialog({ accountId, item, onClose }: { accountId: number; item
   return (
     <Dialog
       title={`Start syncing "${item.name}"?`}
-      onClose={onClose}
+      onClose={close}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={close} disabled={create.isPending}>
+            Cancel
+          </Button>
           <Button tone="primary" data-autofocus disabled={create.isPending} onClick={() => create.mutate()}>
             Continue
           </Button>
