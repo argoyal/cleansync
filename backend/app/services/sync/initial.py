@@ -1,6 +1,8 @@
 import asyncio
 import json
+import logging
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -17,6 +19,8 @@ from app.services.sync.engine import SyncEngine
 from app.services.sync.filters import refresh_pair_filters
 from app.services.sync.pairs import pair_local_dir, pair_remote
 
+log = logging.getLogger(__name__)
+
 CONFIRM_PHRASE = "I understand and want to start synchronization."
 _SAMPLE = 1000
 _KEYS = {"=": "same", "+": "only_local", "-": "only_remote", "*": "different", "!": "errors"}
@@ -26,6 +30,9 @@ class InitialSync:
     def __init__(self, engine: SyncEngine) -> None:
         self.engine = engine
         engine.initial = self
+        # Called with the pair id after a successful safe resync or first sync (Offload uses
+        # it to finish a Restore to Drive).
+        self.on_resync_done: list[Callable[[int], None]] = []
 
     # ---- files ----------------------------------------------------------------------------
     def _preview_file(self, pair_id: int) -> Path:
@@ -277,6 +284,11 @@ class InitialSync:
                 f"{copied} local versions saved to backups first"
             ),
         )
+        for listener in self.on_resync_done:
+            try:
+                listener(pair.id)
+            except Exception:
+                log.exception("a listener for finished resyncs failed (pair %s)", pair.id)
         return job.id
 
     async def run_initial(self, pair_id: int) -> int:

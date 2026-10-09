@@ -11,6 +11,7 @@ Afterwards one sync per pair, which is a safe resync because the filter changed 
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import secrets
@@ -19,9 +20,10 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.pathsafe import safe_join
+from app.core.pathsafe import UnsafePath, safe_join
 from app.models import Account, Offload, SyncJob, SyncPair
 from app.models.enums import AccountStatus, JobKind, JobState, Trigger
 from app.models.enums import OffloadState as S
@@ -31,7 +33,13 @@ from app.services.events.bus import record_event
 from app.services.files.scope import join_rel, load_scope, parent_rel, to_account_rel
 from app.services.files.status import load_overlay
 from app.services.offload import store
-from app.services.offload.plan import ALREADY_MSG, BUSY_MSG, PlanItem, plan_offload
+from app.services.offload.plan import (
+    ALREADY_MSG,
+    BUSY_MSG,
+    RECONNECT_MSG,
+    PlanItem,
+    plan_offload,
+)
 from app.services.queue import is_stopped, stop_message
 from app.services.rclone.commands import (
     UnsafeArgument,
@@ -46,6 +54,7 @@ from app.services.rclone.commands import (
 from app.services.rclone.errors import Failure, classify_failure
 from app.services.rclone.parse import CheckSummary, parse_check_combined
 from app.services.rclone.runner import RunResult
+from app.services.sync.engine import is_eligible
 from app.services.sync.filters import refresh_pair_filters
 from app.services.sync.pairs import pair_local_dir
 
@@ -60,6 +69,10 @@ STOPPED_BEFORE_DELETE = (
 )
 NOT_RUN_MSG = "DriveSync stopped before this item ran, so nothing was removed."
 EMPTY_FOLDERS_STAY = "Syncing stopped, so its empty folders may still be on Google Drive."
+WAITING_NOTE = (
+    "Goes back to Google Drive at the next sync. Syncing is off for this folder (or its "
+    "Google account needs reconnecting), so turn it on first."
+)
 
 
 class OffloadError(Exception):
@@ -159,6 +172,33 @@ def _listing_problem(files: list[DriveFile], name: str, is_dir: bool, pretend: b
             "check the trash afterwards. Nothing was removed."
         )
     return None
+
+
+def _md5(path: Path) -> str:
+    h = hashlib.md5(usedforsecurity=False)
+    with open(path, "rb") as fh:
+        while chunk := fh.read(1024 * 1024):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def local_copy_problems(local_parent: Path, manifest: list[dict]) -> list[str]:
+    """Files whose copy here is missing, or differs in size or MD5 from what Drive had."""
+    bad: list[str] = []
+    for entry in manifest:
+        rel = str(entry.get("path", ""))
+        try:
+            f = safe_join(local_parent, rel)
+        except UnsafePath:
+            bad.append(rel)
+            continue
+        if f.is_symlink() or not f.is_file() or f.stat().st_size != entry.get("size"):
+            bad.append(rel)
+            continue
+        md5 = entry.get("md5")
+        if isinstance(md5, str) and md5 and _md5(f) != md5:
+            bad.append(rel)
+    return bad
 
 
 def _write_text(path: Path, text: str) -> None:
@@ -623,3 +663,202 @@ class OffloadService:
             ),
         )
         self._invalidate(pair.id)
+
+    # ---- Restore to Drive (spec §7.2) --------------------------------------------------
+    async def restore(self, offload_id: int) -> Offload:
+        """Put an offloaded item back in sync. Its sync is then a safe resync (the filter
+        changed), which uploads the files again and never deletes anything."""
+        with self.sf() as db:
+            off = db.get(Offload, offload_id)
+            if off is None:
+                raise OffloadError("offload not found", 404)
+            if off.state == S.RESTORING:
+                raise OffloadError("This is already going back to Google Drive.")
+            if off.state not in (S.ACTIVE, S.ATTENTION) or off.id in self.emptying:
+                raise OffloadError("This offload is busy right now. Try again in a moment.")
+            queue = self.queue
+            if await is_stopped(queue):
+                raise OffloadError(stop_message(queue), 503)
+            pair = db.get(SyncPair, off.pair_id)
+            account = db.get(Account, pair.account_id)
+            if queue.is_busy(pair.id):
+                raise OffloadError(BUSY_MSG)
+            try:
+                held = queue.hold(pair.id)
+                held.__enter__()
+            except RuntimeError:  # a sync started a moment ago
+                raise OffloadError(BUSY_MSG) from None
+            try:
+                off.state = S.RESTORING
+                off.note = None if is_eligible(pair, account) else WAITING_NOTE
+                db.commit()
+                if refresh_pair_filters(db, self.layout, pair):
+                    pair.needs_resync = True
+                    db.commit()
+                self._invalidate(pair.id)
+            finally:
+                held.__exit__(None, None, None)
+            queue.request(pair.id, Trigger.OFFLOAD)
+            record_event(
+                db,
+                self.bus,
+                kind="offload_restore",
+                pair_id=pair.id,
+                account_id=account.id,
+                message=f"{pair.name}: putting {to_account_rel(pair, off.path)} back on Google Drive",
+            )
+            self._changed(account.id, pair.id)
+            return off
+
+    def resync_done(self, pair_id: int) -> None:
+        """A safe resync of the pair finished: every restore waiting on it is done."""
+        with self.sf() as db:
+            rows = db.scalars(
+                select(Offload).where(Offload.pair_id == pair_id, Offload.state == S.RESTORING)
+            ).all()
+            if not rows:
+                return
+            pair = db.get(SyncPair, pair_id)
+            for off in rows:
+                off.state, off.note = S.RESTORED, None
+            db.commit()
+            for off in rows:
+                record_event(
+                    db,
+                    self.bus,
+                    kind="offload_restored",
+                    pair_id=pair_id,
+                    account_id=pair.account_id,
+                    message=f"{pair.name}: {to_account_rel(pair, off.path)} is back on Google Drive",
+                )
+            account_id = pair.account_id
+        self.catalog.request_refresh(pair_id)
+        self._invalidate(pair_id)
+        self._changed(account_id, pair_id)
+
+    # ---- Empty from trash now (spec §7.2) -----------------------------------------------
+    async def empty_trash(self, offload_id: int) -> Offload:
+        """Delete for good, in the background, the files this offload put in Drive's trash."""
+        with self.sf() as db:
+            off = db.get(Offload, offload_id)
+            if off is None:
+                raise OffloadError("offload not found", 404)
+            if off.id in self.emptying:
+                raise OffloadError("DriveSync is already emptying these from the trash.")
+            if off.state != S.ACTIVE or not off.trash_verified:
+                raise OffloadError(
+                    "Only offloads that are done and checked in the trash can be emptied."
+                )
+            if off.trash_emptied:
+                raise OffloadError("These are already gone from Google Drive's trash.")
+            if await is_stopped(self.queue):
+                raise OffloadError(stop_message(self.queue), 503)
+            pair = db.get(SyncPair, off.pair_id)
+            account = db.get(Account, pair.account_id)
+            if account.status != AccountStatus.CONNECTED:
+                raise OffloadError(RECONNECT_MSG)
+            self.emptying.add(off.id)
+        self._spawn(self._empty(offload_id))
+        self._changed(account.id, pair.id)
+        return off
+
+    def _set_note(self, offload_id: int, note: str | None, emptied: bool | None = None) -> None:
+        with self.sf() as db:
+            off = db.get(Offload, offload_id)
+            if off is None:
+                return
+            off.note = note
+            if emptied is not None:
+                off.trash_emptied = emptied
+            db.commit()
+
+    async def _empty(self, offload_id: int) -> None:
+        account_id = pair_id = None
+        try:
+            with self.sf() as db:
+                off = db.get(Offload, offload_id)
+                pair = db.get(SyncPair, off.pair_id)
+                account = db.get(Account, pair.account_id)
+                account_id, pair_id = account.id, pair.id
+                remote, recorded = account.remote_name, set(off.trashed_ids or [])
+                pretend = self._pretend(account)
+                local_parent = safe_join(
+                    pair_local_dir(self.layout, account, pair), parent_rel(off.path)
+                )
+                shown_parent = to_account_rel(pair, parent_rel(off.path))
+                label = f"{pair.name}: {to_account_rel(pair, off.path)}"
+            manifest = await asyncio.to_thread(store.read_manifest, self.layout, offload_id)
+            if not manifest:
+                return self._set_note(
+                    offload_id,
+                    "DriveSync lost its list of these files, so nothing was deleted from the trash.",
+                )
+            # Re-check the copy here first (spec §7.2): it is about to be the only one.
+            changed = await asyncio.to_thread(local_copy_problems, local_parent, manifest)
+            if changed:
+                shown = [join_rel(shown_parent, c) for c in changed]
+                return self._set_note(
+                    offload_id,
+                    "The copy on this server is not the same as when it was offloaded "
+                    f"({names(shown)}). Nothing was deleted from the trash.",
+                )
+            if pretend:
+                return self._set_note(
+                    offload_id, "Pretend account: there is no trash to empty.", emptied=True
+                )
+            kept: list[str] = []
+            for entry in manifest:
+                fid = valid_id(entry.get("id"))
+                if fid is None or fid not in recorded:  # only IDs this offload recorded
+                    continue
+                if await is_stopped(self.queue):
+                    return self._set_note(
+                        offload_id,
+                        f"{stop_message(self.queue)} Emptying the trash stopped part-way.",
+                    )
+                size, md5 = entry.get("size"), entry.get("md5")
+                ok = (
+                    isinstance(size, int)
+                    and isinstance(md5, str)
+                    and bool(md5)
+                    # Deletes only if still in the trash with the size and MD5 offloaded.
+                    and await self.drive.delete_forever(remote, fid, size=size, md5=md5)
+                )
+                if not ok:
+                    kept.append(join_rel(shown_parent, str(entry.get("path", ""))))
+            if kept:
+                self._set_note(
+                    offload_id,
+                    "These were not deleted for good because they are no longer in Google "
+                    "Drive's trash, or changed there after the offload (someone took them out "
+                    f"or edited them): {names(kept)}.",
+                    emptied=False,
+                )
+            else:
+                self._set_note(offload_id, None, emptied=True)
+            with self.sf() as db:
+                record_event(
+                    db,
+                    self.bus,
+                    kind="offload_trash_emptied",
+                    pair_id=pair_id,
+                    account_id=account_id,
+                    message=f"{label}: deleted from Google Drive's trash",
+                )
+        except DriveAuthError:
+            if account_id is not None:
+                await self.accounts.mark_needs_reauth(account_id, AUTH_REASON)
+            self._set_note(offload_id, "The Google login needs to be reconnected. Try again then.")
+        except DriveApiError as e:
+            self._set_note(
+                offload_id, f"Google Drive refused: {e}. Some files may still be in the trash."
+            )
+        except Exception as e:  # never leave it "emptying" without a word
+            log.exception("emptying the trash of offload %s failed", offload_id)
+            self._set_note(
+                offload_id,
+                f"Something went wrong: {e}. Some files may still be in the trash.",
+            )
+        finally:
+            self.emptying.discard(offload_id)
+            self._changed(account_id, pair_id)
