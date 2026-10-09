@@ -26,7 +26,7 @@ describe("sync activity", () => {
     expect(await within(card).findByText("1,234 files")).toBeInTheDocument();
     await userEvent.click(within(card).getByRole("button", { name: "Sync now, My Drive" }));
     const photos = screen.getByRole("heading", { name: "Photos" }).closest("article") as HTMLElement;
-    const photosSwitch = within(photos).getByRole("switch", { name: "Sync, Photos" });
+    const photosSwitch = within(photos).getByRole("switch", { name: "Sync off, Photos" });
     expect(photosSwitch).toHaveAttribute("aria-checked", "false");
     expect(photosSwitch).toHaveTextContent("Sync off");
     await userEvent.click(photosSwitch);
@@ -59,13 +59,67 @@ describe("sync activity", () => {
     });
     renderApp(<ActivityPage />);
     const card = (await screen.findByRole("heading", { name: "My Drive" })).closest("article") as HTMLElement;
-    const sw = within(card).getByRole("switch", { name: "Sync, My Drive" });
+    const sw = within(card).getByRole("switch", { name: "Sync on, My Drive" });
     expect(sw).toHaveAttribute("aria-checked", "true");
     expect(sw).toHaveTextContent("Sync on");
     expect(within(card).queryByRole("button", { name: /^(Pause|Resume),/ })).not.toBeInTheDocument();
     await userEvent.click(sw);
     await waitFor(() => expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/api/sync-pairs/7/pause"]));
     expect(await screen.findByText("Sync is off. Nothing syncs until you turn it back on.")).toBeInTheDocument();
+  });
+
+  it("resuming shows 'Sync is on.' and a keyboard Space press toggles the switch", async () => {
+    const { calls } = mockApi({
+      "GET /api/sync-pairs": [{ ...PAIR, paused: true, status: "PAUSED" }],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/activity": [],
+      "POST /api/sync-pairs/7/resume": PAIR,
+    });
+    renderApp(<ActivityPage />);
+    const sw = await screen.findByRole("switch", { name: "Sync off, My Drive" });
+    sw.focus();
+    await userEvent.keyboard(" ");
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual(["/api/sync-pairs/7/resume"]));
+    expect(await screen.findByText("Sync is on.")).toBeInTheDocument();
+  });
+
+  it("keeps the switch as the server says when the call fails, and says so", async () => {
+    mockApi({
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/activity": [],
+      "POST /api/sync-pairs/7/pause": json(500, { detail: "Something broke" }),
+    });
+    renderApp(<ActivityPage />);
+    const sw = await screen.findByRole("switch", { name: "Sync on, My Drive" });
+    await userEvent.click(sw);
+    expect(await screen.findByText(/Something broke|went wrong|failed/i)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Sync on, My Drive" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "Sync on, My Drive" })).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("keeps focus on the switch while the call is running and disables Sync now", async () => {
+    let release: (v: unknown) => void = () => {};
+    const gate = new Promise((r) => (release = r));
+    mockApi({
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/activity": [],
+      "POST /api/sync-pairs/7/pause": async () => {
+        await gate;
+        return { ...PAIR, paused: true };
+      },
+    });
+    renderApp(<ActivityPage />);
+    const sw = await screen.findByRole("switch", { name: "Sync on, My Drive" });
+    sw.focus();
+    await userEvent.click(sw);
+    await waitFor(() => expect(sw).toHaveAttribute("aria-disabled", "true"));
+    expect(sw).toHaveFocus();
+    expect(sw).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Sync now, My Drive" })).toBeDisabled();
+    release(null);
+    await waitFor(() => expect(sw).not.toHaveAttribute("aria-disabled", "true"));
   });
 
   it("calls a pair with syncing off 'Sync off', not 'Paused'", async () => {

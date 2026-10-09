@@ -21,18 +21,21 @@ export function usePairAction(pairId: number) {
 }
 
 /** Spec §6.9: one switch per pair. Off is the existing pause; on is resume. */
-export function SyncSwitch({ pair }: { pair: Pair }) {
-  const act = usePairAction(pair.id);
+export function SyncSwitch({ pair, act: shared }: { pair: Pair; act?: ReturnType<typeof usePairAction> }) {
+  const own = usePairAction(pair.id);
+  const act = shared ?? own;
   const on = !pair.paused;
+  const pending = act.isPending;
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
-      aria-label={`Sync, ${pair.name}`}
-      disabled={act.isPending}
-      className="inline-flex h-9 items-center gap-2 rounded-ctl px-3 text-body font-medium hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-50"
+      aria-label={`${on ? "Sync on" : "Sync off"}, ${pair.name}`}
+      aria-disabled={pending}
+      className="inline-flex h-9 items-center gap-2 rounded-ctl px-3 text-body font-medium hover:bg-sunken aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
       onClick={() =>
+        !pending &&
         act.mutate(
           on
             ? { action: "pause", done: "Sync is off. Nothing syncs until you turn it back on." }
@@ -63,7 +66,7 @@ export function PairActions({ pair, details = true }: { pair: Pair; details?: bo
           Sync now
         </Button>
       )}
-      <SyncSwitch pair={pair} />
+      <SyncSwitch pair={pair} act={act} />
       {pair.attention_reason === "BLOCKED" && (
         <Link to={`/activity/${pair.id}/blocked`} aria-label={`Review blocked sync, ${pair.name}`} className="inline-flex h-9 items-center rounded-ctl bg-warn px-3.5 font-medium text-white">
           Review blocked sync
