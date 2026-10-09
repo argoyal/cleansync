@@ -97,6 +97,8 @@ export function useLiveEvents(): void {
       source.addEventListener("account", () => invalidate(["accounts", "status", "setup", "pairs"]));
       source.addEventListener("files", () => invalidate(FILE_KEYS));
       source.addEventListener("catalog", () => invalidate(FILE_KEYS));
+      // pair_id may be null (a whole batch finished): refresh by key, never by pair.
+      source.addEventListener("offload", () => invalidate(["offloads", "offload-batch", "recovery", "status", ...FILE_KEYS]));
     };
 
     connect();

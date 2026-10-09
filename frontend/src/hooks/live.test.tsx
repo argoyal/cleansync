@@ -40,6 +40,15 @@ describe("live updates", () => {
     expect(keys(spy)).toEqual(expect.arrayContaining(["accounts", "status"]));
   });
 
+  it("refreshes offloads and files on an offload event, also one without a pair", () => {
+    const { spy, source } = setup();
+    act(() => source.emit("offload", { account_id: 1, pair_id: null }));
+    expect(keys(spy)).toEqual(expect.arrayContaining(["offloads", "offload-batch", "recovery", "browse", "storage", "status"]));
+    spy.mockClear();
+    act(() => source.emit("offload", { account_id: 1, pair_id: 7 }));
+    expect(keys(spy)).toContain("offloads");
+  });
+
   it("keeps the latest transfer progress per pair and clears it when the job ends", () => {
     const { source } = setup();
     const p = { pair_id: 3, job_id: 9, bytes: 50, total_bytes: 100, speed: 10, eta: 5, transferring: [{ name: "a.bin" }] };

@@ -1,0 +1,131 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+
+import { api, friendlyError } from "../api/client";
+import { useOffloadBatch } from "../api/queries";
+import type { OffloadBatch, OffloadBatchItem, OffloadPreview } from "../api/types";
+import { formatBytes } from "../lib/format";
+import { Button, Dialog, Notice } from "./ui";
+
+const NATIVE_NOTE = "Stays on Drive — not a file DriveSync can keep a copy of yet.";
+const RESULT: Record<OffloadBatchItem["state"], string> = {
+  waiting: "Waiting",
+  running: "Working on it",
+  done: "Done",
+  attention: "Needs a look",
+  failed: "Not offloaded",
+};
+
+// What to refetch once an offload ran (kept here, not imported from FileActions, which imports this file).
+const REFRESH = ["browse", "recent", "starred", "search", "storage", "status", "offloads", "recovery"];
+const nameOf = (path: string) => path.split("/").pop() || path;
+const files = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
+
+/** Spec §7.2a: one preview and one confirm for any number of items, then each item's result. */
+export function OffloadDialog({ accountId, paths, onClose }: { accountId: number; paths: string[]; onClose: () => void }) {
+  const qc = useQueryClient();
+  const preview = useQuery({
+    queryKey: ["offload-preview", accountId, paths],
+    queryFn: () => api<OffloadPreview>("/api/offloads/preview", { method: "POST", body: { account_id: accountId, paths } }),
+    gcTime: 0,
+  });
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const batch = useOffloadBatch(batchId);
+  const ready = (preview.data?.items ?? []).filter((i) => !i.blocked);
+  const start = useMutation({
+    mutationFn: () => api<OffloadBatch>("/api/offloads", { method: "POST", body: { account_id: accountId, paths: ready.map((i) => i.path) } }),
+    onSuccess: (b) => {
+      qc.setQueryData(["offload-batch", b.id], b);
+      setBatchId(b.id);
+    },
+  });
+  const close = () => {
+    if (batchId) REFRESH.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+    onClose();
+  };
+  const title = paths.length === 1 ? `Offload "${nameOf(paths[0])}"?` : `Offload ${paths.length} items?`;
+
+  if (batchId) {
+    const b = batch.data;
+    return (
+      <Dialog
+        title={title}
+        onClose={close}
+        wide
+        footer={
+          <Button tone="primary" data-autofocus onClick={close}>
+            {b?.done ? "Close" : "Hide"}
+          </Button>
+        }
+      >
+        <p aria-live="polite">{b?.done ? "Finished." : "Working on it. You can close this; the work goes on."}</p>
+        <ul className="max-h-80 space-y-2 overflow-y-auto">
+          {(b?.items ?? []).map((i) => (
+            <li key={i.path} className="rounded-ctl border border-line px-3 py-2">
+              <p className="break-all font-medium">{i.path}</p>
+              <p className={`text-table ${i.state === "failed" || i.state === "attention" ? "text-err" : "text-ink-2"}`}>
+                {RESULT[i.state]}
+                {i.message ? `: ${i.message}` : ""}
+              </p>
+            </li>
+          ))}
+        </ul>
+        {batch.isError && <Notice tone="err">{friendlyError(batch.error)}</Notice>}
+      </Dialog>
+    );
+  }
+
+  const p = preview.data;
+  return (
+    <Dialog
+      title={title}
+      onClose={close}
+      wide
+      footer={
+        <>
+          <Button onClick={close} data-autofocus>
+            Cancel
+          </Button>
+          <Button tone="primary" disabled={!p || ready.length === 0 || !!p.stopped || start.isPending} onClick={() => start.mutate()}>
+            Offload
+          </Button>
+        </>
+      }
+    >
+      <p>
+        Offloaded files stay on this server and are removed from Google Drive, into Drive's trash. They stop syncing. You can put
+        them back any time with Restore to Drive.
+      </p>
+      {preview.isPending && <p className="text-ink-2">Checking what can be offloaded…</p>}
+      {preview.isError && <Notice tone="err">{friendlyError(preview.error)}</Notice>}
+      {p?.stopped && <Notice tone="err">{p.stopped}</Notice>}
+      {p && (
+        <>
+          <p className="font-semibold tabular">
+            {files(p.total_files)}, {formatBytes(p.total_bytes)} freed on Google Drive once Drive's trash is emptied
+          </p>
+          <ul className="max-h-80 space-y-2 overflow-y-auto">
+            {p.items.map((i) => (
+              <li key={i.path} className="rounded-ctl border border-line px-3 py-2">
+                <p className="break-all font-medium">{i.path}</p>
+                {i.blocked ? (
+                  <p className="text-table text-err">{i.blocked}</p>
+                ) : (
+                  <p className="text-table tabular text-ink-2">
+                    {files(i.file_count)}, {formatBytes(i.total_bytes)}
+                  </p>
+                )}
+                {i.stays_on_drive.length > 0 && (
+                  <p className="mt-1 text-table text-ink-2">
+                    {NATIVE_NOTE} {i.stays_on_drive.map(nameOf).join(", ")}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {start.isError && <Notice tone="err">{friendlyError(start.error)}</Notice>}
+    </Dialog>
+  );
+}

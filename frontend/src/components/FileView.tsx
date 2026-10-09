@@ -11,8 +11,10 @@ type Props = {
   items: FileItem[];
   accountId: number;
   view: "grid" | "list";
-  selected: string | null;
-  onSelect: (path: string | null) => void;
+  /** Paths of the selected items. */
+  selected: string[];
+  /** "only" selects just this item, "toggle" adds or removes it (Ctrl/⌘), "range" extends from the last pick (Shift). */
+  onSelect: (path: string, how: "only" | "toggle" | "range") => void;
   onOpen: (item: FileItem) => void;
   onMenu: (item: FileItem, x: number, y: number) => void;
   showFolder?: boolean;
@@ -118,7 +120,7 @@ export function FileView(p: Props) {
         e.preventDefault();
         els[to]?.focus();
         const target = ordered[to];
-        if (target) p.onSelect(target.path);
+        if (target) p.onSelect(target.path, e.shiftKey ? "range" : "only");
         return;
       }
       if (e.key === "Enter") {
@@ -126,7 +128,7 @@ export function FileView(p: Props) {
         p.onOpen(item);
       } else if (e.key === " ") {
         e.preventDefault();
-        p.onSelect(item.path);
+        p.onSelect(item.path, e.ctrlKey || e.metaKey ? "toggle" : "only");
       } else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
         e.preventDefault();
@@ -136,15 +138,17 @@ export function FileView(p: Props) {
   });
 
   const mouse = (item: FileItem) => ({
-    onClick: () => p.onSelect(item.path),
+    onClick: (e: React.MouseEvent) => p.onSelect(item.path, e.ctrlKey || e.metaKey ? "toggle" : e.shiftKey ? "range" : "only"),
     onDoubleClick: () => p.onOpen(item),
     onContextMenu: (e: React.MouseEvent) => {
       e.preventDefault();
-      p.onSelect(item.path);
+      // Right-click inside the selection acts on all of it; elsewhere it selects that one item.
+      if (!p.selected.includes(item.path)) p.onSelect(item.path, "only");
       p.onMenu(item, e.clientX, e.clientY);
     },
   });
 
+  const isSelected = (item: FileItem) => p.selected.includes(item.path);
   const index = new Map(ordered.map((i, n) => [i, n]));
   const describe = (item: FileItem) => `${uid}-${index.get(item)}`;
   const status = (item: FileItem) => (
@@ -158,7 +162,7 @@ export function FileView(p: Props) {
     "data-path": item.path,
     "aria-label": item.name,
     "aria-describedby": describe(item),
-    "aria-pressed": p.selected === item.path,
+    "aria-pressed": isSelected(item),
   });
 
   if (p.view === "list") {
@@ -179,7 +183,7 @@ export function FileView(p: Props) {
               <tr
                 key={keyOf(item)}
                 className={`cursor-default border-b border-line/60 hover:bg-sunken focus-within:bg-sunken ${
-                  p.selected === item.path ? "bg-accent-soft" : ""
+                  isSelected(item) ? "bg-accent-soft" : ""
                 }`}
                 {...mouse(item)}
               >
@@ -222,7 +226,7 @@ export function FileView(p: Props) {
             {folders.map((item) => (
               <div key={keyOf(item)} className="relative">
                 <div
-                  className={`flex h-12 items-center gap-3 pl-4 pr-11 ${frame(p.selected === item.path)}`}
+                  className={`flex h-12 items-center gap-3 pl-4 pr-11 ${frame(isSelected(item))}`}
                   {...aria(item)}
                   {...nav(item)}
                   {...mouse(item)}
@@ -244,7 +248,7 @@ export function FileView(p: Props) {
           <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-3">
             {files.map((item) => (
               <div key={keyOf(item)} className="relative [contain-intrinsic-size:auto_240px] [content-visibility:auto]">
-                <div className={`overflow-hidden ${frame(p.selected === item.path)}`} {...aria(item)} {...nav(item)} {...mouse(item)}>
+                <div className={`overflow-hidden ${frame(isSelected(item))}`} {...aria(item)} {...nav(item)} {...mouse(item)}>
                   <div className="flex items-center gap-2 py-1.5 pl-3 pr-11">
                     <Icon name={iconFor(item)} className="text-[18px] text-ink-2" />
                     <span className="min-w-0 flex-1 truncate text-table font-medium">{item.name}</span>

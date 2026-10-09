@@ -51,7 +51,7 @@ export type Status = {
   sync_stopped: string | null;
 };
 
-/** Per-item status in the file browser ("offloaded" arrives in a later version). */
+/** Per-item status in the file browser. */
 export type ItemStatus =
   | "synced"
   | "syncing"
@@ -226,3 +226,51 @@ export type Progress = {
 };
 
 export type FolderEntry = { name: string; path: string };
+
+export type OffloadState = "PENDING" | "DELETING" | "VERIFYING" | "ACTIVE" | "ATTENTION" | "RESTORING" | "RESTORED";
+export type Offload = {
+  id: number;
+  pair_id: number;
+  pair_name: string;
+  account_id: number;
+  /** Account path of the offloaded file or folder. */
+  path: string;
+  is_dir: boolean;
+  file_count: number;
+  total_bytes: number;
+  state: OffloadState;
+  trash_verified: boolean;
+  trash_emptied: boolean;
+  created_at: string;
+  updated_at: string;
+  note: string | null;
+  /** Being deleted from Google Drive's trash right now. */
+  busy: boolean;
+};
+export type OffloadPreviewItem = {
+  path: string;
+  pair_id: number | null;
+  pair_name: string | null;
+  is_dir: boolean;
+  file_count: number;
+  total_bytes: number;
+  /** Google Docs, Sheets and the like inside it: skipped, they stay on Drive. */
+  stays_on_drive: string[];
+  /** Why this item can't be offloaded, or null. */
+  blocked: string | null;
+};
+export type OffloadPreview = {
+  items: OffloadPreviewItem[];
+  /** Totals of the items that can go. */
+  total_files: number;
+  total_bytes: number;
+  /** Why nothing can start right now (syncing stopped), or null. */
+  stopped: string | null;
+};
+export type OffloadBatchItem = {
+  path: string;
+  state: "waiting" | "running" | "done" | "attention" | "failed";
+  message: string | null;
+  offload_id: number | null;
+};
+export type OffloadBatch = { id: string; account_id: number; done: boolean; items: OffloadBatchItem[] };

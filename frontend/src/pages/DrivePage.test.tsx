@@ -549,3 +549,161 @@ describe("Adding folders to sync", () => {
     await waitFor(() => expect(screen.queryByRole("link", { name: "Sync a Drive folder…" })).not.toBeInTheDocument());
   });
 });
+
+describe("Several items, offload and restore", () => {
+  const PREVIEW = {
+    items: [
+      { path: "Work", pair_id: 7, pair_name: "My Drive", is_dir: true, file_count: 12, total_bytes: 3 * 1024 ** 2, stays_on_drive: ["Work/Plan"], blocked: null },
+      { path: "photo.jpg", pair_id: 7, pair_name: "My Drive", is_dir: false, file_count: 0, total_bytes: 0, stays_on_drive: [], blocked: "This has an open conflict. Resolve it in Conflicts first." },
+    ],
+    total_files: 12,
+    total_bytes: 3 * 1024 ** 2,
+    stopped: null,
+  };
+  const OFFLOAD = {
+    id: 3, pair_id: 7, pair_name: "My Drive", account_id: 1, path: "Work/Old", is_dir: true, file_count: 2, total_bytes: 5, state: "ACTIVE",
+    trash_verified: true, trash_emptied: false, created_at: "2026-10-09T08:00:00Z", updated_at: "2026-10-09T08:00:00Z", note: null, busy: false,
+  };
+
+  it("selects several items with Ctrl-click and offloads them from the right-click menu", async () => {
+    let polls = 0;
+    const { calls } = setup("/drive", {
+      "POST /api/offloads/preview": PREVIEW,
+      "POST /api/offloads": { id: "b1", account_id: 1, done: false, items: [{ path: "Work", state: "waiting", message: null, offload_id: null }] },
+      "GET /api/offloads/batches/b1": () => ({
+        id: "b1", account_id: 1, done: ++polls > 1,
+        items: [{ path: "Work", state: polls > 1 ? "done" : "running", message: polls > 1 ? "Removed from Google Drive (it is in Drive's trash). Kept on this server." : null, offload_id: 3 }],
+      }),
+    });
+    const work = await screen.findByRole("button", { name: "Work" });
+    fireEvent.click(work);
+    fireEvent.click(screen.getByRole("button", { name: "photo.jpg" }), { ctrlKey: true });
+    expect(work).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "photo.jpg" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.contextMenu(work);
+    const menu = screen.getByRole("menu", { name: "Actions for 2 items" });
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Offload…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Offload 2 items?" });
+    expect(await within(dialog).findByText(/12 files, 3.0 MB freed on Google Drive/)).toBeInTheDocument();
+    expect(within(dialog).getByText("This has an open conflict. Resolve it in Conflicts first.")).toBeInTheDocument();
+    expect(within(dialog).getByText(/Stays on Drive — not a file DriveSync can keep a copy of yet\. Plan/)).toBeInTheDocument();
+    expect(calls.find((c) => c.path === "/api/offloads/preview")?.body).toEqual({ account_id: 1, paths: ["Work", "photo.jpg"] });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Offload" }));
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/offloads")?.body).toEqual({ account_id: 1, paths: ["Work"] });
+    expect(await within(dialog).findByText(/Removed from Google Drive/, {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(within(dialog).getByText("Finished.")).toBeInTheDocument();
+  });
+
+  it("Ctrl-click on a selected item takes it out of the selection", async () => {
+    setup();
+    const work = await screen.findByRole("button", { name: "Work" });
+    fireEvent.click(work);
+    fireEvent.click(screen.getByRole("button", { name: "photo.jpg" }), { ctrlKey: true });
+    fireEvent.click(work, { metaKey: true });
+    expect(work).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "photo.jpg" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Shift-click selects a range", async () => {
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Budget.xlsx" }), { shiftKey: true });
+    for (const name of ["Work", "photo.jpg", "Budget.xlsx"]) {
+      expect(screen.getByRole("button", { name })).toHaveAttribute("aria-pressed", "true");
+    }
+    expect(screen.getByRole("button", { name: "Plan" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("right-click outside the selection acts on that one item only", async () => {
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "photo.jpg" }), { ctrlKey: true });
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Budget.xlsx" }));
+    expect(screen.getByRole("menu", { name: "Actions for Budget.xlsx" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Work" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("the Delete key deletes every selected item", async () => {
+    setup();
+    const work = await screen.findByRole("button", { name: "Work" });
+    fireEvent.click(work);
+    fireEvent.click(screen.getByRole("button", { name: "photo.jpg" }), { ctrlKey: true });
+    work.focus();
+    await userEvent.keyboard("{Delete}");
+    expect(screen.getByRole("dialog", { name: "Delete 2 items?" })).toBeInTheDocument();
+  });
+
+  it("says why nothing can be offloaded and keeps the button off", async () => {
+    setup("/drive", { "POST /api/offloads/preview": { ...PREVIEW, items: [PREVIEW.items[1]], total_files: 0, total_bytes: 0 } });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "photo.jpg" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Offload…" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Offload "photo.jpg"?' });
+    await within(dialog).findByText(/open conflict/);
+    expect(within(dialog).getByRole("button", { name: "Offload" })).toBeDisabled();
+  });
+
+  it("shows why syncing is stopped and keeps the Offload button off", async () => {
+    setup("/drive", { "POST /api/offloads/preview": { ...PREVIEW, stopped: "Syncing is stopped: the storage disk is missing." } });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Work" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Offload…" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Offload "Work"?' });
+    await within(dialog).findByText("Syncing is stopped: the storage disk is missing.");
+    expect(within(dialog).getByRole("button", { name: "Offload" })).toBeDisabled();
+  });
+
+  it("shows the server's message when an offload is refused", async () => {
+    setup("/drive", {
+      "POST /api/offloads/preview": { ...PREVIEW, items: [PREVIEW.items[0]] },
+      "POST /api/offloads": json(503, { detail: "Syncing is stopped: the storage disk is missing." }),
+    });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Work" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Offload…" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Offload "Work"?' });
+    await within(dialog).findByText(/12 files, 3.0 MB freed/);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Offload" }));
+    expect(await within(dialog).findByText(/Syncing is stopped: the storage disk is missing\./)).toBeInTheDocument();
+  });
+
+  it("doesn't offer Offload for Google files, items only on Drive or outside synced folders", async () => {
+    setup();
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Plan" }));
+    expect(screen.queryByRole("menuitem", { name: "Offload…" })).not.toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    fireEvent.contextMenu(screen.getByRole("button", { name: "incoming.pdf" }));
+    expect(screen.queryByRole("menuitem", { name: "Offload…" })).not.toBeInTheDocument();
+  });
+
+  it("offers Restore to Drive on an offloaded item, for the whole offload", async () => {
+    const { calls } = setup("/drive?path=Work", {
+      "GET /api/browse": browse("Work", [item({ name: "a.txt", path: "Work/Old/a.txt", status: "offloaded" })]),
+      "GET /api/offloads": [OFFLOAD],
+      "POST /api/offloads/3/restore": { ...OFFLOAD, state: "RESTORING" },
+    });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "a.txt" }));
+    expect(screen.queryByRole("menuitem", { name: "Offload…" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Restore to Drive" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("menuitem", { name: "Restore to Drive" }));
+    const dialog = screen.getByRole("dialog", { name: "Restore to Drive?" });
+    expect(within(dialog).getByText(/Work\/Old/)).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(
+      "If Google Drive now has a newer file with the same name, Drive's version is kept and yours is saved in Recovery.",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Restore to Drive" }));
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/offloads/3/restore")).toBe(true));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("shows the server's message when a restore is refused", async () => {
+    setup("/drive?path=Work", {
+      "GET /api/browse": browse("Work", [item({ name: "Old", path: "Work/Old", is_dir: true, status: "offloaded" })]),
+      "GET /api/offloads": [OFFLOAD],
+      "POST /api/offloads/3/restore": json(409, { detail: "This synced folder is busy. Try again in a moment." }),
+    });
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Old" }));
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Restore to Drive" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("menuitem", { name: "Restore to Drive" }));
+    const dialog = screen.getByRole("dialog", { name: "Restore to Drive?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Restore to Drive" }));
+    expect(await within(dialog).findByText("This synced folder is busy. Try again in a moment.")).toBeInTheDocument();
+  });
+});

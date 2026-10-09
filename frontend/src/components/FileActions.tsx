@@ -3,10 +3,11 @@ import { type FormEvent, type ReactNode, useCallback, useRef, useState } from "r
 import { useNavigate } from "react-router-dom";
 
 import { ApiError, api, friendlyError } from "../api/client";
-import { fileUrl, useBrowse, usePairs, zipUrl } from "../api/queries";
-import type { FileItem, OpOut, Pair } from "../api/types";
+import { fileUrl, useBrowse, useOffloads, usePairs, zipUrl } from "../api/queries";
+import type { FileItem, Offload, OpOut, Pair } from "../api/types";
 import { isOffice, isWaitingToSync, NOT_SYNCED_MOVE_NOTE, ONE_WAY_NOTE, opensInBrowser, parentOf } from "../lib/files";
 import { FolderPicker } from "./FolderPicker";
+import { OffloadDialog } from "./OffloadDialog";
 import { useToast } from "./Toasts";
 import { Button, Dialog, Field, inputClass, type MenuItem, Notice } from "./ui";
 
@@ -53,6 +54,8 @@ type DialogState =
   | { kind: "move"; items: FileItem[] }
   | { kind: "delete"; items: FileItem[] }
   | { kind: "startSync"; item: FileItem }
+  | { kind: "offload"; paths: string[] }
+  | { kind: "restore"; offload: Offload }
   | null;
 
 /** Open, download and the right-click actions for files in one account, plus their dialogs. */
@@ -63,6 +66,10 @@ export function useFileActions(accountId: number | null) {
 
   const syncNow = useSyncNow();
   const oneWay = useOneWay();
+  const offloads = useOffloads(accountId).data ?? [];
+  /** The offload an offloaded item belongs to: the item itself, or a folder above it. */
+  const offloadOf = (item: FileItem) =>
+    offloads.find((o) => item.path === o.path || (o.is_dir && item.path.startsWith(`${o.path}/`)));
 
   const download = (item: FileItem) => {
     if (accountId === null) return;
@@ -117,6 +124,17 @@ export function useFileActions(accountId: number | null) {
     if (item.is_dir && item.local && item.status === "unsynced") {
       items.push({ label: "Start syncing this folder", icon: "cloud_sync", onSelect: () => setDialog({ kind: "startSync", item }) });
     }
+    if (item.status === "offloaded") {
+      const off = offloadOf(item);
+      items.push({
+        label: "Restore to Drive",
+        icon: "cloud_sync",
+        disabled: !off,
+        onSelect: () => off && setDialog({ kind: "restore", offload: off }),
+      });
+    } else if (local && item.pair_id !== null && !item.native && !oneWay(item)) {
+      items.push({ label: "Offload…", icon: "inventory_2", onSelect: () => setDialog({ kind: "offload", paths: [item.path] }) });
+    }
     items.push({ separator: true });
     items.push({ label: "Delete", icon: "delete", danger: true, onSelect: () => setDialog({ kind: "delete", items: [item] }), disabled: !changeable });
     return items;
@@ -128,6 +146,8 @@ export function useFileActions(accountId: number | null) {
   if (accountId !== null && dialog?.kind === "move") dialogs = <MoveDialog accountId={accountId} items={dialog.items} onClose={close} />;
   if (accountId !== null && dialog?.kind === "delete") dialogs = <DeleteDialog accountId={accountId} items={dialog.items} onClose={close} />;
   if (accountId !== null && dialog?.kind === "startSync") dialogs = <StartSyncDialog accountId={accountId} item={dialog.item} onClose={close} />;
+  if (accountId !== null && dialog?.kind === "offload") dialogs = <OffloadDialog accountId={accountId} paths={dialog.paths} onClose={close} />;
+  if (dialog?.kind === "restore") dialogs = <RestoreDialog offload={dialog.offload} onClose={close} />;
 
   const askDelete = (items: FileItem[]) => {
     if (items.some(oneWay)) {
@@ -137,7 +157,21 @@ export function useFileActions(accountId: number | null) {
     setDialog({ kind: "delete", items });
   };
 
-  return { open, download, openInGoogle, menuFor, dialogs, askDelete };
+  /** The right-click menu for several selected items at once. */
+  const menuForMany = (list: FileItem[]): MenuItem[] => {
+    const local = list.filter((i) => i.local);
+    const changeable = local.length === list.length && !list.some(oneWay);
+    // The preview says, item by item, what can't go and why; only offer it when something might.
+    const offloadable = list.some((i) => i.local && i.pair_id !== null && !i.native && !oneWay(i) && i.status !== "offloaded");
+    return [
+      { label: "Offload…", icon: "inventory_2", onSelect: () => setDialog({ kind: "offload", paths: list.map((i) => i.path) }), disabled: !offloadable },
+      { label: "Move", icon: "drive_file_move", onSelect: () => setDialog({ kind: "move", items: list }), disabled: !changeable },
+      { separator: true },
+      { label: "Delete", icon: "delete", danger: true, onSelect: () => askDelete(local), disabled: local.length === 0 },
+    ];
+  };
+
+  return { open, download, openInGoogle, menuFor, menuForMany, dialogs, askDelete };
 }
 
 function useFileOp(path: string, done: string | ((out: OpOut) => string), onClose: () => void) {
@@ -332,6 +366,51 @@ function StartSyncDialog({ accountId, item, onClose }: { accountId: number; item
       </p>
       <p className="text-ink-2">Nothing moves yet: next you see what is on each side and type a confirmation.</p>
       {create.isError && <Notice tone="err">{friendlyError(create.error)}</Notice>}
+    </Dialog>
+  );
+}
+
+/** Put an offload back in sync: the next sync uploads it to Google Drive. */
+export function useRestoreOffload({ toastErrors = true }: { toastErrors?: boolean } = {}) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: (id: number) => api<Offload>(`/api/offloads/${id}/restore`, { method: "POST" }),
+    onSuccess: (o) => {
+      [...FILE_QUERY_KEYS, "offloads", "recovery"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+      toast(o.note ?? "Going back to Google Drive with the next sync.");
+    },
+    onError: (e) => {
+      if (toastErrors) toast(friendlyError(e), { tone: "error" });
+    },
+  });
+}
+
+export const RESTORE_NEWER_NOTE =
+  "If Google Drive now has a newer file with the same name, Drive's version is kept and yours is saved in Recovery.";
+
+export function RestoreDialog({ offload, onClose }: { offload: Offload; onClose: () => void }) {
+  // The dialog shows a refusal itself, so no second copy as a toast.
+  const restore = useRestoreOffload({ toastErrors: false });
+  return (
+    <Dialog
+      title="Restore to Drive?"
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button tone="primary" data-autofocus disabled={restore.isPending} onClick={() => restore.mutate(offload.id, { onSuccess: onClose })}>
+            Restore to Drive
+          </Button>
+        </>
+      }
+    >
+      <p>
+        <strong className="break-all">{offload.path}</strong> ({offload.file_count} {offload.file_count === 1 ? "file" : "files"})
+        syncs again: the next sync uploads it to Google Drive. Nothing on this server changes.
+      </p>
+      <p className="text-ink-2">{RESTORE_NEWER_NOTE}</p>
+      {restore.isError && <Notice tone="err">{friendlyError(restore.error)}</Notice>}
     </Dialog>
   );
 }

@@ -47,8 +47,26 @@ export function ViewToggle({ view, onChange }: { view: "grid" | "list"; onChange
 export function FileArea({ items, showFolder = false, view }: { items: FileItem[]; showFolder?: boolean; view: "grid" | "list" }) {
   const { accountId } = useCurrentAccount();
   const actions = useFileActions(accountId);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  // Where a Shift-click range starts: the last item picked on its own or with Ctrl/⌘.
+  const anchor = useRef<string | null>(null);
   const [menu, setMenu] = useState<{ item: FileItem; x: number; y: number; opener: HTMLElement | null } | null>(null);
+  const ordered = [...items.filter((i) => i.is_dir), ...items.filter((i) => !i.is_dir)].map((i) => i.path);
+  const select = (path: string, how: "only" | "toggle" | "range") => {
+    if (how === "toggle") {
+      setSelected((s) => (s.includes(path) ? s.filter((x) => x !== path) : [...s, path]));
+      anchor.current = path;
+    } else if (how === "range" && anchor.current !== null && ordered.includes(anchor.current)) {
+      const [a, b] = [ordered.indexOf(anchor.current), ordered.indexOf(path)].sort((x, y) => x - y);
+      setSelected(ordered.slice(a, b + 1));
+    } else {
+      setSelected([path]);
+      anchor.current = path;
+    }
+  };
+  /** What an action on this item covers: the whole selection when the item is part of it. */
+  const chosen = (item: FileItem) =>
+    selected.length > 1 && selected.includes(item.path) ? items.filter((i) => selected.includes(i.path)) : [item];
   // The Delete key listener is added once and reads the latest values from here.
   const latest = useRef({ items, selected, askDelete: actions.askDelete });
   latest.current = { items, selected, askDelete: actions.askDelete };
@@ -58,14 +76,17 @@ export function FileArea({ items, showFolder = false, view }: { items: FileItem[
       const target = e.target as HTMLElement;
       if (target.closest("input, textarea, select, [contenteditable], [role=dialog], [role=menu]")) return;
       const { items, selected, askDelete } = latest.current;
-      const path = target.closest<HTMLElement>("[data-path]")?.dataset.path ?? selected;
-      const item = items.find((i) => i.path === path);
-      if (item?.local) askDelete([item]);
+      const focused = target.closest<HTMLElement>("[data-path]")?.dataset.path;
+      // The focused item and, when it is part of the selection, the rest of the selection too.
+      const paths = focused === undefined ? selected : selected.includes(focused) ? selected : [focused];
+      const chosen = items.filter((i) => paths.includes(i.path) && i.local);
+      if (chosen.length > 0) askDelete(chosen);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   if (accountId === null) return null;
+  const menuTargets = menu ? chosen(menu.item) : [];
   return (
     <>
       <FileView
@@ -73,7 +94,7 @@ export function FileArea({ items, showFolder = false, view }: { items: FileItem[
         accountId={accountId}
         view={view}
         selected={selected}
-        onSelect={setSelected}
+        onSelect={select}
         onOpen={actions.open}
         onMenu={(item, x, y) => setMenu({ item, x, y, opener: document.activeElement as HTMLElement | null })}
         showFolder={showFolder}
@@ -81,8 +102,8 @@ export function FileArea({ items, showFolder = false, view }: { items: FileItem[
       {menu && (
         <Menu
           key={`${menu.item.path}:${menu.x}:${menu.y}`}
-          label={`Actions for ${menu.item.name}`}
-          items={actions.menuFor(menu.item)}
+          label={menuTargets.length > 1 ? `Actions for ${menuTargets.length} items` : `Actions for ${menu.item.name}`}
+          items={menuTargets.length > 1 ? actions.menuForMany(menuTargets) : actions.menuFor(menu.item)}
           x={menu.x}
           y={menu.y}
           opener={menu.opener}
@@ -200,7 +221,7 @@ export function DrivePage() {
               : "Use New to add a folder or upload files."}
         </Empty>
       )}
-      {browse.data && browse.data.items.length > 0 && <FileArea items={browse.data.items} view={view} />}
+      {browse.data && browse.data.items.length > 0 && <FileArea key={path} items={browse.data.items} view={view} />}
     </div>
   );
 }

@@ -12,6 +12,8 @@ import type {
   FolderEntry,
   Job,
   Me,
+  Offload,
+  OffloadBatch,
   Pair,
   Planned,
   Preview,
@@ -144,3 +146,21 @@ export const fileUrl = (accountId: number, path: string, download = false) =>
 export const zipUrl = (accountId: number, path: string) => `/api/files/zip${query({ account_id: accountId, path })}`;
 export const thumbUrl = (accountId: number, item: FileItem) =>
   `/api/thumbs/${accountId}/${encodePath(item.path)}${query({ v: item.mtime ?? "" })}`;
+
+const OFFLOAD_MOVING = ["PENDING", "DELETING", "VERIFYING", "RESTORING"];
+export const useOffloads = (accountId: number | null, includeRestored = false) =>
+  useQuery({
+    queryKey: ["offloads", accountId, includeRestored],
+    queryFn: () => api<Offload[]>(`/api/offloads${query({ account_id: accountId, include_restored: includeRestored })}`),
+    enabled: accountId !== null,
+    // Busy rows (being emptied, or on their way back to Drive) change without a page action.
+    refetchInterval: (q) => ((q.state.data ?? []).some((o) => o.busy || OFFLOAD_MOVING.includes(o.state)) ? 3000 : false),
+  });
+export const useOffloadBatch = (batchId: string | null) =>
+  useQuery({
+    queryKey: ["offload-batch", batchId],
+    queryFn: () => api<OffloadBatch>(`/api/offloads/batches/${batchId}`),
+    enabled: batchId !== null,
+    retry: false,
+    refetchInterval: (q) => (q.state.data?.done || q.state.error ? false : 1000),
+  });
