@@ -5,7 +5,7 @@ import type { FileItem } from "../api/types";
 import { formatBytes, formatWhen } from "../lib/format";
 import { iconFor, parentOf } from "../lib/files";
 import { Icon } from "./Icon";
-import { itemStatusLabel, StatusBadge } from "./StatusBadge";
+import { folderMark, itemStatusLabel, StatusBadge } from "./StatusBadge";
 
 type Props = {
   items: FileItem[];
@@ -48,26 +48,24 @@ function describeItem(item: FileItem): string {
   return itemStatusLabel(item.status);
 }
 
-/** Folder icon with a mark: synced folder (a sync pair's own folder), or not synced. The title is the legend. */
+/**
+ * Folder icon with its sync state drawn on it, so the name gets the whole tile: a synced folder
+ * (a sync pair's own folder), not synced, or the folder's state inside a synced folder. The title is the legend.
+ */
 function FolderIcon({ item, className }: { item: FileItem; className: string }) {
-  const synced = !!item.pair_root;
-  const notSynced = !synced && item.status === "unsynced";
-  const title = synced
+  const pairRoot = !!item.pair_root && item.status === "synced";
+  const mark = pairRoot ? { icon: "check_circle" as const, label: "Synced folder", color: "text-ok" } : folderMark(item.status);
+  const title = pairRoot
     ? "Synced folder: kept in step with Google Drive"
-    : notSynced
+    : item.status === "unsynced"
       ? NOT_SYNCED_FOLDER
-      : undefined;
+      : mark?.label;
   return (
     <span className="relative inline-flex shrink-0" title={title}>
       <Icon name="folder" className={className} />
-      {synced && (
-        <span className="absolute -bottom-1 -right-1 inline-flex rounded-full bg-surface">
-          <Icon name="sync" label="Synced folder" className="text-[12px] text-ok" />
-        </span>
-      )}
-      {notSynced && (
-        <span aria-hidden="true" className="absolute -bottom-1 -right-1 inline-flex rounded-full bg-surface">
-          <Icon name="cloud_off" className="text-[12px] text-ink-2" />
+      {mark && (
+        <span className="absolute -bottom-1 -right-1.5 inline-flex rounded-full bg-surface">
+          <Icon name={mark.icon} label={mark.label} className={`text-[13px] ${mark.color} ${mark.spin ? "spin" : ""}`} />
         </span>
       )}
     </span>
@@ -202,9 +200,9 @@ export function FileView(p: Props) {
                     ) : (
                       <Icon name={iconFor(item)} className="text-[20px] text-ink-2" />
                     )}
-                    <span className={`truncate ${item.local || item.native ? "" : "text-ink-2"}`}>{item.name}</span>
+                    <span title={item.name} className={`truncate ${item.local || item.native ? "" : "text-ink-2"}`}>{item.name}</span>
                     {item.starred && <Icon name="star" label="Starred" className="text-[16px] text-ink-2" />}
-                    <StatusBadge status={item.status} />
+                    {!item.is_dir && <StatusBadge status={item.status} />}
                     {status(item)}
                   </div>
                 </td>
@@ -240,8 +238,7 @@ export function FileView(p: Props) {
                   {...mouse(item)}
                 >
                   <FolderIcon item={item} className="text-[20px] text-ink-2" />
-                  <span className="min-w-0 flex-1 truncate font-medium">{item.name}</span>
-                  <StatusBadge status={item.status} />
+                  <span title={item.name} className="min-w-0 flex-1 truncate font-medium">{item.name}</span>
                   {status(item)}
                 </div>
                 <MoreButton item={item} p={p} className="absolute right-1 top-2" />
@@ -259,7 +256,7 @@ export function FileView(p: Props) {
                 <div className={`overflow-hidden ${frame(isSelected(item))}`} {...aria(item)} {...nav(item)} {...mouse(item)}>
                   <div className="flex items-center gap-2 py-1.5 pl-3 pr-11">
                     <Icon name={iconFor(item)} className="text-[18px] text-ink-2" />
-                    <span className="min-w-0 flex-1 truncate text-table font-medium">{item.name}</span>
+                    <span title={item.name} className="min-w-0 flex-1 truncate text-table font-medium">{item.name}</span>
                   </div>
                   <div className="mx-2 grid h-36 place-items-center overflow-hidden rounded-ctl bg-surface">
                     <Thumb accountId={p.accountId} item={item} />
