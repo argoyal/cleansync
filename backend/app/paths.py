@@ -70,6 +70,11 @@ class Layout:
         return self.data / "uploads"
 
     @property
+    def offloads_dir(self) -> Path:
+        # One JSON file per offload: each file's path, size, MD5 and Drive ID at offload time.
+        return self.data / "offloads"
+
+    @property
     def logs_dir(self) -> Path:
         return self.data / "logs"
 
@@ -102,6 +107,7 @@ class Layout:
             self.backups_dir,
             self.thumbs_dir,
             self.uploads_dir,
+            self.offloads_dir,
             self.jobs_log_dir,
             self.storage,
         ):

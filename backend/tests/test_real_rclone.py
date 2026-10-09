@@ -1,7 +1,9 @@
+import contextlib
 import os
 import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -911,3 +913,601 @@ async def test_real_upload_temp_files_never_sync_at_any_depth(tmp_path):
     )
     assert res.exit_code == 0, res.error_tail
     assert len(list(p1.rglob(".drivesync-upload-*"))) == 3
+
+
+# --- Plan 4a: offload ---------------------------------------------------------------------
+
+
+def _offload_world(tmp_path: Path):
+    """A local folder posing as Drive (a `type = local` remote), and a copy "here"."""
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=tmp_path / "rclone.conf",
+        cache_dir=tmp_path / "cache",
+        config_pass="",
+    )
+    (tmp_path / "rclone.conf").write_text("[loc]\ntype = local\n")
+    drive, here = tmp_path / "drive", tmp_path / "here"
+    for side in (drive, here):
+        (side / "Old [1]" / "sub").mkdir(parents=True)
+        (side / "Old [1]" / "a.txt").write_text("a")
+        (side / "Old [1]" / "sub" / "b c.txt").write_text("bb")
+        (side / "Old [1]" / ".drivesync-upload-0").write_text("half")
+        (side / "Old [10]").mkdir()
+        (side / "Old [10]" / "z.txt").write_text("z")
+        (side / "sibling.txt").write_text("s")
+    return env, drive, here
+
+
+async def _list_item(env, remote_parent, name, is_dir):
+    import json
+
+    out: list[str] = []
+    res = await run_rclone(
+        c.offload_list_args(env, remote_parent, name, is_dir),
+        env.env(),
+        log_path=None,
+        on_stdout=out.append,
+    )
+    assert res.exit_code == 0, res.error_tail
+    return json.loads("\n".join(out))
+
+
+async def test_real_offload_listing_and_check_cover_only_the_one_item(tmp_path):
+    env, drive, here = _offload_world(tmp_path)
+    items = await _list_item(env, f"loc:{drive}", "Old [1]", True)
+    assert sorted(i["Path"] for i in items) == ["Old [1]/a.txt", "Old [1]/sub/b c.txt"]
+    assert all(i["Hashes"]["md5"] and not i["IsDir"] for i in items)
+    one = await _list_item(env, f"loc:{drive}", "sibling.txt", False)
+    assert [i["Path"] for i in one] == ["sibling.txt"]
+
+    lines: list[str] = []
+    res = await run_rclone(
+        c.offload_check_args(env, here, f"loc:{drive}", "Old [1]", True),
+        env.env(),
+        log_path=None,
+        on_stdout=lines.append,
+    )
+    assert res.exit_code == 0, res.error_tail
+    parsed = sorted(p for p in map(parse_check_combined, lines) if p is not None)
+    assert parsed == [("=", "Old [1]/a.txt"), ("=", "Old [1]/sub/b c.txt")]
+
+    # A difference inside the item is seen; one outside it is not.
+    (drive / "Old [1]" / "a.txt").write_text("changed on Drive")
+    (drive / "sibling.txt").write_text("changed too")
+    lines.clear()
+    res = await run_rclone(
+        c.offload_check_args(env, here, f"loc:{drive}", "Old [1]", True),
+        env.env(),
+        log_path=None,
+        on_stdout=lines.append,
+    )
+    assert res.exit_code != 0
+    parsed = sorted(p for p in map(parse_check_combined, lines) if p is not None)
+    assert parsed == [("*", "Old [1]/a.txt"), ("=", "Old [1]/sub/b c.txt")]
+
+
+async def test_real_folder_delete_removes_only_the_checked_list(tmp_path):
+    env, drive, _ = _offload_world(tmp_path)
+    items = await _list_item(env, f"loc:{drive}", "Old [1]", True)
+    prefix = "Old [1]/"
+    listed = [i["Path"].removeprefix(prefix) for i in items]
+    files_from = tmp_path / "offload.list"
+    files_from.write_text(c.files_from_raw_text(listed))
+    # Added on "another device" after the listing and check: never in the list.
+    (drive / "Old [1]" / "late.txt").write_text("added later")
+    (drive / "Old [1]" / "sub" / "late too.txt").write_text("added later")
+
+    target = f"loc:{drive / 'Old [1]'}"
+    res = await run_rclone(c.delete_args(env, target, files_from), env.env(), log_path=None)
+    assert res.exit_code == 0, res.error_tail
+    left = sorted(str(p.relative_to(drive)) for p in drive.rglob("*") if p.is_file())
+    assert left == sorted(
+        [
+            "Old [1]/.drivesync-upload-0",
+            "Old [1]/late.txt",
+            "Old [1]/sub/late too.txt",
+            "Old [10]/z.txt",
+            "sibling.txt",
+        ]
+    )
+
+    # rmdirs only takes empty folders: everything still holding a file stays.
+    res = await run_rclone(c.rmdirs_args(env, target), env.env(), log_path=None)
+    assert res.exit_code == 0, res.error_tail
+    assert (drive / "Old [1]" / "sub" / "late too.txt").read_text() == "added later"
+    assert (drive / "Old [1]" / "late.txt").exists()
+
+
+async def test_real_folder_delete_and_rmdirs_clear_a_fully_listed_folder(tmp_path):
+    env, drive, _ = _offload_world(tmp_path)
+    (drive / "Old [1]" / ".drivesync-upload-0").unlink()
+    items = await _list_item(env, f"loc:{drive}", "Old [1]", True)
+    files_from = tmp_path / "offload.list"
+    files_from.write_text(c.files_from_raw_text([i["Path"].split("/", 1)[1] for i in items]))
+    target = f"loc:{drive / 'Old [1]'}"
+    res = await run_rclone(c.delete_args(env, target, files_from), env.env(), log_path=None)
+    assert res.exit_code == 0, res.error_tail
+    res = await run_rclone(c.rmdirs_args(env, target), env.env(), log_path=None)
+    assert res.exit_code == 0, res.error_tail
+    assert not (drive / "Old [1]").exists()
+    assert (drive / "Old [10]" / "z.txt").exists() and (drive / "sibling.txt").exists()
+
+
+async def test_real_folder_delete_with_a_missing_list_deletes_nothing(tmp_path):
+    env, drive, _ = _offload_world(tmp_path)
+    target = f"loc:{drive / 'Old [1]'}"
+    res = await run_rclone(
+        c.delete_args(env, target, tmp_path / "no-such.list"), env.env(), log_path=None
+    )
+    assert res.exit_code != 0
+    assert (drive / "Old [1]" / "a.txt").exists()
+    assert (drive / "Old [1]" / "sub" / "b c.txt").exists()
+
+
+async def test_real_deletefile_removes_just_that_file(tmp_path):
+    env, drive, _ = _offload_world(tmp_path)
+    res = await run_rclone(
+        c.deletefile_args(env, f"loc:{drive / 'sibling.txt'}"), env.env(), log_path=None
+    )
+    assert res.exit_code == 0, res.error_tail
+    assert not (drive / "sibling.txt").exists()
+    assert (drive / "Old [1]" / "a.txt").exists()
+
+
+async def test_real_rmdirs_of_a_parent_via_dot_dot_is_refused_before_rclone_runs(tmp_path):
+    env, drive, _ = _offload_world(tmp_path)
+    (drive / "Work" / "Old").mkdir(parents=True)
+    (drive / "empty elsewhere").mkdir()
+    ran: list[list[str]] = []
+
+    async def spy(args, *a, **kw):
+        ran.append(args)
+        return await run_rclone(args, *a, **kw)
+
+    for target in (f"loc:{drive}/Work/..", f"loc:{drive}/Work/Old/..", f"loc:{drive}/."):
+        with pytest.raises(c.UnsafeArgument):
+            await spy(c.rmdirs_args(env, target), env.env(), log_path=None)
+    assert ran == []
+    assert (drive / "empty elsewhere").is_dir() and (drive / "Work" / "Old").is_dir()
+
+
+# --- Plan 4a: offload through the service, restore -------------------------------------------
+
+
+class _HoldQueue:
+    disabled_reason = None
+
+    def __init__(self):
+        self.requests: list[int] = []
+
+    def is_busy(self, pair_id):
+        return False
+
+    def is_running(self, pair_id):
+        return False
+
+    @contextlib.contextmanager
+    def hold(self, pair_id):
+        yield
+
+    def request(self, pair_id, trigger, action="sync"):
+        self.requests.append(pair_id)
+        return "queued"
+
+
+class _NoCatalog:
+    def load(self, pair_id):
+        return None
+
+    def request_refresh(self, pair_id):
+        pass
+
+
+async def _service_world(tmp_path):
+    """A seeded two-way pair on real rclone; 'Drive' is a local folder (pretend account)."""
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, SyncPair
+    from app.paths import Layout
+    from app.services.events.bus import EventBus
+    from app.services.offload.service import OffloadService
+    from app.services.sync.engine import SyncEngine
+    from app.services.sync.filters import refresh_pair_filters
+    from app.services.sync.initial import InitialSync
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            pass
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text("[local_t]\ntype = local\n")
+    drive = tmp_path / "drive"
+    engine = SyncEngine(
+        layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=_Accounts()
+    )
+    initial = InitialSync(engine)
+    queue = _HoldQueue()
+    service = OffloadService(
+        engine=engine,
+        get_queue=lambda: queue,
+        catalog=_NoCatalog(),
+        indexes=None,
+        drive=None,
+        allow_pretend=True,
+    )
+    initial.on_resync_done.append(service.resync_done)
+    with sf() as db:
+        acc = Account(email="alice@example.com", remote_name="local_t")
+        db.add(acc)
+        db.commit()
+        pair = SyncPair(
+            account_id=acc.id,
+            name="Docs",
+            local_subpath="",
+            remote_path=str(drive),
+            initialized=True,
+            status="HEALTHY",
+            backups_enabled=False,
+        )
+        db.add(pair)
+        db.commit()
+        refresh_pair_filters(db, layout, pair)
+        local = layout.account_dir(acc.email)
+        for side in (local, drive):
+            (side / "Old" / "sub").mkdir(parents=True, exist_ok=True)
+            (side / "RCLONE_TEST").write_text("x")
+            (side / "Old" / "a.txt").write_text("aaa")
+            (side / "Old" / "sub" / "b.txt").write_text("bb")
+            (side / "keep.txt").write_text("keep")
+            (side / "odd [1].txt").write_text("one")
+            (side / "odd [2].txt").write_text("two")
+        seed = await run_rclone(
+            c.bisync_args(env, engine.bisync_target(acc, pair), dry_run=False, resync=True),
+            env.env(),
+            log_path=None,
+        )
+        assert seed.exit_code == 0, seed.error_tail
+        ids = (acc.id, pair.id)
+    return SimpleNamespace(
+        eng=eng,
+        sf=sf,
+        engine=engine,
+        initial=initial,
+        service=service,
+        queue=queue,
+        local=local,
+        drive=drive,
+        layout=layout,
+        account_id=ids[0],
+        pair_id=ids[1],
+    )
+
+
+def _files(root: Path) -> list[str]:
+    return sorted(
+        str(p.relative_to(root))
+        for p in root.rglob("*")
+        if p.is_file() and not p.name.startswith(".")
+    )
+
+
+async def _offload(w, path):
+    batch = await w.service.start(w.account_id, [path])
+    await w.service.wait_idle()
+    return batch.items[0]
+
+
+async def test_real_offload_stops_on_any_difference(tmp_path):
+    from sqlalchemy import select
+
+    from app.models import Offload
+
+    w = await _service_world(tmp_path)
+    try:
+        before = _files(w.drive)
+        (w.drive / "Old" / "sub" / "b.txt").write_text("changed on Drive")
+        item = await _offload(w, "Old")
+        assert item.state == "failed" and "doesn't match" in item.message, item.message
+        assert _files(w.drive) == before
+        assert (w.drive / "Old" / "sub" / "b.txt").read_text() == "changed on Drive"
+        assert w.queue.requests == []
+        with w.sf() as db:
+            assert db.scalars(select(Offload)).all() == []
+    finally:
+        w.eng.dispose()
+
+
+async def test_real_offload_removes_only_the_item_and_a_safe_resync_never_deletes(tmp_path):
+    from sqlalchemy import select
+
+    from app.models import Offload
+
+    w = await _service_world(tmp_path)
+    try:
+        local_before = _files(w.local)
+        item = await _offload(w, "Old")
+        assert item.state == "done", item.message
+        assert _files(w.drive) == ["RCLONE_TEST", "keep.txt", "odd [1].txt", "odd [2].txt"]
+        assert not (w.drive / "Old").exists()
+        assert _files(w.local) == local_before
+        assert w.queue.requests == [w.pair_id]
+        # The follow-up sync is a safe resync (the filter changed): nothing is deleted or
+        # sent back to Drive. Then an ordinary sync keeps it that way.
+        await w.initial.safe_resync(w.pair_id, "OFFLOAD")
+        await w.engine.run_pair(w.pair_id, "MANUAL")
+        assert _files(w.local) == local_before
+        assert (w.local / "Old" / "a.txt").read_text() == "aaa"
+        assert not (w.drive / "Old").exists()
+        assert _files(w.drive) == ["RCLONE_TEST", "keep.txt", "odd [1].txt", "odd [2].txt"]
+        with w.sf() as db:
+            assert db.scalars(select(Offload)).one().state == "ACTIVE"
+    finally:
+        w.eng.dispose()
+
+
+async def test_real_restore_uploads_the_files_back(tmp_path):
+    from sqlalchemy import select
+
+    from app.models import Offload
+
+    w = await _service_world(tmp_path)
+    try:
+        local_before = _files(w.local)
+        item = await _offload(w, "Old")
+        assert item.state == "done", item.message
+        await w.initial.safe_resync(w.pair_id, "OFFLOAD")
+        restored = await w.service.restore(item.offload_id)
+        assert restored.state == "RESTORING"
+        assert w.queue.requests == [w.pair_id, w.pair_id]
+        await w.engine.run_pair(w.pair_id, "OFFLOAD")  # what the queued sync runs
+        assert (w.drive / "Old" / "a.txt").read_text() == "aaa"
+        assert (w.drive / "Old" / "sub" / "b.txt").read_text() == "bb"
+        assert _files(w.drive) == local_before
+        assert _files(w.local) == local_before
+        with w.sf() as db:
+            assert db.scalars(select(Offload)).one().state == "RESTORED"
+    finally:
+        w.eng.dispose()
+
+
+async def test_real_single_file_with_brackets_leaves_its_neighbour(tmp_path):
+    w = await _service_world(tmp_path)
+    try:
+        item = await _offload(w, "odd [1].txt")
+        assert item.state == "done", item.message
+        assert not (w.drive / "odd [1].txt").exists()
+        assert (w.drive / "odd [2].txt").read_text() == "two"
+        assert (w.local / "odd [1].txt").read_text() == "one"
+        assert (w.drive / "Old" / "a.txt").exists() and (w.drive / "keep.txt").exists()
+    finally:
+        w.eng.dispose()
+
+
+async def test_real_restore_when_drive_has_a_newer_file_of_the_same_name(tmp_path):
+    from sqlalchemy import select
+
+    from app.models import Offload
+
+    w = await _service_world(tmp_path)
+    try:
+        item = await _offload(w, "Old")
+        assert item.state == "done", item.message
+        await w.initial.safe_resync(w.pair_id, "OFFLOAD")
+        # Meanwhile someone puts a newer Old/a.txt on Drive.
+        (w.drive / "Old").mkdir()
+        (w.drive / "Old" / "a.txt").write_text("newer on Drive")
+        later = (w.local / "Old" / "a.txt").stat().st_mtime + 3600
+        os.utime(w.drive / "Old" / "a.txt", (later, later))
+        await w.service.restore(item.offload_id)
+        await w.engine.run_pair(w.pair_id, "OFFLOAD")
+        # Nothing is lost: Drive's newer file is kept (and synced here), the offloaded copy is
+        # saved to the resync backups first (Recovery lists .drivesync-resync-* folders), and
+        # the rest of the folder goes back up.
+        assert (w.drive / "Old" / "a.txt").read_text() == "newer on Drive"
+        assert (w.local / "Old" / "a.txt").read_text() == "newer on Drive"
+        assert (w.drive / "Old" / "sub" / "b.txt").read_text() == "bb"
+        assert _files(w.drive) == _files(w.local)
+        saved = [p for p in w.layout.backups_dir.rglob("a.txt") if p.is_file()]
+        assert [p.read_text() for p in saved] == ["aaa"]
+        assert saved[0].parent.parent.name.startswith(".drivesync-resync-")
+        with w.sf() as db:
+            assert db.scalars(select(Offload)).one().state == "RESTORED"
+    finally:
+        w.eng.dispose()
+
+
+async def test_real_start_syncing_a_local_folder_makes_it_on_drive(tmp_path):
+    """'Start syncing this folder': the pair's Drive folder doesn't exist yet. The preview shows
+    everything as only here, and the first sync makes the folder on Drive, deleting nothing."""
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, SyncPair
+    from app.paths import Layout
+    from app.services.events.bus import EventBus
+    from app.services.sync.engine import SyncEngine
+    from app.services.sync.initial import InitialSync
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            pass
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    drive = tmp_path / "drive"
+    drive.mkdir()
+    (drive / "other.txt").write_text("elsewhere on Drive")
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text(f"[gd_t]\ntype = alias\nremote = {drive}\n")
+    try:
+        with sf() as db:
+            acc = Account(email="alice@example.com", remote_name="gd_t")
+            db.add(acc)
+            db.commit()
+            pair = SyncPair(
+                account_id=acc.id, name="Projects", local_subpath="Projects", remote_path="Projects"
+            )
+            db.add(pair)
+            db.commit()
+            pair_id = pair.id
+        local = layout.account_dir("alice@example.com") / "Projects"
+        (local / "sub").mkdir(parents=True)
+        (local / "plan.txt").write_text("plan")
+        (local / "sub" / "notes.txt").write_text("notes")
+        engine = SyncEngine(
+            layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=_Accounts()
+        )
+        initial = InitialSync(engine)
+        await initial.preview(pair_id)
+        p = initial.load_preview(pair_id)
+        assert p is not None, "preview failed"
+        assert (p["same"], p["only_local"], p["only_remote"], p["different"]) == (0, 2, 0, 0)
+        assert not (drive / "Projects").exists()  # the preview changes nothing
+
+        initial.check_phrase(CONFIRM_PHRASE)
+        await initial.run_initial(pair_id)
+        with sf() as db:
+            assert db.get(SyncPair, pair_id).initialized is True, db.get(SyncPair, pair_id)
+        for side in (local, drive / "Projects"):
+            assert (side / "plan.txt").read_text() == "plan"
+            assert (side / "sub" / "notes.txt").read_text() == "notes"
+        assert (drive / "other.txt").read_text() == "elsewhere on Drive"
+    finally:
+        eng.dispose()
+
+
+async def test_real_start_syncing_merges_with_an_existing_drive_folder(tmp_path):
+    """'Start syncing this folder' when Drive already has a folder at that path with other
+    content: the preview shows what is only on Drive and what differs, and the first sync
+    merges both sides, deleting nothing on either."""
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database.engine import make_engine
+    from app.database.migrate import run_migrations
+    from app.models import Account, SyncPair
+    from app.paths import Layout
+    from app.services.events.bus import EventBus
+    from app.services.sync.engine import SyncEngine
+    from app.services.sync.initial import InitialSync
+
+    class _Accounts:
+        async def mark_needs_reauth(self, *a):
+            pass
+
+    layout = Layout(tmp_path / "root")
+    layout.ensure()
+    run_migrations(layout.db_file)
+    eng = make_engine(layout.db_file)
+    sf = sessionmaker(eng, expire_on_commit=False)
+    drive = tmp_path / "drive"
+    (drive / "Projects").mkdir(parents=True)
+    (drive / "Projects" / "drive-only.txt").write_text("from Drive")
+    (drive / "Projects" / "plan.txt").write_text("old plan on Drive, longer")
+    os.utime(drive / "Projects" / "plan.txt", (1, 1))  # Drive's copy is older: local wins
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=layout.rclone_conf,
+        cache_dir=layout.rclone_cache,
+        config_pass="",
+    )
+    layout.rclone_conf.write_text(f"[gd_t]\ntype = alias\nremote = {drive}\n")
+    try:
+        with sf() as db:
+            acc = Account(email="alice@example.com", remote_name="gd_t")
+            db.add(acc)
+            db.commit()
+            pair = SyncPair(
+                account_id=acc.id, name="Projects", local_subpath="Projects", remote_path="Projects"
+            )
+            db.add(pair)
+            db.commit()
+            pair_id = pair.id
+        local = layout.account_dir("alice@example.com") / "Projects"
+        local.mkdir(parents=True)
+        (local / "plan.txt").write_text("new plan")
+        (local / "local-only.txt").write_text("from here")
+        engine = SyncEngine(
+            layout=layout, session_factory=sf, bus=EventBus(), rclone_env=env, accounts=_Accounts()
+        )
+        initial = InitialSync(engine)
+        await initial.preview(pair_id)
+        p = initial.load_preview(pair_id)
+        assert p is not None, "preview failed"
+        assert (p["same"], p["only_local"], p["only_remote"], p["different"]) == (0, 1, 1, 1)
+        assert p["samples"]["only_remote"] == ["drive-only.txt"]
+        assert p["samples"]["different"] == ["plan.txt"]
+
+        initial.check_phrase(CONFIRM_PHRASE)
+        await initial.run_initial(pair_id)
+        with sf() as db:
+            assert db.get(SyncPair, pair_id).initialized is True
+        for side in (local, drive / "Projects"):
+            assert sorted(f.name for f in side.iterdir() if f.name != "RCLONE_TEST") == [
+                "drive-only.txt",
+                "local-only.txt",
+                "plan.txt",
+            ]
+            assert (side / "drive-only.txt").read_text() == "from Drive"
+            assert (side / "local-only.txt").read_text() == "from here"
+            assert (side / "plan.txt").read_text() == "new plan"
+    finally:
+        eng.dispose()
+
+
+async def test_real_restored_file_meets_a_newer_drive_file_of_the_same_name(tmp_path):
+    """What docs/limitations.md says about a Recovery restore racing a newer Drive file."""
+    env, t, p1, p2 = _setup(tmp_path)
+    backup = tmp_path / "backup"
+    t = c.BisyncTarget(
+        local=t.local,
+        remote=t.remote,
+        workdir=t.workdir,
+        filters_file=t.filters_file,
+        backup_dir=backup,
+    )
+    await _run(env, t, tmp_path, dry_run=False, resync=True)
+    old = 1_700_000_000
+    # 1) A name new on both sides: Drive got a new file, Recovery put an older copy here.
+    (p2 / "new.txt").write_text("newer on Drive")
+    (p1 / "new.txt").write_text("restored copy")
+    os.utime(p1 / "new.txt", (old, old))
+    # 2) A synced file deleted here and put back from Recovery before the next sync: the
+    # restore keeps the saved bytes and date, so it looks untouched. Meanwhile Drive changed it.
+    saved = (p1 / "keep.txt").stat()
+    (p1 / "keep.txt").unlink()
+    (p1 / "keep.txt").write_text("same")
+    os.utime(p1 / "keep.txt", ns=(saved.st_atime_ns, saved.st_mtime_ns))
+    (p2 / "keep.txt").write_text("newer on Drive, changed")
+    res, counters = await _run(env, t, tmp_path, dry_run=False)
+    assert res.exit_code == 0, (tmp_path / "log.txt").read_text()
+    names = sorted(p.name for p in p1.iterdir())
+    # 1) Both copies are kept under conflict names; nothing is lost; the plain name is gone.
+    assert "new.txt" not in names, names
+    assert (p1 / "new.conflict1.txt").read_text() == "restored copy"
+    assert (p1 / "new.conflict2.txt").read_text() == "newer on Drive"
+    assert counters.conflict_paths == ["new.txt"]
+    # 2) Drive's version wins the name; the copy that was here goes to the backup folder.
+    assert (p1 / "keep.txt").read_text() == "newer on Drive, changed"
+    assert [p.read_text() for p in backup.rglob("keep.txt")] == ["same"]

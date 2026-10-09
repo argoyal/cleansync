@@ -246,3 +246,27 @@ def test_items_added_after_the_cached_index_are_judged_on_the_spot(
     items, _ = _browse(auth_client, acc)
     assert items["Trip"]["status"] == "upload" and items["Empty"]["status"] == "upload"
     assert items["Work"]["status"] == "synced"
+
+
+def test_a_pairs_own_folder_is_marked(auth_client, setup, make_pair, save_catalog):
+    acc, root = setup
+    pair = make_pair(acc, local_subpath="Projects", remote_path="Projects", initialized=True)
+    _write(root, "Projects/Inner/a.txt")
+    (root / "Loose").mkdir()
+    save_catalog(pair.id, [])
+    top, _ = _browse(auth_client, acc)
+    assert top["Projects"]["pair_root"] is True
+    # Its own folder seen from the parent shows the pair's state, never "Not synced".
+    assert top["Projects"]["status"] == "upload"
+    assert (top["Loose"]["pair_root"], top["Loose"]["status"]) == (False, "unsynced")
+    inner, _ = _browse(auth_client, acc, "Projects")
+    assert [i["pair_root"] for i in inner.values()] == [False]
+
+
+def test_a_whole_account_pair_marks_no_folder(auth_client, setup, make_pair, save_catalog):
+    acc, root = setup
+    pair = make_pair(acc, initialized=True)
+    _write(root, "Work/a.txt")
+    save_catalog(pair.id, [])
+    top, _ = _browse(auth_client, acc)
+    assert top["Work"]["pair_root"] is False

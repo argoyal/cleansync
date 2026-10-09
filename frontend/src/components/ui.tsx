@@ -73,13 +73,22 @@ export function Dialog({
   wide?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  // Once, when it opens: focus the first field or marked button. A new onClose on a re-render
+  // (a poll, a typed letter) must not pull focus back. When it closes, focus goes back to
+  // what had it before, if that is still on the page.
   useEffect(() => {
+    const back = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const first = box.current?.querySelector<HTMLElement>("input, select, textarea, button[data-autofocus]");
     first?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close.current();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (back?.isConnected && back !== document.body) back.focus();
+    };
+  }, []);
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-ink/30 p-4" onMouseDown={onClose}>
       <div
@@ -101,6 +110,7 @@ export function Dialog({
 export type MenuItem =
   | { label: string; icon?: IconName; onSelect: () => void; disabled?: boolean; danger?: boolean }
   | { separator: true }
+  | { note: string }
   | { label: string; icon?: IconName; submenu: MenuItem[] };
 
 /** A floating menu at a fixed point (right-click) or under an anchor; closes on outside click. */
@@ -160,7 +170,11 @@ export function Menu({
       className="fixed z-50 min-w-[220px] rounded-menu border border-line bg-surface py-1.5 shadow-float"
     >
       {items.map((item, i) =>
-        "separator" in item ? (
+        "note" in item ? (
+          <p key={i} className="max-w-[280px] px-4 py-2 text-meta text-ink-2">
+            {item.note}
+          </p>
+        ) : "separator" in item ? (
           <div key={i} role="separator" className="my-1.5 border-t border-line" />
         ) : "submenu" in item ? (
           <div key={i} className="relative" onMouseEnter={() => setOpen(i)} onMouseLeave={() => setOpen(null)}>

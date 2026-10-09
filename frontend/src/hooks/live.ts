@@ -39,6 +39,8 @@ function clearProgress(pairId: number) {
 }
 
 const FILE_KEYS = ["browse", "recent", "starred", "search", "storage", "catalog"];
+/** Each Recovery refetch reads the whole backups folder: at most one every 5 seconds. */
+export const RECOVERY_REFRESH_MS = 5000;
 
 /**
  * Keeps the UI live from /api/events (server-sent events). On a dropped connection it
@@ -54,6 +56,21 @@ export function useLiveEvents(): void {
     let stopped = false;
     let hadError = false;
     const invalidate = (keys: string[]) => keys.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+    // Deletes, syncs and offloads put copies in Recovery. The first refresh is immediate; any
+    // more within the next 5 s become one catch-up refresh at the end of that time.
+    let recoveryAt = -Infinity;
+    let recoveryTimer: number | undefined;
+    const refreshRecovery = () => {
+      if (recoveryTimer !== undefined) return;
+      const wait = recoveryAt + RECOVERY_REFRESH_MS - Date.now();
+      const run = () => {
+        recoveryTimer = undefined;
+        recoveryAt = Date.now();
+        invalidate(["recovery"]);
+      };
+      if (wait <= 0) run();
+      else recoveryTimer = window.setTimeout(run, wait);
+    };
     const data = (e: Event): unknown => {
       try {
         return JSON.parse((e as MessageEvent).data as string);
@@ -86,6 +103,7 @@ export function useLiveEvents(): void {
         if (!d) return;
         if (d.state !== "RUNNING") clearProgress(d.pair_id);
         invalidate(["pairs", "status", "history", "logs", "activity", "preview", "planned", "conflicts", ...FILE_KEYS]);
+        refreshRecovery();
       });
       source.addEventListener("pair", () => invalidate(["pairs", "status", "browse"]));
       source.addEventListener("progress", (e) => {
@@ -95,14 +113,23 @@ export function useLiveEvents(): void {
       });
       source.addEventListener("activity", () => invalidate(["activity"]));
       source.addEventListener("account", () => invalidate(["accounts", "status", "setup", "pairs"]));
-      source.addEventListener("files", () => invalidate(FILE_KEYS));
+      source.addEventListener("files", () => {
+        invalidate(FILE_KEYS);
+        refreshRecovery();
+      });
       source.addEventListener("catalog", () => invalidate(FILE_KEYS));
+      // pair_id may be null (a whole batch finished): refresh by key, never by pair.
+      source.addEventListener("offload", () => {
+        invalidate(["offloads", "offload-batch", "status", ...FILE_KEYS]);
+        refreshRecovery();
+      });
     };
 
     connect();
     return () => {
       stopped = true;
       window.clearTimeout(timer);
+      window.clearTimeout(recoveryTimer);
       source?.close();
       liveStore.set("connecting");
       progressStore.set({});

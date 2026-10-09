@@ -123,6 +123,10 @@ def test_every_delete_capable_command_carries_trash_flag():
             ENV, "gd_1:Docs", "/d/storage/a@b.co/Docs", T.filters_file, None, dry_run=False
         ),
         c.sync_args(ENV, "/d/storage/a@b.co/Docs", "gd_1:Docs", T.filters_file, None, dry_run=True),
+        c.deletefile_args(ENV, "gd_1:Docs/a.txt"),
+        c.delete_args(ENV, "gd_1:Docs/Old", Path("/d/app/data/offloads/1.list")),
+        c.rmdirs_args(ENV, "gd_1:Docs/Old"),
+        c.moveto_args(ENV, "gd_1:Docs/a", "gd_1:Docs/b"),
     ]
     for args in built:
         sub = args[5]
@@ -205,6 +209,11 @@ def test_read_only_commands_never_include_dry_run_or_delete(builder):
         lambda: c.version_args(ENV),
         lambda: c.config_create_args(ENV, "gd_1", "cid", "csec", "{}"),
         lambda: c.config_delete_args(ENV, "gd_1"),
+        lambda: c.deletefile_args(ENV, "gd_1:Docs/a.txt"),
+        lambda: c.delete_args(ENV, "gd_1:Docs/Old", Path("/l/list")),
+        lambda: c.rmdirs_args(ENV, "gd_1:Docs/Old"),
+        lambda: c.offload_list_args(ENV, "gd_1:", "a", False),
+        lambda: c.offload_check_args(ENV, Path("/l"), "gd_1:", "a", False),
         lambda: c.config_encrypt_args(
             c.RcloneEnv(
                 binary="rclone",
@@ -495,3 +504,129 @@ def test_time_comparing_commands_allow_one_second_of_modtime_difference():
     for args in built:
         i = args.index("--modify-window")
         assert args[i + 1] == "1s"
+
+
+# --- Plan 4a: offload ---------------------------------------------------------------------
+
+
+def test_offload_builders_limit_rclone_to_one_item():
+    args = c.offload_check_args(ENV, Path("/d/s/a@b.co/Work"), "gd_1:Work", "Old [1]", True)
+    assert args[5:10] == ["check", "/d/s/a@b.co/Work", "gd_1:Work", "--combined", "-"]
+    assert [a for a in args if a.startswith("--filter")] == [
+        "--filter=- .drivesync-upload-*",
+        "--filter=+ /Old \\[1\\]/**",
+        "--filter=- **",
+    ]
+    assert "--drive-skip-gdocs" in args and "--filter-from" not in args
+    assert args[-1] == NO_PROMPT and args.count(NO_PROMPT) == 1
+    assert args[5] not in c.DELETE_CAPABLE
+    ls = c.offload_list_args(ENV, "gd_1:Work", "a.txt", False)
+    assert ls[5:7] == ["lsjson", "gd_1:Work"]
+    for flag in (
+        "--recursive",
+        "--files-only",
+        "--hash",
+        "--drive-skip-gdocs",
+        "--filter=+ /a.txt",
+    ):
+        assert flag in ls
+    assert ls[ls.index("--hash-type") + 1] == "md5"
+    assert ls[-1] == NO_PROMPT
+    assert ls[5] not in c.DELETE_CAPABLE
+
+
+@pytest.mark.parametrize("name", ["", "a/b", "..", ".", "a\nb"])
+def test_offload_item_must_be_one_plain_name(name):
+    with pytest.raises(UnsafeArgument):
+        c.offload_check_args(ENV, Path("/l"), "gd_1:", name, False)
+    with pytest.raises(UnsafeArgument):
+        c.offload_list_args(ENV, "gd_1:", name, True)
+
+
+BAD_ITEM_TARGETS = (
+    "gd_1:",
+    "gd_1:/",
+    "gd_1://",
+    "gd_1:.",
+    "gd_1:..",
+    "gd_1:./",
+    "gd_1:../x",
+    "gd_1:Work/..",
+    "gd_1:Work/../..",
+    "gd_1:Work/.",
+    "gd_1:a/./b",
+    "gd_1:Work//x",
+    "gd_1:Work/",
+    "gd_1://Work",
+    "/local/x",
+    "-rf",
+    "Work",
+    "gd_1:a\nb",
+)
+
+
+def test_offload_deletes_go_to_the_trash_and_never_name_the_whole_drive():
+    builders = (
+        c.deletefile_args,
+        lambda env, t: c.delete_args(env, t, Path("/d/list")),
+        c.rmdirs_args,
+    )
+    for build in builders:
+        args = build(ENV, "gd_1:Work/Old")
+        assert args[5] in c.DELETE_CAPABLE
+        assert args[6] == "gd_1:Work/Old"
+        assert c.TRASH_FLAG in args
+        assert args[-1] == NO_PROMPT and args.count(NO_PROMPT) == 1
+        for bad in BAD_ITEM_TARGETS:
+            with pytest.raises(UnsafeArgument):
+                build(ENV, bad)
+    assert [a for a in c.rmdirs_args(ENV, "gd_1:Work/Old") if a == "--drive-skip-gdocs"] == []
+
+
+def test_folder_delete_takes_only_the_checked_list():
+    # Only the files that were listed and checked go to the trash, never whatever is in the
+    # folder when the delete runs (a file added on another device after the check stays).
+    args = c.delete_args(ENV, "gd_1:Work/Old", Path("/d/app/data/offloads/7.list"))
+    assert args[args.index("--files-from-raw") + 1] == "/d/app/data/offloads/7.list"
+    assert args.count("--files-from-raw") == 1
+    # Native Google docs inside an offloaded folder stay on Drive (spec 7.2a).
+    assert "--drive-skip-gdocs" in args
+    assert not any(a.startswith(("--filter", "--include", "--exclude")) for a in args)
+    with pytest.raises(UnsafeArgument):
+        c.delete_args(ENV, "gd_1:Work/Old", Path("relative.list"))
+    with pytest.raises(TypeError):
+        c.delete_args(ENV, "gd_1:Work/Old")  # type: ignore[call-arg]
+
+
+def test_files_from_raw_text_is_one_checked_path_per_line():
+    assert c.files_from_raw_text(["a.txt", "sub/b c.txt", " lead.txt"]) == (
+        "a.txt\nsub/b c.txt\n lead.txt\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [[], [""], ["a\nb"], ["a\rb"], ["/abs"], ["../up"], ["a/../b"], ["./a"], ["a//b"], ["a/"]],
+)
+def test_files_from_raw_text_refuses_unsafe_lists(paths):
+    with pytest.raises(UnsafeArgument):
+        c.files_from_raw_text(paths)
+
+
+@pytest.mark.parametrize("parent", ["gd_1:.", "gd_1:..", "gd_1:Work/..", "gd_1:a/./b", "gd_1:a//b"])
+def test_offload_parent_must_not_hold_dot_parts(parent):
+    with pytest.raises(UnsafeArgument):
+        c.offload_list_args(ENV, parent, "a", False)
+    with pytest.raises(UnsafeArgument):
+        c.offload_check_args(ENV, Path("/l"), parent, "a", False)
+
+
+@pytest.mark.parametrize("parent", ["gd_1:", "gd_1:Work", "gd_1:Work/Old [1]", "loc:/abs/dir"])
+def test_offload_parent_may_be_the_top_or_a_plain_path(parent):
+    assert c.offload_list_args(ENV, parent, "a", False)[6] == parent
+    assert c.offload_check_args(ENV, Path("/l"), parent, "a", False)[7] == parent
+
+
+def test_an_absolute_local_remote_path_is_one_item():
+    # Pretend accounts use a local remote whose paths start with "/".
+    assert c.rmdirs_args(ENV, "loc:/abs/Old")[6] == "loc:/abs/Old"

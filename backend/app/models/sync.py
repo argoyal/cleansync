@@ -1,11 +1,21 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.clock import utcnow
 from app.models.base import Base
-from app.models.enums import ConflictState, Direction, JobState, PairStatus
+from app.models.enums import ConflictState, Direction, JobState, OffloadState, PairStatus
 
 
 class SyncPair(Base):
@@ -95,3 +105,26 @@ class Conflict(Base):
     resolution: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Offload(Base):
+    __tablename__ = "offloads"
+    # Ids name files on disk (app/data/offloads/<id>.json); never reuse one.
+    __table_args__ = {"sqlite_autoincrement": True}
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pair_id: Mapped[int] = mapped_column(
+        ForeignKey("sync_pairs.id", ondelete="CASCADE"), index=True
+    )
+    path: Mapped[str] = mapped_column(Text)  # pair path, '/'-separated
+    is_dir: Mapped[bool] = mapped_column(Boolean, default=False)
+    file_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    state: Mapped[str] = mapped_column(String(16), default=OffloadState.PENDING)
+    trashed_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    trash_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    trash_emptied: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)

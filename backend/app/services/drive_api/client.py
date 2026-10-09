@@ -14,6 +14,7 @@ from app.services.drive_api.tokens import (
     TokenProvider,
     json_or_none,
     post_or_none,
+    request_or_none,
 )
 
 FILES_URL = "https://www.googleapis.com/drive/v3/files"
@@ -34,6 +35,48 @@ class CreatedFile:
     id: str
     name: str
     mime: str
+
+
+@dataclass(frozen=True)
+class DriveFileState:
+    """What Drive says about one file: in the trash or not, and its size and MD5."""
+
+    trashed: bool
+    size: int | None
+    md5: str | None
+
+    def matches(self, size: int | None, md5: str | None) -> bool:
+        """The same size and MD5 as the saved list. Nothing to compare is never a match."""
+        if size is None or md5 is None or self.size is None or self.md5 is None:
+            return False
+        return self.size == size and self.md5.lower() == md5.lower()
+
+
+def _file_id(file_id: str) -> str:
+    if valid_id(file_id) is None:
+        raise DriveApiError("not a usable Google Drive ID")
+    return file_id
+
+
+def _parse_state(data: object) -> DriveFileState | None:
+    if not isinstance(data, dict):
+        return None
+    trashed = data.get("trashed")
+    if not isinstance(trashed, bool):
+        return None
+    size: int | None = None
+    raw_size = data.get("size")
+    if raw_size is not None:
+        if not isinstance(raw_size, str | int) or isinstance(raw_size, bool):
+            return None
+        text = str(raw_size)
+        if not text.isdigit():
+            return None
+        size = int(text)
+    md5 = data.get("md5Checksum")
+    if md5 is not None and not isinstance(md5, str):
+        return None
+    return DriveFileState(trashed=trashed, size=size, md5=md5)
 
 
 class DriveApi:
@@ -85,3 +128,76 @@ class DriveApi:
         if file_id is None:
             raise DriveApiError("Google Drive gave an unexpected answer")
         return CreatedFile(id=file_id, name=str(data.get("name", name)), mime=NATIVE_MIME[kind])
+
+    async def _call(self, remote_name: str, method: str, url: str, **kwargs) -> httpx.Response:
+        resp: httpx.Response | None = None
+        for attempt in (1, 2):
+            token = await self.tokens.access_token(remote_name)
+            resp = await request_or_none(
+                self.http_factory,
+                method,
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                **kwargs,
+            )
+            if resp is not None and resp.status_code == 401 and attempt == 1:
+                self.tokens.forget(remote_name)  # expired early; try once with a new one
+                continue
+            break
+        if resp is None:
+            raise DriveApiError("could not reach Google Drive")
+        if resp.status_code == 401:
+            raise DriveAuthError("Google says the login expired or was revoked")
+        return resp
+
+    async def file_state(self, remote_name: str, file_id: str) -> DriveFileState | None:
+        """Whether one file is in the trash, with its size and MD5. None: Google has no such
+        file (deleted for good). Anything unexpected raises DriveApiError."""
+        resp = await self._call(
+            remote_name,
+            "GET",
+            f"{FILES_URL}/{_file_id(file_id)}",
+            params={"fields": "id,trashed,size,md5Checksum", "supportsAllDrives": "true"},
+        )
+        if resp.status_code == 404:
+            return None
+        if resp.status_code >= 400:
+            raise DriveApiError(f"Google Drive refused to look up a file (HTTP {resp.status_code})")
+        state = _parse_state(json_or_none(resp))
+        if state is None:
+            raise DriveApiError("Google Drive gave an unexpected answer")
+        return state
+
+    async def trashed_state(self, remote_name: str, file_id: str) -> bool | None:
+        """True: in the trash. False: not in the trash. None: Google has no such file.
+
+        This alone does not say the file is the one that was checked: compare file_state()
+        with the saved size and MD5 for that.
+        """
+        state = await self.file_state(remote_name, file_id)
+        return None if state is None else state.trashed
+
+    async def delete_forever(self, remote_name: str, file_id: str, *, size: int, md5: str) -> bool:
+        """Delete one file for good, only while it is in the trash and still has the saved
+        size and MD5 (so it is the copy this server keeps).
+
+        Returns True when it is gone, False when it was left alone: it is not in the trash
+        (someone took it out) or it is not the saved file any more.
+
+        Drive has no "delete only if unchanged": a file taken out of the trash or changed in
+        the moment between the check and the delete is still deleted. The gap is a single
+        request long; callers must not treat this as one atomic step.
+        """
+        state = await self.file_state(remote_name, file_id)
+        if state is None:
+            return True
+        if not state.trashed or not state.matches(size, md5):
+            return False
+        resp = await self._call(
+            remote_name, "DELETE", f"{FILES_URL}/{file_id}", params={"supportsAllDrives": "true"}
+        )
+        if resp.status_code in (200, 204, 404):
+            return True
+        raise DriveApiError(
+            f"Google Drive refused to delete a file from the trash (HTTP {resp.status_code})"
+        )

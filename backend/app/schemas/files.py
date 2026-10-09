@@ -22,8 +22,7 @@ class FileItemOut(BaseModel):
     is_dir: bool
     size: int | None
     mtime: UtcDatetime | None
-    # synced | syncing | upload | download | conflict | native | unsynced | unknown
-    # ("offloaded" is reserved for a later version)
+    # synced | syncing | upload | download | conflict | native | offloaded | unsynced | unknown
     status: str
     local: bool
     remote: bool
@@ -33,6 +32,7 @@ class FileItemOut(BaseModel):
     starred: bool
     pair_id: int | None
     thumb: bool
+    pair_root: bool = False  # a sync pair's own folder (shown with a sync mark)
 
 
 class PairBrief(BaseModel):
@@ -93,6 +93,8 @@ class MoveIn(BaseModel):
 class DeleteIn(BaseModel):
     account_id: int
     paths: list[str] = Field(min_length=1, max_length=1000)
+    # Set once the person saw the warning that offloaded items in it are the only copy.
+    only_copy_ok: bool = False
 
 
 class OpOut(BaseModel):

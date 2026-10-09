@@ -14,7 +14,9 @@ afterEach(() => {
 });
 
 function setup(extra: Record<string, unknown> = {}) {
-  const api = mockApi({ "GET /api/accounts": [ACCOUNT], ...extra });
+  // By default the folder being viewed is inside a sync pair, so New works.
+  const synced = { account_id: 1, path: "Work", pair: { id: 7, name: "My Drive", status: "HEALTHY", initialized: true, local_subpath: "" }, items: [] };
+  const api = mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/browse": synced, ...extra });
   const view = renderApp(
     <>
       <NewMenu />
@@ -296,5 +298,82 @@ describe("+ New in a Drive-to-here folder", () => {
     const sub = screen.getByRole("menu", { name: "Google Docs" });
     expect(within(sub).getByRole("menuitem", { name: "Blank Google Doc" })).toBeEnabled();
     expect(within(sub).getByRole("menuitem", { name: "Word file (.docx)" })).toBeDisabled();
+  });
+
+  it("is off outside synced folders and says why", async () => {
+    setup({ "GET /api/browse": { account_id: 1, path: "Work", pair: null, items: [] } });
+    const menu = await openMenu();
+    expect(await within(menu).findByText("This folder isn't synced with Google Drive. Open a synced folder to add files.")).toBeInTheDocument();
+    for (const name of ["New folder", "Upload files", "Upload folder"]) {
+      expect(within(menu).getByRole("menuitem", { name })).toBeDisabled();
+    }
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Google Docs" }));
+    const sub = screen.getByRole("menu", { name: "Google Docs" });
+    expect(within(sub).getByRole("menuitem", { name: "Blank Google Doc" })).toBeDisabled();
+    expect(within(sub).getByRole("menuitem", { name: "Word file (.docx)" })).toBeDisabled();
+  });
+
+  it("keeps everything on, with no note, in a synced folder", async () => {
+    setup({ "GET /api/browse": { account_id: 1, path: "Work", pair: { id: 7, name: "My Drive", status: "HEALTHY", initialized: true, local_subpath: "" }, items: [] } });
+    const menu = await openMenu();
+    await waitFor(() => expect(within(menu).getByRole("menuitem", { name: "New folder" })).toBeEnabled());
+    expect(within(menu).queryByText(/isn't synced/)).toBeNull();
+    expect(within(menu).getByRole("menuitem", { name: "Upload files" })).toBeEnabled();
+  });
+
+  const OFFLOADED_WORK = {
+    id: 3, pair_id: 7, pair_name: "My Drive", account_id: 1, path: "Work", is_dir: true, file_count: 2, total_bytes: 5, state: "ACTIVE",
+    trash_verified: true, trash_emptied: false, created_at: "2026-10-09T08:00:00Z", updated_at: "2026-10-09T08:00:00Z", note: null, busy: false,
+  };
+
+  it("is off inside an offloaded folder and says why", async () => {
+    setup({ "GET /api/offloads": [OFFLOADED_WORK] });
+    const menu = await openMenu();
+    expect(
+      await within(menu).findByText(
+        "This folder is offloaded: it's kept only on this server and doesn't sync with Google Drive. Restore it to Drive to add files here.",
+      ),
+    ).toBeInTheDocument();
+    for (const name of ["New folder", "Upload files", "Upload folder"]) {
+      expect(within(menu).getByRole("menuitem", { name })).toBeDisabled();
+    }
+    for (const [sub, items] of [
+      ["Google Docs", ["Blank Google Doc", "Word file (.docx)"]],
+      ["Google Sheets", ["Blank Google Sheet", "Excel file (.xlsx)"]],
+      ["Google Slides", ["Blank Google Slides", "PowerPoint file (.pptx)"]],
+    ] as const) {
+      await userEvent.click(within(menu).getByRole("menuitem", { name: sub }));
+      for (const name of items) expect(within(screen.getByRole("menu", { name: sub })).getByRole("menuitem", { name })).toBeDisabled();
+    }
+    expect(within(menu).getByRole("menuitem", { name: "Sync a Drive folder…" })).toBeEnabled();
+  });
+
+  it("stays on beside an offloaded folder", async () => {
+    setup({ "GET /api/offloads": [{ ...OFFLOADED_WORK, path: "Work/Old" }, { ...OFFLOADED_WORK, id: 4, path: "Work/a.txt", is_dir: false }] });
+    const menu = await openMenu();
+    await waitFor(() => expect(within(menu).getByRole("menuitem", { name: "New folder" })).toBeEnabled());
+    expect(within(menu).queryByText(/offloaded/)).toBeNull();
+  });
+
+  it("keeps add items off while the folder is still loading", async () => {
+    setup({ "GET /api/browse": () => new Promise(() => undefined) });
+    const menu = await openMenu();
+    for (const name of ["New folder", "Upload files", "Upload folder"]) {
+      expect(within(menu).getByRole("menuitem", { name })).toBeDisabled();
+    }
+  });
+});
+
+describe("+ New: Sync a Drive folder", () => {
+  it("opens the folder step of the wizard to sync a Drive folder", async () => {
+    setup();
+    await userEvent.click(within(await openMenu()).getByRole("menuitem", { name: "Sync a Drive folder…" }));
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/setup?step=folders&account=1"));
+  });
+
+  it("offers Sync a Drive folder even outside synced folders", async () => {
+    setup({ "GET /api/browse": { account_id: 1, path: "Work", pair: null, items: [] } });
+    const menu = await openMenu();
+    expect(within(menu).getByRole("menuitem", { name: "Sync a Drive folder…" })).toBeEnabled();
   });
 });

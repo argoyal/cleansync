@@ -40,6 +40,34 @@ describe("live updates", () => {
     expect(keys(spy)).toEqual(expect.arrayContaining(["accounts", "status"]));
   });
 
+  it("refreshes Recovery after deletes and syncs, at most once every 5 seconds, never for a Drive listing", () => {
+    vi.useFakeTimers();
+    const { spy, source } = setup();
+    const recovery = () => keys(spy).filter((k) => k === "recovery").length;
+    act(() => source.emit("files", { account_id: 1 }));
+    expect(recovery()).toBe(1);
+    act(() => source.emit("job", { pair_id: 3, job_id: 9, state: "SUCCESS" }));
+    act(() => source.emit("files", { account_id: 1 }));
+    expect(recovery()).toBe(1); // held back
+    act(() => vi.advanceTimersByTime(5000));
+    expect(recovery()).toBe(2); // one catch-up refresh for both
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(recovery()).toBe(2);
+    spy.mockClear();
+    act(() => source.emit("catalog", { account_id: 1 }));
+    expect(keys(spy)).toContain("browse");
+    expect(keys(spy)).not.toContain("recovery");
+  });
+
+  it("refreshes offloads and files on an offload event, also one without a pair", () => {
+    const { spy, source } = setup();
+    act(() => source.emit("offload", { account_id: 1, pair_id: null }));
+    expect(keys(spy)).toEqual(expect.arrayContaining(["offloads", "offload-batch", "recovery", "browse", "storage", "status"]));
+    spy.mockClear();
+    act(() => source.emit("offload", { account_id: 1, pair_id: 7 }));
+    expect(keys(spy)).toContain("offloads");
+  });
+
   it("keeps the latest transfer progress per pair and clears it when the job ends", () => {
     const { source } = setup();
     const p = { pair_id: 3, job_id: 9, bytes: 50, total_bytes: 100, speed: 10, eta: 5, transferring: [{ name: "a.bin" }] };

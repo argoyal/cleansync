@@ -38,6 +38,7 @@ class JobKind(StrEnum):
     BISYNC = "BISYNC"
     RESYNC = "RESYNC"
     SYNC = "SYNC"
+    OFFLOAD = "OFFLOAD"
 
 
 class Trigger(StrEnum):
@@ -49,6 +50,7 @@ class Trigger(StrEnum):
     RECOVERY = "RECOVERY"
     RESYNC = "RESYNC"
     APP = "APP"  # a file action in the web UI (new folder, rename, move, delete)
+    OFFLOAD = "OFFLOAD"
 
 
 class ConflictState(StrEnum):
@@ -65,3 +67,13 @@ class AttentionReason(StrEnum):
     AUTH = "AUTH"
     FAILED = "FAILED"
     PLAN_UNREADABLE = "PLAN_UNREADABLE"
+
+
+class OffloadState(StrEnum):
+    PENDING = "PENDING"  # recorded and out of sync; Drive not touched yet
+    DELETING = "DELETING"  # rclone is removing it from Drive (into the trash)
+    VERIFYING = "VERIFYING"  # checking every Drive ID is in the trash
+    ACTIVE = "ACTIVE"  # done: only on this server, Drive copy in the trash
+    ATTENTION = "ATTENTION"  # something to look at; still out of sync
+    RESTORING = "RESTORING"  # back in sync; waiting for the safe resync that uploads it
+    RESTORED = "RESTORED"  # back on Drive

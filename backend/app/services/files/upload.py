@@ -16,7 +16,7 @@ from pathlib import Path
 from app.core.pathsafe import safe_join
 from app.paths import Layout
 from app.services.files.names import free_name, validate_name
-from app.services.files.ops import FileOpError, refuse_one_way
+from app.services.files.ops import FileOpError, refuse_one_way, require_synced
 from app.services.files.scope import (
     UPLOAD_TEMP_PREFIX,
     Scope,
@@ -46,6 +46,7 @@ def plan_target(
     folder = safe_join(scope.root, folder_rel)
     if not folder.is_dir() or resolves_to_hidden(scope.root, folder):
         raise FileOpError("folder not found", 404)
+    require_synced(scope, folder_rel)  # before any sub-folder of a folder upload is made
     dir_rel = folder_rel
     for part in parts[:-1]:
         dir_rel = join_rel(dir_rel, part)

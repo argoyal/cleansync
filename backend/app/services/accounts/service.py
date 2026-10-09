@@ -40,6 +40,15 @@ class AccountError(Exception):
     pass
 
 
+PRETEND_PREFIX = "local_"
+
+
+def is_pretend(account: Account, allowed: bool) -> bool:
+    """A pretend local account (development and CI only): no Google behind it, no Drive IDs,
+    no trash. Only with DRIVESYNC_ALLOW_LOCAL_ACCOUNTS on (`allowed`)."""
+    return allowed and account.remote_name.startswith(PRETEND_PREFIX)
+
+
 def check_local_folder(layout: Layout, env: RcloneEnv, folder: Path) -> Path:
     """Resolve a pretend-account folder and refuse anything that touches the app's own folders.
 
@@ -226,9 +235,9 @@ class AccountService:
         with self.session_factory() as db:
             if db.scalar(select(Account).where(Account.email == email)) is not None:
                 raise AccountError(f"{email} is already connected")
-            name = f"local_{secrets.token_hex(3)}"
+            name = f"{PRETEND_PREFIX}{secrets.token_hex(3)}"
             while db.scalar(select(Account).where(Account.remote_name == name)) is not None:
-                name = f"local_{secrets.token_hex(3)}"
+                name = f"{PRETEND_PREFIX}{secrets.token_hex(3)}"
             folder.mkdir(parents=True, exist_ok=True)
             res = await self._rclone(config_create_alias_args(self.env, name, folder))
             if res.exit_code != 0:

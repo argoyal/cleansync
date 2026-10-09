@@ -2,15 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { friendlyError } from "../api/client";
-import { useBrowse } from "../api/queries";
+import { useBrowse, usePairs } from "../api/queries";
 import type { FileItem } from "../api/types";
 import { useFileActions } from "../components/FileActions";
 import { FileView } from "../components/FileView";
 import { Icon } from "../components/Icon";
 import { PairStatusPill } from "../components/StatusBadge";
-import { Empty, IconButton, Menu, Notice } from "../components/ui";
+import { Empty, IconButton, Menu, type MenuItem, Notice } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
-import { ONE_WAY_NOTE } from "../lib/files";
+import { NOT_SYNCED_NOTE, ONE_WAY_NOTE } from "../lib/files";
 
 const VIEW_KEY = "drivesync.view";
 
@@ -43,12 +43,47 @@ export function ViewToggle({ view, onChange }: { view: "grid" | "list"; onChange
   );
 }
 
+/** Picking a menu entry puts focus back on the item first, so a dialog it opens returns there. */
+function returnFocusTo(items: MenuItem[], opener: HTMLElement | null): MenuItem[] {
+  return items.map((m) =>
+    "onSelect" in m
+      ? {
+          ...m,
+          onSelect: () => {
+            if (opener?.isConnected) opener.focus();
+            m.onSelect();
+          },
+        }
+      : "submenu" in m
+        ? { ...m, submenu: returnFocusTo(m.submenu, opener) }
+        : m,
+  );
+}
+
 /** A file list with selection, the right-click menu and the action dialogs wired up. */
 export function FileArea({ items, showFolder = false, view }: { items: FileItem[]; showFolder?: boolean; view: "grid" | "list" }) {
   const { accountId } = useCurrentAccount();
   const actions = useFileActions(accountId);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  // Where a Shift-click range starts: the last item picked on its own or with Ctrl/⌘.
+  const anchor = useRef<string | null>(null);
   const [menu, setMenu] = useState<{ item: FileItem; x: number; y: number; opener: HTMLElement | null } | null>(null);
+  const ordered = [...items.filter((i) => i.is_dir), ...items.filter((i) => !i.is_dir)].map((i) => i.path);
+  const select = (path: string, how: "only" | "toggle" | "range") => {
+    if (how === "toggle") {
+      setSelected((s) => (s.includes(path) ? s.filter((x) => x !== path) : [...s, path]));
+      anchor.current = path;
+    } else if (how === "range" && anchor.current !== null && ordered.includes(anchor.current)) {
+      const [a, b] = [ordered.indexOf(anchor.current), ordered.indexOf(path)].sort((x, y) => x - y);
+      setSelected(ordered.slice(a, b + 1));
+    } else {
+      setSelected([path]);
+      anchor.current = path;
+    }
+  };
+  /** What an action on this item covers: the whole selection when the item is part of it. */
+  const chosen = (item: FileItem) =>
+    selected.length > 1 && selected.includes(item.path) ? items.filter((i) => selected.includes(i.path)) : [item];
   // The Delete key listener is added once and reads the latest values from here.
   const latest = useRef({ items, selected, askDelete: actions.askDelete });
   latest.current = { items, selected, askDelete: actions.askDelete };
@@ -58,14 +93,18 @@ export function FileArea({ items, showFolder = false, view }: { items: FileItem[
       const target = e.target as HTMLElement;
       if (target.closest("input, textarea, select, [contenteditable], [role=dialog], [role=menu]")) return;
       const { items, selected, askDelete } = latest.current;
-      const path = target.closest<HTMLElement>("[data-path]")?.dataset.path ?? selected;
-      const item = items.find((i) => i.path === path);
-      if (item?.local) askDelete([item]);
+      const focused = target.closest<HTMLElement>("[data-path]")?.dataset.path;
+      // The focused item and, when it is part of the selection, the rest of the selection too.
+      const paths = focused === undefined ? selected : selected.includes(focused) ? selected : [focused];
+      // The delete dialog lists anything it leaves out, and why.
+      const chosen = items.filter((i) => paths.includes(i.path));
+      if (chosen.length > 0) askDelete(chosen);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   if (accountId === null) return null;
+  const menuTargets = menu ? chosen(menu.item) : [];
   return (
     <>
       <FileView
@@ -73,7 +112,7 @@ export function FileArea({ items, showFolder = false, view }: { items: FileItem[
         accountId={accountId}
         view={view}
         selected={selected}
-        onSelect={setSelected}
+        onSelect={select}
         onOpen={actions.open}
         onMenu={(item, x, y) => setMenu({ item, x, y, opener: document.activeElement as HTMLElement | null })}
         showFolder={showFolder}
@@ -81,8 +120,8 @@ export function FileArea({ items, showFolder = false, view }: { items: FileItem[
       {menu && (
         <Menu
           key={`${menu.item.path}:${menu.x}:${menu.y}`}
-          label={`Actions for ${menu.item.name}`}
-          items={actions.menuFor(menu.item)}
+          label={menuTargets.length > 1 ? `Actions for ${menuTargets.length} items` : `Actions for ${menu.item.name}`}
+          items={returnFocusTo(menuTargets.length > 1 ? actions.menuForMany(menuTargets) : actions.menuFor(menu.item), menu.opener)}
           x={menu.x}
           y={menu.y}
           opener={menu.opener}
@@ -128,6 +167,7 @@ export function DrivePage() {
   const path = params.get("path") ?? "";
   const { accountId, account } = useCurrentAccount();
   const browse = useBrowse(accountId, path);
+  const pairs = usePairs().data;
   const [view, setView] = useViewMode();
   if (!account) {
     return (
@@ -140,6 +180,7 @@ export function DrivePage() {
   }
   const pair = browse.data?.pair;
   const oneWay = pair?.direction === "REMOTE_TO_LOCAL";
+  const noPairs = pairs !== undefined && !pairs.some((p) => p.account_id === account.id);
   return (
     <div className="p-4 sm:p-6">
       <div className="mb-4 flex items-center gap-3">
@@ -148,6 +189,16 @@ export function DrivePage() {
           <ViewToggle view={view} onChange={setView} />
         </div>
       </div>
+      {noPairs && (
+        <div className="mb-4">
+          <Notice tone="run">
+            Nothing here is synced with Google Drive yet.{" "}
+            <Link to={`/setup?step=folders&account=${account.id}`} className="font-semibold underline">
+              Sync a Drive folder…
+            </Link>
+          </Notice>
+        </div>
+      )}
       {pair && pair.status !== "HEALTHY" && (
         <div className="mb-4 flex flex-wrap items-center gap-3 text-table">
           <PairStatusPill status={pair.status} />
@@ -172,14 +223,23 @@ export function DrivePage() {
           <Notice tone="run">{ONE_WAY_NOTE}</Notice>
         </div>
       )}
+      {browse.data && !browse.data.pair && (
+        <div className="mb-4">
+          <Notice tone="run">{NOT_SYNCED_NOTE}</Notice>
+        </div>
+      )}
       {browse.isPending && <p className="text-ink-2">Loading</p>}
       {browse.isError && <Notice tone="err">{friendlyError(browse.error)}</Notice>}
       {browse.data && browse.data.items.length === 0 && (
         <Empty icon="folder" title="This folder is empty">
-          {oneWay ? "Files added on Google Drive appear here after the next sync." : "Use New to add a folder or upload files."}
+          {oneWay
+            ? "Files added on Google Drive appear here after the next sync."
+            : !browse.data.pair
+              ? NOT_SYNCED_NOTE
+              : "Use New to add a folder or upload files."}
         </Empty>
       )}
-      {browse.data && browse.data.items.length > 0 && <FileArea items={browse.data.items} view={view} />}
+      {browse.data && browse.data.items.length > 0 && <FileArea key={path} items={browse.data.items} view={view} />}
     </div>
   );
 }

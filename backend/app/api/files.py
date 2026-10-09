@@ -20,6 +20,7 @@ from app.services.files.listing import PairView, list_folder
 from app.services.files.scope import Scope, is_hidden, load_scope, pair_for, pairs_inside
 from app.services.files.status import load_overlay
 from app.services.files.views import recent, search, starred
+from app.services.offload.store import excluded_paths
 
 router = APIRouter()
 
@@ -45,7 +46,10 @@ async def pair_views(
     request: Request, db: Session, scope: Scope, pairs: list[SyncPair]
 ) -> dict[int, PairView]:
     state = request.app.state
-    loaded = await asyncio.gather(*(state.indexes.get(p, scope.account) for p in pairs))
+    excluded = {p.id: excluded_paths(db, p.id) for p in pairs}
+    loaded = await asyncio.gather(
+        *(state.indexes.get(p, scope.account, excluded[p.id]) for p in pairs)
+    )
     views: dict[int, PairView] = {}
     for pair, (index, catalog) in zip(pairs, loaded, strict=True):
         overlay = load_overlay(db, pair.id, state.queue.is_running(pair.id))

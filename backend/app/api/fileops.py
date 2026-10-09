@@ -27,6 +27,7 @@ from app.schemas.files import (
     RenameIn,
     UploadOut,
 )
+from app.services.accounts.service import is_pretend
 from app.services.catalog.model import EXPORT_EXT, CatalogEntry, google_url
 from app.services.drive_api.client import DEFAULT_NAMES
 from app.services.drive_api.tokens import (
@@ -37,14 +38,25 @@ from app.services.drive_api.tokens import (
 )
 from app.services.files import moves, ops
 from app.services.files.names import validate_name
-from app.services.files.scope import Scope, join_rel, pair_for, to_pair_rel
+from app.services.files.scope import Scope, join_rel, pair_for, to_account_rel, to_pair_rel
 from app.services.files.status import load_overlay
 from app.services.files.upload import new_temp, plan_target, publish, save_stream
+from app.services.offload.service import names
+from app.services.offload.store import IN_OFFLOADED_MSG, covers, has_inside, open_paths
 from app.services.queue import is_stopped, stop_message
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files")
 OFFICE_KINDS = ("docx", "xlsx", "pptx")
+PRETEND_NATIVE_MSG = "Google Docs, Sheets and Slides need a real Google account."
+ONLY_COPY_MSG = (
+    "This deletes offloaded items, whose only copy is on this server. Read the warning, then "
+    "delete again:"
+)
+OFFLOADED_MSG = (
+    "This is offloaded (kept only on this server). Restore it to Drive first, then rename or "
+    "move it."
+)
 
 
 async def refuse_when_disabled(request: Request) -> None:
@@ -53,6 +65,49 @@ async def refuse_when_disabled(request: Request) -> None:
     # Checks the disk now, so the first action after it drops out never reaches Drive.
     if await is_stopped(queue):
         raise HTTPException(503, stop_message(queue))
+
+
+def refuse_offloaded(
+    db: Session,
+    scope: Scope,
+    rels: list[str],
+    *,
+    inside: bool = True,
+    message: str = OFFLOADED_MSG,
+) -> None:
+    """Offloaded items (and folders holding them) keep their place until they are restored:
+    moving them would put them back in sync under a new name, or out of DriveSync's sight.
+    With inside=False only the item itself and what is inside an offloaded folder count."""
+    for rel in rels:
+        pair = pair_for(scope.pairs, rel)
+        if pair is None:
+            continue
+        paths = open_paths(db, pair.id)
+        prel = to_pair_rel(pair, rel)
+        if covers(paths, prel) or (inside and has_inside(paths, prel)):
+            raise HTTPException(409, message)
+
+
+def offloaded_in(db: Session, scope: Scope, rels: list[str]) -> list[str]:
+    """Account paths of the offloaded items these paths are, or are inside, or hold."""
+    found: list[str] = []
+    for rel in rels:
+        pair = pair_for(scope.pairs, rel)
+        if pair is None:
+            continue
+        paths = open_paths(db, pair.id)
+        prel = to_pair_rel(pair, rel)
+        if covers(paths, prel):
+            found.append(rel)
+            continue
+        found.extend(to_account_rel(pair, p) for p, _ in paths if has_inside([(p, False)], prel))
+    return list(dict.fromkeys(found))
+
+
+def refuse_adding_to_offloaded(db: Session, scope: Scope, folder: str) -> None:
+    """New items can't go into an offloaded folder: they would never reach Google Drive (a
+    new Google Doc would even bring the folder back on Drive)."""
+    refuse_offloaded(db, scope, [folder], inside=False, message=IN_OFFLOADED_MSG)
 
 
 def os_error(e: OSError) -> HTTPException:
@@ -173,6 +228,7 @@ async def mkdir(
 ):
     await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
+    refuse_adding_to_offloaded(db, scope, clean_path(body.path))
     rel = await run_op(ops.make_folder, scope, clean_path(body.path), body.name)
     return OpOut(paths=[rel], syncs=after_change(request, scope, [rel]))
 
@@ -186,6 +242,7 @@ async def rename(
 ):
     await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
+    refuse_offloaded(db, scope, [clean_path(body.path)])
     step = await run_op(ops.plan_rename, scope, clean_path(body.path), body.new_name)
     return await _move(request, db, scope, [step])
 
@@ -200,6 +257,8 @@ async def move(
     await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
     sources = [clean_path(p) for p in body.paths]
+    refuse_offloaded(db, scope, sources)
+    refuse_offloaded(db, scope, [clean_path(body.to)], inside=False)
     steps = await run_op(ops.plan_move, scope, sources, clean_path(body.to))
     return await _move(request, db, scope, steps)
 
@@ -214,6 +273,11 @@ async def delete(
     await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
     rels = ops.prune_selection([clean_path(p) for p in body.paths])
+    offloaded = offloaded_in(db, scope, rels)
+    if offloaded and not body.only_copy_ok:
+        # Their Drive copy is in the trash (or gone): the copy here may be the only one left.
+        message = f"{ONLY_COPY_MSG} {names(offloaded)}."
+        raise HTTPException(409, {"message": message, "offloaded": offloaded})
     queue = request.app.state.queue
     pair_ids = moves.touched_pairs(scope, rels)
     try:
@@ -282,6 +346,12 @@ async def upload(
     scope = get_scope(request, db, account_id)
     # Adding a whole new file is safe while a sync runs (it appears atomically and the
     # follow-up sync is marked dirty), so unlike moves and deletes there is no busy check.
+    # The deepest folder the file goes in (a folder upload names sub-folders in `name`); any
+    # offloaded folder above it counts too. Checked before plan_target makes those folders.
+    target = clean_path(path)
+    if "/" in name:
+        target = join_rel(target, name.rsplit("/", 1)[0])
+    refuse_adding_to_offloaded(db, scope, target)
     folder, dir_rel, leaf = await run_op(plan_target, scope, clean_path(path), name)
     layout = request.app.state.layout
     tmp = new_temp(layout)
@@ -329,6 +399,7 @@ async def new_file(
     state = request.app.state
     scope = get_scope(request, db, body.account_id)
     folder = clean_path(body.path)
+    refuse_adding_to_offloaded(db, scope, folder)
     if body.kind in OFFICE_KINDS:
         templates = state.settings.office_templates_dir
         rel = await run_op(ops.new_office_file, scope, templates, folder, body.kind, body.name)
@@ -338,9 +409,10 @@ async def new_file(
     await run_op(ops.require_folder, scope, folder)  # not hidden, exists, no symlink
     pair = pair_for(scope.pairs, folder)
     if pair is None:
-        raise HTTPException(
-            409, "Google Docs, Sheets and Slides can only be made in a synced folder."
-        )
+        raise HTTPException(409, ops.NOT_SYNCED_MSG)
+    if is_pretend(scope.account, state.settings.allow_local_accounts):
+        # A pretend local account (development and CI only) has no Google behind it.
+        raise HTTPException(409, PRETEND_NATIVE_MSG)
     if scope.account.status != AccountStatus.CONNECTED:
         raise HTTPException(409, "Reconnect this Google account first (Settings, Accounts).")
     prel = to_pair_rel(pair, folder)

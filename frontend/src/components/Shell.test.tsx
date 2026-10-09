@@ -128,8 +128,9 @@ describe("side navigation", () => {
       expect(screen.getByRole("link", { name: new RegExp(name) })).toBeInTheDocument();
     }
     expect(await screen.findByText("3 open conflicts")).toBeInTheDocument();
-    expect(screen.getByText("Offloaded")).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByText("Recovery")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("link", { name: "Offloaded" })).toHaveAttribute("href", "/offloaded");
+    expect(screen.getByRole("link", { name: "Recovery" })).toHaveAttribute("href", "/recovery");
+    expect(document.querySelector("[aria-disabled]")).toBeNull(); // nothing left for later
     expect(await screen.findByText(/40 GB of 100 GB on Google Drive, 1.0 GB in trash/)).toBeInTheDocument();
     expect(screen.getByText(/600 GB free on this server, 30 GB synced here/)).toBeInTheDocument();
   });

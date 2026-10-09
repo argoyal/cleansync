@@ -1,9 +1,10 @@
 import { useMutation } from "@tanstack/react-query";
 import { type FormEvent, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api, friendlyError } from "../api/client";
-import { useBrowse } from "../api/queries";
+import { useBrowse, useOffloads } from "../api/queries";
+import { IN_OFFLOADED_NOTE, NOT_SYNCED_NOTE } from "../lib/files";
 import { uploads } from "../hooks/uploads";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { useInvalidateFiles } from "./FileActions";
@@ -22,6 +23,7 @@ function useCurrentFolder(): string {
 export function NewMenu() {
   const { accountId } = useCurrentAccount();
   const folder = useCurrentFolder();
+  const navigate = useNavigate();
   const toast = useToast();
   const invalidate = useInvalidateFiles();
   const button = useRef<HTMLButtonElement>(null);
@@ -30,7 +32,16 @@ export function NewMenu() {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [newFolder, setNewFolder] = useState(false);
   // A Drive-to-here folder takes no local additions; Google files are made on Drive itself.
-  const oneWay = useBrowse(accountId, folder).data?.pair?.direction === "REMOTE_TO_LOCAL";
+  const browse = useBrowse(accountId, folder).data;
+  const oneWay = browse?.pair?.direction === "REMOTE_TO_LOCAL";
+  // Outside every sync pair nothing new would ever reach Drive (spec §8).
+  const notSynced = browse !== undefined && !browse.pair;
+  const loading = browse === undefined; // nothing is known about the folder yet
+  // Inside an offloaded folder nothing new would reach Drive: the server refuses it too.
+  const offloads = useOffloads(accountId).data ?? [];
+  const inOffloaded = offloads.some((o) => o.is_dir && (folder === o.path || folder.startsWith(`${o.path}/`)));
+  const off = oneWay || notSynced || loading || inOffloaded;
+  const googleOff = notSynced || loading || inOffloaded;
 
   const create = useMutation({
     mutationFn: ({ kind }: { kind: Kind; tab: Window | null }) =>
@@ -70,33 +81,42 @@ export function NewMenu() {
   };
 
   const items: MenuItem[] = [
-    { label: "New folder", icon: "create_new_folder", onSelect: () => setNewFolder(true), disabled: oneWay },
+    // First, and never off: it is the way to sync a folder from anywhere, a not-synced one too.
+    {
+      label: "Sync a Drive folder…",
+      icon: "cloud_sync",
+      onSelect: () => navigate(`/setup?step=folders${accountId !== null ? `&account=${accountId}` : ""}`),
+    },
     { separator: true },
-    { label: "Upload files", icon: "upload_file", onSelect: () => files.current?.click(), disabled: oneWay },
-    { label: "Upload folder", icon: "drive_folder_upload", onSelect: () => dirs.current?.click(), disabled: oneWay },
+    ...(notSynced ? [{ note: NOT_SYNCED_NOTE }, { separator: true } as const] : []),
+    ...(inOffloaded && !notSynced ? [{ note: IN_OFFLOADED_NOTE }, { separator: true } as const] : []),
+    { label: "New folder", icon: "create_new_folder", onSelect: () => setNewFolder(true), disabled: off },
+    { separator: true },
+    { label: "Upload files", icon: "upload_file", onSelect: () => files.current?.click(), disabled: off },
+    { label: "Upload folder", icon: "drive_folder_upload", onSelect: () => dirs.current?.click(), disabled: off },
     { separator: true },
     {
       label: "Google Docs",
       icon: "article",
       submenu: [
-        { label: "Blank Google Doc", onSelect: () => newFile("document") },
-        { label: "Word file (.docx)", onSelect: () => newFile("docx"), disabled: oneWay },
+        { label: "Blank Google Doc", onSelect: () => newFile("document"), disabled: googleOff },
+        { label: "Word file (.docx)", onSelect: () => newFile("docx"), disabled: off },
       ],
     },
     {
       label: "Google Sheets",
       icon: "table_chart",
       submenu: [
-        { label: "Blank Google Sheet", onSelect: () => newFile("spreadsheet") },
-        { label: "Excel file (.xlsx)", onSelect: () => newFile("xlsx"), disabled: oneWay },
+        { label: "Blank Google Sheet", onSelect: () => newFile("spreadsheet"), disabled: googleOff },
+        { label: "Excel file (.xlsx)", onSelect: () => newFile("xlsx"), disabled: off },
       ],
     },
     {
       label: "Google Slides",
       icon: "slideshow",
       submenu: [
-        { label: "Blank Google Slides", onSelect: () => newFile("presentation") },
-        { label: "PowerPoint file (.pptx)", onSelect: () => newFile("pptx"), disabled: oneWay },
+        { label: "Blank Google Slides", onSelect: () => newFile("presentation"), disabled: googleOff },
+        { label: "PowerPoint file (.pptx)", onSelect: () => newFile("pptx"), disabled: off },
       ],
     },
   ];

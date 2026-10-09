@@ -97,7 +97,9 @@ export function SetupWizard() {
       </div>
       <Steps current={index} />
       {step === "account" && <AccountStep onNext={() => go("folders")} />}
-      {step === "folders" && <FoldersStep onCreated={(p) => go("preview", { pair: String(p.id) })} />}
+      {step === "folders" && (
+        <FoldersStep initialAccount={Number(params.get("account")) || null} onCreated={(p) => go("preview", { pair: String(p.id) })} />
+      )}
       {step === "preview" && pairId !== null && <PreviewStep pairId={pairId} onNext={() => go("start", { pair: String(pairId) })} />}
       {step === "start" && pairId !== null && <StartStep pairId={pairId} />}
     </main>
@@ -161,9 +163,10 @@ function AccountStep({ onNext }: { onNext: () => void }) {
   );
 }
 
-function FoldersStep({ onCreated }: { onCreated: (pair: Pair) => void }) {
+function FoldersStep({ onCreated, initialAccount = null }: { onCreated: (pair: Pair) => void; initialAccount?: number | null }) {
   const accounts = (useAccounts().data ?? []).filter((a) => a.status !== "DISCONNECTED");
-  const [accountId, setAccountId] = useState<number | null>(null);
+  // Opened from My Drive ("Sync a Drive folder…"): start on that account.
+  const [accountId, setAccountId] = useState<number | null>(initialAccount);
   const acc = accounts.find((a) => a.id === accountId) ?? accounts[0];
   const [remote, setRemote] = useState("");
   // Spec §6.10: the local folder follows the Drive folder until it is picked by hand.

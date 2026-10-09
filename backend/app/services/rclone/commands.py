@@ -7,8 +7,12 @@ file revisions, not by this directory.
 
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from app.services.files.scope import UPLOAD_TEMP_PREFIX
+from app.services.sync.filters import escape_filter_path
 
 TRASH_FLAG = "--drive-use-trash=true"
 NO_PROMPT_FLAG = "--ask-password=false"
@@ -25,7 +29,9 @@ LOG_FLAGS = [
     "--stats-log-level",
     "NOTICE",
 ]
-DELETE_CAPABLE = frozenset({"bisync", "sync", "delete", "purge", "deletefile", "move", "moveto"})
+DELETE_CAPABLE = frozenset(
+    {"bisync", "sync", "delete", "purge", "deletefile", "move", "moveto", "rmdirs"}
+)
 
 _REMOTE_NAME = re.compile(r"[A-Za-z0-9_]+")
 _REMOTE_TARGET = re.compile(r"[A-Za-z0-9_]+:")
@@ -251,6 +257,142 @@ def moveto_args(env: RcloneEnv, src: str, dst: str) -> list[str]:
         *LOG_FLAGS,
         NO_PROMPT_FLAG,
     ]
+
+
+def _plain_parts(target: str) -> str:
+    """The path of a remote target, refused if any part is empty, `.` or `..`.
+
+    rclone cleans such paths, so `gd:Work/..` would mean the folder above, or the whole
+    Drive. One leading "/" is allowed (a local remote's absolute path). The empty path (the
+    remote's top) passes here; callers that must name an item refuse it themselves.
+    """
+    _remote(target)
+    path = target.split(":", 1)[1]
+    if _CONTROL_CHARS.search(path):
+        raise UnsafeArgument(f"remote path holds control characters: {target!r}")
+    body = path[1:] if path.startswith("/") else path
+    if body and any(part in ("", ".", "..") for part in body.split("/")):
+        raise UnsafeArgument(f"remote path has an empty, '.' or '..' part: {target!r}")
+    return body
+
+
+def _remote_item(target: str) -> str:
+    """A remote target naming one item below the remote's top: never the whole Drive, and
+    never a path that rclone would turn into a parent folder."""
+    if not _plain_parts(target):
+        raise UnsafeArgument(f"target must name one item, not the whole remote: {target!r}")
+    return target
+
+
+def _remote_parent(target: str) -> str:
+    """A folder on a remote, the top included, with no empty, `.` or `..` parts."""
+    _plain_parts(target)
+    return target
+
+
+def item_filters(name: str, is_dir: bool) -> list[str]:
+    """Limit a command run on a parent folder to one item (and, for a folder, what is in it).
+
+    Upload copies being written are left out first; then the item; then nothing else.
+    """
+    if not name or "/" in name or name in (".", ".."):
+        raise UnsafeArgument(f"not a single item name: {name!r}")
+    try:
+        esc = escape_filter_path(name)
+    except ValueError as e:
+        raise UnsafeArgument(str(e)) from e
+    include = f"+ /{esc}/**" if is_dir else f"+ /{esc}"
+    return [f"--filter=- {UPLOAD_TEMP_PREFIX}*", f"--filter={include}", "--filter=- **"]
+
+
+def offload_list_args(env: RcloneEnv, remote_parent: str, name: str, is_dir: bool) -> list[str]:
+    """Every file of one item on Drive, with Drive IDs and MD5s. Native docs are left out."""
+    return env.base() + [
+        "lsjson",
+        _remote_parent(remote_parent),
+        "--recursive",
+        "--files-only",
+        "--hash",
+        "--hash-type",
+        "md5",
+        "--drive-skip-gdocs",
+        *item_filters(name, is_dir),
+        NO_PROMPT_FLAG,
+    ]
+
+
+def offload_check_args(
+    env: RcloneEnv, local_parent: Path, remote_parent: str, name: str, is_dir: bool
+) -> list[str]:
+    """Compare one item here with Drive (size and checksum), one line per file."""
+    return env.base() + [
+        "check",
+        _local(local_parent),
+        _remote_parent(remote_parent),
+        "--combined",
+        "-",
+        *item_filters(name, is_dir),
+        *MODIFY_WINDOW,
+        "--drive-skip-gdocs",
+        "--use-json-log",
+        "--log-level",
+        "NOTICE",
+        NO_PROMPT_FLAG,
+    ]
+
+
+def files_from_raw_text(rel_paths: Sequence[str]) -> str:
+    """The checked list for delete_args: one path per line, relative to the deleted folder.
+
+    A name holding a line break would read as two paths, and an absolute path or a `..` part
+    could point outside the folder, so such lists are refused. An empty list is refused too:
+    there is nothing to delete, and the caller should not run a delete at all.
+    """
+    if not rel_paths:
+        raise UnsafeArgument("the list of files to delete is empty")
+    for rel in rel_paths:
+        parts = rel.split("/")
+        if (
+            not rel
+            or _CONTROL_CHARS.search(rel)
+            or rel.startswith("/")
+            or any(part in ("", ".", "..") for part in parts)
+        ):
+            raise UnsafeArgument(f"not a usable path for the delete list: {rel!r}")
+    return "".join(f"{rel}\n" for rel in rel_paths)
+
+
+def deletefile_args(env: RcloneEnv, target: str) -> list[str]:
+    """One file, into Drive's trash."""
+    return env.base() + ["deletefile", _remote_item(target), TRASH_FLAG, *LOG_FLAGS, NO_PROMPT_FLAG]
+
+
+def delete_args(env: RcloneEnv, target: str, files_from: Path) -> list[str]:
+    """Only the listed files of a folder (see files_from_raw_text), into Drive's trash.
+
+    Never "whatever is in the folder now": a file added on another device after the check is
+    not in the list and stays. Native docs are skipped and stay.
+    """
+    return env.base() + [
+        "delete",
+        _remote_item(target),
+        "--files-from-raw",
+        _local(files_from),
+        TRASH_FLAG,
+        "--drive-skip-gdocs",
+        *LOG_FLAGS,
+        NO_PROMPT_FLAG,
+    ]
+
+
+def rmdirs_args(env: RcloneEnv, target: str) -> list[str]:
+    """Remove the empty folders left by delete_args (a folder still holding anything stays).
+
+    No --drive-skip-gdocs here, so a folder that still holds a native doc is not seen as empty.
+    An empty folder made on Drive after the check is removed too; it goes to Drive's trash,
+    so it can be brought back from there.
+    """
+    return env.base() + ["rmdirs", _remote_item(target), TRASH_FLAG, *LOG_FLAGS, NO_PROMPT_FLAG]
 
 
 def about_args(env: RcloneEnv, remote_name: str) -> list[str]:

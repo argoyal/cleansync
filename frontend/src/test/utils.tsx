@@ -111,6 +111,7 @@ export function item(over: Partial<FileItem> & { name: string }): FileItem {
     starred: false,
     pair_id: 7,
     thumb: false,
+    pair_root: false,
     ...over,
   };
 }

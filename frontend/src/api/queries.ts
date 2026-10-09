@@ -12,9 +12,12 @@ import type {
   FolderEntry,
   Job,
   Me,
+  Offload,
+  OffloadBatch,
   Pair,
   Planned,
   Preview,
+  RecoveryList,
   Setup,
   Status,
   Storage,
@@ -39,12 +42,13 @@ export const useSystem = () => useQuery({ queryKey: ["system"], queryFn: () => a
 export const useAppSettings = () =>
   useQuery({ queryKey: ["settings"], queryFn: () => api<AppSettings>("/api/settings") });
 
+/** One folder's listing; shared by useBrowse and code that needs a listing outside a component. */
+export const browseOptions = (accountId: number | null, path: string) => ({
+  queryKey: ["browse", accountId, path],
+  queryFn: () => api<Browse>(`/api/browse${query({ account_id: accountId, path })}`),
+});
 export const useBrowse = (accountId: number | null, path: string) =>
-  useQuery({
-    queryKey: ["browse", accountId, path],
-    queryFn: () => api<Browse>(`/api/browse${query({ account_id: accountId, path })}`),
-    enabled: accountId !== null,
-  });
+  useQuery({ ...browseOptions(accountId, path), enabled: accountId !== null });
 export const useRecent = (accountId: number | null, limit = 50) =>
   useQuery({
     queryKey: ["recent", accountId, limit],
@@ -144,3 +148,39 @@ export const fileUrl = (accountId: number, path: string, download = false) =>
 export const zipUrl = (accountId: number, path: string) => `/api/files/zip${query({ account_id: accountId, path })}`;
 export const thumbUrl = (accountId: number, item: FileItem) =>
   `/api/thumbs/${accountId}/${encodePath(item.path)}${query({ v: item.mtime ?? "" })}`;
+
+const OFFLOAD_MOVING = ["PENDING", "DELETING", "VERIFYING", "RESTORING"];
+export const useOffloads = (accountId: number | null, includeRestored = false) =>
+  useQuery({
+    queryKey: ["offloads", accountId, includeRestored],
+    queryFn: () => api<Offload[]>(`/api/offloads${query({ account_id: accountId, include_restored: includeRestored })}`),
+    enabled: accountId !== null,
+    // Busy rows (being emptied, or on their way back to Drive) change without a page action.
+    refetchInterval: (q) => ((q.state.data ?? []).some((o) => o.busy || OFFLOAD_MOVING.includes(o.state)) ? 3000 : false),
+  });
+export const useOffloadBatch = (batchId: string | null) =>
+  useQuery({
+    queryKey: ["offload-batch", batchId],
+    queryFn: () => api<OffloadBatch>(`/api/offloads/batches/${batchId}`),
+    enabled: batchId !== null,
+    retry: false,
+    refetchInterval: (q) => (q.state.data?.done || q.state.error ? false : 1000),
+  });
+
+export type RecoveryFilters = { pair: string; kind: string; path: string; limit: number };
+/** Empty filters mean "all" to the API. "Show more" keeps the current page on screen while it loads. */
+export const useRecovery = (accountId: number | null, f: RecoveryFilters) =>
+  useQuery({
+    queryKey: ["recovery", accountId, f.pair, f.kind, f.path, f.limit],
+    queryFn: () =>
+      api<RecoveryList>(`/api/recovery${query({ account_id: accountId, pair: f.pair, kind: f.kind, path: f.path, limit: f.limit })}`),
+    enabled: accountId !== null,
+    // Only for a bigger limit with the same filters: other filters must not show old rows.
+    placeholderData: (prev, prevQuery) => {
+      const same = [accountId, f.pair, f.kind, f.path];
+      return prevQuery && same.every((v, i) => prevQuery.queryKey[i + 1] === v) ? prev : undefined;
+    },
+  });
+export const recoveryFileUrl = (accountId: number, id: string) => `/api/recovery/file${query({ account_id: accountId, id })}`;
+/** Where a ticket from POST /api/recovery/zip is downloaded (one use, a few minutes). */
+export const recoveryZipUrl = (token: string) => `/api/recovery/zip/${encodeURIComponent(token)}`;

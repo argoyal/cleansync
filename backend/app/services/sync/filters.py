@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models import SyncPair
 from app.paths import Layout
 from app.services.files.scope import UPLOAD_TEMP_PREFIX
+from app.services.offload.store import excluded_paths
 
 _SPECIAL = re.compile(r"([\\*?\[\]{}])")
 # Upload temp files (".drivesync-upload-<hex>", made beside the target when storage/ is on
@@ -48,7 +49,8 @@ def write_filters(path: Path, content: str) -> bool:
 
 
 def pair_exclusions(db: Session, pair: SyncPair) -> list[tuple[str, bool]]:
-    return []
+    """Offloaded paths (spec §6.5): bisync must not see them on either side."""
+    return list(excluded_paths(db, pair.id))
 
 
 def refresh_pair_filters(db: Session, layout: Layout, pair: SyncPair) -> bool:

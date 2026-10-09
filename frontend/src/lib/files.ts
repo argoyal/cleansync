@@ -41,6 +41,16 @@ export function parentOf(path: string): string {
   return i < 0 ? "" : path.slice(0, i);
 }
 
+/** Spec §8: nothing new can be added where it would never reach Google Drive. */
+export const NOT_SYNCED_NOTE = "This folder isn't synced with Google Drive. Open a synced folder to add files.";
+
+/** The same idea for the Move dialog: a move out of Drive's sync would leave the file only here. */
+/** The server's own refusal text (store.IN_OFFLOADED_MSG). */
+export const IN_OFFLOADED_NOTE =
+  "This folder is offloaded: it's kept only on this server and doesn't sync with Google Drive. Restore it to Drive to add files here.";
+
+export const NOT_SYNCED_MOVE_NOTE = "This folder isn't synced with Google Drive. Open a synced folder to move items.";
+
 /** Shown in folders of a Drive-to-here pair: the next sync undoes local changes there. */
 export const ONE_WAY_NOTE =
   "This folder only receives changes from Google Drive. Add, rename, move or delete files on Google Drive; the next sync brings the change here.";
