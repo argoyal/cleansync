@@ -22,6 +22,7 @@ from app.services.files.scope import (
 )
 from app.services.files.status import has_pending_changes
 from app.services.offload import store
+from app.services.sync.engine import WAITING_FOR_USER
 
 NATIVE_MSG = "Stays on Drive — not a file DriveSync can keep a copy of yet."
 NOT_SYNCED_MSG = "This isn't in a synced folder, so it isn't on Google Drive."
@@ -43,6 +44,10 @@ BUSY_MSG = "This folder is syncing right now. Try again when the sync finishes."
 PENDING_MSG = "This has changes waiting to sync. Sync now, then try again."
 EMPTY_MSG = "Nothing here to offload: it has no files."
 ONLY_NATIVE_MSG = "Nothing here to offload: everything in it stays on Drive."
+WAITING_MSG = (
+    "Syncing of this folder stopped and is waiting for you to look at it (see Sync activity). "
+    "Deal with that first, then try again."
+)
 
 
 @dataclass
@@ -127,6 +132,8 @@ def _plan(scope, rel, catalogs, offloads, conflicts, busy, connected) -> PlanIte
         item.blocked = NOT_STARTED_MSG
     elif not connected:
         item.blocked = RECONNECT_MSG
+    elif pair.attention_reason in WAITING_FOR_USER:
+        item.blocked = WAITING_MSG
     elif store.covers(paths, prel):
         item.blocked = ALREADY_MSG
     elif item.is_dir and store.has_inside(paths, prel):

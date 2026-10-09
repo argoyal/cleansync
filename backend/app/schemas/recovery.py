@@ -15,6 +15,7 @@ class RecoveryEntryOut(BaseModel):
     expires_on: date | None
     restorable: bool
     offload_id: int | None
+    google_emptied: bool  # an offload past Google's 30-day trash: no longer in Drive's trash
 
 
 class RecoveryListOut(BaseModel):

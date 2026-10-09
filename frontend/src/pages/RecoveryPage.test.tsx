@@ -8,7 +8,7 @@ import { RecoveryPage } from "./RecoveryPage";
 
 const entry = (over: Partial<RecoveryEntry> & { id: string; name: string }): RecoveryEntry => ({
   kind: "deleted", pair_id: 7, pair_name: "My Drive", original_path: `Docs/${over.name}`, size: 1200,
-  day: "2026-10-08", expires_on: "2026-11-08", restorable: true, offload_id: null, ...over,
+  day: "2026-10-08", expires_on: "2026-11-08", restorable: true, offload_id: null, google_emptied: false, ...over,
 });
 const ENTRIES = [
   entry({ id: "7/2026-10-08/.drivesync-deleted-101010-ab12/a.txt", name: "a.txt" }),
@@ -31,6 +31,21 @@ function setup(extra: Record<string, unknown> = {}, route = "/recovery") {
 const lastList = (calls: { path: string; url: URL }[]) => calls.filter((c) => c.path === "/api/recovery").at(-1)?.url.searchParams;
 
 describe("Recovery", () => {
+  it("says when Google has emptied an offload from its trash, and offers nothing to do on Drive", async () => {
+    setup({
+      "GET /api/recovery": {
+        total: 1,
+        entries: [entry({ id: "offload:4", name: "Ancient", kind: "offload", restorable: false, offload_id: 4, original_path: "Ancient", google_emptied: true })],
+      },
+    });
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("Google has emptied this from its trash")).toBeInTheDocument();
+    expect(within(table).queryByText("Offloaded, in Drive's trash")).toBeNull();
+    expect(within(table).queryByText(/Google empties its trash around/)).toBeNull();
+    expect(within(table).queryByRole("link", { name: "Open Offloaded" })).toBeNull();
+    expect(within(table).queryByRole("button", { name: /Ancient/ })).toBeNull();
+  });
+
   it("shows where each entry came from, where it goes back, and when it is cleaned up", async () => {
     setup();
     const table = await screen.findByRole("table");

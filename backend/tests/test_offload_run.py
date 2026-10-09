@@ -364,6 +364,7 @@ async def test_disk_drop_before_the_delete_removes_nothing_from_drive(s, fake_rc
     [item] = (await _run(s, ["Drive/Old"])).items
     off = db.scalars(select(Offload)).one()
     assert off.state == S.ATTENTION and "Syncing stopped before anything was removed" in off.note
+    assert off.trashed_ids == []  # nothing was sent to the trash, so Recovery doesn't list it
     assert item.state == "attention"
     assert "delete" not in _subs(fake_rclone)
     assert "- /Old/**" in layout.pair_filters(s.pair.id).read_text().splitlines()
@@ -399,6 +400,21 @@ async def test_blocked_items_are_listed_and_the_rest_run(s, fake_rclone, db):
     assert batch.items[1].message == "This is no longer here."
     assert "isn't in a synced folder" in batch.items[2].message
     assert s.service.batch(batch.id) is batch
+
+
+async def test_a_folder_that_starts_waiting_for_the_owner_is_not_offloaded(s, fake_rclone, db):
+    _drive_has(s, fake_rclone)
+    s.queue.running.add(s.pair.id)  # a sync runs now ...
+    plan = await s.service.preview(s.acc.id, ["Drive/Old"])
+    s.queue.running.clear()
+    pair = db.get(SyncPair, s.pair.id)
+    pair.attention_reason = "BLOCKED"  # ... and stops on the delete brake
+    db.commit()
+    plan[0].blocked = None
+    batch = OffloadBatch("b", s.acc.id, [BatchItem("Drive/Old")])
+    await s.service._run_batch(batch, plan)
+    assert batch.items[0].state == "failed" and "waiting for you" in batch.items[0].message
+    assert fake_rclone.calls() == []
 
 
 async def test_a_busy_pair_is_left_alone(s, fake_rclone):

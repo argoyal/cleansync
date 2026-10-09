@@ -102,3 +102,16 @@ def test_selection_inside_a_selected_folder_counts_once(world):
     scope, _, _ = world()
     items = _plan(scope, ["Drive/Old", "Drive/Old/a.txt", "Drive/Old"])
     assert [i.path for i in items] == ["Drive/Old"]
+
+
+@pytest.mark.parametrize("reason", ["BLOCKED", "ACCESS_CHECK", "NEEDS_RESYNC"])
+def test_a_folder_waiting_for_the_owner_is_not_offloaded(world, reason):
+    # The sync stopped for the owner to look first; an offload's own sync would skip that.
+    scope, _, _ = world(attention_reason=reason)
+    assert _plan(scope, ["Drive/Old"])[0].blocked == P.WAITING_MSG
+    assert "waiting for you" in P.WAITING_MSG
+
+
+def test_other_attention_reasons_do_not_block_an_offload(world):
+    scope, _, _ = world(attention_reason="CONFLICTS")
+    assert _plan(scope, ["Drive/Old"])[0].blocked is None

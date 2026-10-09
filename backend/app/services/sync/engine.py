@@ -36,7 +36,8 @@ log = logging.getLogger(__name__)
 _MAX_PLANNED_ROWS = 10_000
 PLAN_UNREADABLE_MSG = "Couldn't read rclone's plan; nothing was changed"
 # Pairs waiting on the user are not retried by timers or file changes, only by explicit actions.
-_WAITING_FOR_USER = {
+# The pair stopped for the owner to look first; only a manual sync (or a Resolve) goes on.
+WAITING_FOR_USER = {
     AttentionReason.BLOCKED,
     AttentionReason.ACCESS_CHECK,
     AttentionReason.NEEDS_RESYNC,
@@ -237,7 +238,7 @@ class SyncEngine:
             if not is_eligible(pair, account):
                 return None
             if trigger in _AUTOMATIC_TRIGGERS:
-                if pair.attention_reason in _WAITING_FOR_USER:
+                if pair.attention_reason in WAITING_FOR_USER:
                     return None
                 # Timers, file changes and recovery wait out the retry backoff; manual runs don't.
                 if pair.next_retry_at is not None and self.clock() < as_utc(pair.next_retry_at):

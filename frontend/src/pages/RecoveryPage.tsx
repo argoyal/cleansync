@@ -25,6 +25,7 @@ function day(iso: string): string {
 }
 
 function cleanup(e: RecoveryEntry): string {
+  if (e.kind === "offload" && e.google_emptied) return "Google has emptied this from its trash";
   if (e.kind === "offload") return e.expires_on ? `Google empties its trash around ${day(e.expires_on)}` : "";
   // expires_on is the first day the clean-up may remove it.
   return e.expires_on ? `Cleaned up on or after ${day(e.expires_on)}` : "No clean-up date (automatic clean-up is off)";
@@ -224,14 +225,14 @@ export function RecoveryPage() {
                   <p className="break-all font-medium">{e.original_path ?? e.name}</p>
                   {e.original_path === null && <p className="text-meta text-ink-2">Its sync folder was removed; download it instead.</p>}
                   <p className="text-meta text-ink-2">
-                    <span>{KIND[e.kind]}</span> · <span>{day(e.day)}</span>
+                    <span>{e.google_emptied ? "Offloaded" : KIND[e.kind]}</span> · <span>{day(e.day)}</span>
                     {e.pair_name && <span className="max-sm:hidden"> · {e.pair_name}</span>}
                   </p>
                   <p className="text-meta text-ink-2">{cleanup(e)}</p>
                 </td>
                 <td className="py-2 text-right tabular text-ink-2 max-sm:hidden">{formatBytes(e.size)}</td>
                 <td className="py-2 text-right">
-                  {e.kind === "offload" ? (
+                  {e.kind === "offload" && e.google_emptied ? null : e.kind === "offload" ? (
                     <Link to="/offloaded" className="font-semibold text-accent">
                       Open Offloaded
                     </Link>

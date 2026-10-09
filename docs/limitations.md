@@ -21,7 +21,8 @@
 - An offload that needs a look ("Needs a look") stays out of sync until you restore it to Drive. There is no "check again" button yet.
 - A sync folder that has offloaded items can't be removed until they are restored to Drive (otherwise syncing that folder again later would upload them again).
 - You can't add files inside an offloaded folder (new items, uploads or moves into it) until it is restored to Drive.
-- An offloaded item can't be renamed or moved until it is restored. Deleting it moves it to Recovery as usual; after the backup retention it is gone for good, because Drive no longer has it.
+- An offloaded item can't be renamed or moved until it is restored. Deleting it (or a folder or selection holding it) moves it to Recovery as usual, after a warning; after the backup retention it is gone for good, because Drive no longer has it.
+- Offload and Restore to Drive wait until a folder whose sync stopped for you to look at it (too many deletes, the storage check, a needed resync) is sorted out.
 - A pretend local account (used for testing) has no Drive IDs and no trash, so offload skips the trash check there and says so.
 - The automated tests use a local folder in place of Google Drive, which has no trash; Drive's trash is checked with the Drive API and in the manual end-to-end test with a real Google account.
 - A folder named `conflicts` at the top of a sync folder shares its backup folder name with the versions not kept in conflicts; the Recovery page then lists its backups as conflict versions.

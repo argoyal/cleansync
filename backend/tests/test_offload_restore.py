@@ -118,6 +118,18 @@ async def test_restore_of_an_offload_that_needs_a_look(s, db):
     assert out.state == S.RESTORING and out.note is None
 
 
+@pytest.mark.parametrize("reason", ["BLOCKED", "ACCESS_CHECK", "NEEDS_RESYNC"])
+async def test_restore_is_refused_while_the_folder_waits_for_the_owner(s, db, reason):
+    pair = db.get(SyncPair, s.pair.id)
+    pair.attention_reason = reason
+    db.commit()
+    with pytest.raises(OffloadError, match="waiting for you"):
+        await s.service.restore(s.off.id)
+    db.expire_all()
+    assert db.get(Offload, s.off.id).state == S.ACTIVE
+    assert s.queue.requests == []
+
+
 async def test_restore_refusals(s, db):
     s.queue.disabled_reason = MISSING_DISK_MSG
     with pytest.raises(OffloadError) as e:

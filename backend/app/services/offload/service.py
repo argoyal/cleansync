@@ -27,6 +27,7 @@ from app.core.pathsafe import UnsafePath, safe_join
 from app.models import Account, Offload, SyncJob, SyncPair
 from app.models.enums import AccountStatus, Direction, JobKind, JobState, Trigger
 from app.models.enums import OffloadState as S
+from app.services.accounts.service import is_pretend
 from app.services.catalog.model import valid_id
 from app.services.drive_api.tokens import DriveApiError, DriveAuthError
 from app.services.events.bus import record_event
@@ -38,6 +39,7 @@ from app.services.offload.plan import (
     BUSY_MSG,
     ONE_WAY_MSG,
     RECONNECT_MSG,
+    WAITING_MSG,
     PlanItem,
     plan_offload,
 )
@@ -55,7 +57,7 @@ from app.services.rclone.commands import (
 from app.services.rclone.errors import Failure, classify_failure
 from app.services.rclone.parse import CheckSummary, parse_check_combined
 from app.services.rclone.runner import RunResult
-from app.services.sync.engine import is_eligible
+from app.services.sync.engine import WAITING_FOR_USER, is_eligible
 from app.services.sync.filters import refresh_pair_filters
 from app.services.sync.pairs import pair_local_dir
 
@@ -247,7 +249,7 @@ class OffloadService:
 
     # ---- small helpers -----------------------------------------------------------------
     def _pretend(self, account: Account) -> bool:
-        return self.allow_pretend and account.remote_name.startswith("local_")
+        return is_pretend(account, self.allow_pretend)
 
     def _changed(self, account_id: int | None, pair_id: int | None = None) -> None:
         self.bus.publish("offload", {"account_id": account_id, "pair_id": pair_id})
@@ -407,6 +409,9 @@ class OffloadService:
             if pair.direction != Direction.BIDIRECTIONAL:  # changed after it was planned
                 bi.state, bi.message = "failed", ONE_WAY_MSG
                 return False
+            if pair.attention_reason in WAITING_FOR_USER:  # a sync stopped after planning
+                bi.state, bi.message = "failed", WAITING_MSG
+                return False
             paths = store.open_paths(db, pair.id)
             if store.covers(paths, p.prel) or (p.is_dir and store.has_inside(paths, p.prel)):
                 # Another offload took it after this one was planned.
@@ -487,7 +492,8 @@ class OffloadService:
             file_count=len(files),
             total_bytes=sum(f.size for f in files),
             state=S.PENDING,
-            trashed_ids=[f.id for f in files if f.id],
+            # Filled in when the delete starts: Recovery lists only offloads that reached it.
+            trashed_ids=[],
         )
         db.add(off)
         db.commit()
@@ -505,6 +511,7 @@ class OffloadService:
             self._settle(db, job, bi, account, off, S.ATTENTION, STOPPED_BEFORE_DELETE)
             return True
         off.state = S.DELETING
+        off.trashed_ids = [f.id for f in files if f.id]
         db.commit()
         notes: list[str] = []
         refused: str | None = None
@@ -700,6 +707,9 @@ class OffloadService:
             if pair.direction != Direction.BIDIRECTIONAL:
                 # Only a safe resync finishes a restore, and one-way folders never run one.
                 raise OffloadError(RESTORE_ONE_WAY_MSG)
+            if pair.attention_reason in WAITING_FOR_USER:
+                # Its sync would run as a manual one and skip the owner's look.
+                raise OffloadError(WAITING_MSG)
             if queue.is_busy(pair.id):
                 raise OffloadError(BUSY_MSG)
             try:

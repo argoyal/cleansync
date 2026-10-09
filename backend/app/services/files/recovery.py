@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
 
+from app.core.clock import utcnow
 from app.core.pathsafe import UnsafePath, normalize_rel, safe_join
 from app.models import Offload, SyncPair
 from app.paths import Layout
@@ -32,7 +33,7 @@ from app.services.files.scope import (
     to_pair_rel,
 )
 from app.services.files.upload import _copy_beside, _place
-from app.services.offload.store import IN_OFFLOADED_MSG, Paths, covers
+from app.services.offload.store import Paths, covers
 from app.services.sync.backups import UNSYNCED
 
 KINDS = ("sync_backup", "deleted", "first_sync", "resync", "conflict", "offload")
@@ -74,6 +75,8 @@ class RecoveryEntry:
     day: date
     expires_on: date | None  # first day it may be cleaned up; None = kept until deleted
     offload_id: int | None = None
+    # An offload past Google's 30 days: Google has emptied it from its trash by now.
+    google_emptied: bool = False
 
     @property
     def restorable(self) -> bool:
@@ -85,6 +88,8 @@ class RestoreResult:
     id: str
     restored_to: str | None = None
     error: str | None = None
+    # Put back inside an offloaded folder: it stays out of sync with it, so no sync is queued.
+    local_only: bool = False
 
 
 def unconflict(name: str) -> str:
@@ -190,7 +195,9 @@ def list_entries(
     *,
     default_days: int | None,
     offloads: list[tuple[Offload, SyncPair]],
+    today: date | None = None,
 ) -> list[RecoveryEntry]:
+    today = today or utcnow().date()
     root = layout.backups_dir / scope.account.email
     pairs = {str(p.id): p for p in scope.pairs}
     out: list[RecoveryEntry] = []
@@ -212,6 +219,7 @@ def list_entries(
                     out.append(e)
     for off, pair in offloads:
         made = off.created_at.date()
+        trash_ends = made + timedelta(days=GOOGLE_TRASH_DAYS)
         out.append(
             RecoveryEntry(
                 id=f"{OFFLOAD_PREFIX}{off.id}",
@@ -222,8 +230,9 @@ def list_entries(
                 original_path=to_account_rel(pair, off.path),
                 size=off.total_bytes,
                 day=made,
-                expires_on=made + timedelta(days=GOOGLE_TRASH_DAYS),
+                expires_on=trash_ends,
                 offload_id=off.id,
+                google_emptied=today >= trash_ends,
             )
         )
     out.sort(key=lambda e: (-e.day.toordinal(), e.original_path or e.id, e.id))
@@ -325,7 +334,8 @@ def _usable_folder(scope: Scope, pair: SyncPair | None, folder_rel: str) -> Path
 
 def _restore_one(
     layout: Layout, scope: Scope, entry_id: str, offloaded: Mapping[int, Paths]
-) -> str:
+) -> tuple[str, bool]:
+    """Where it was put back, and whether that is inside an offloaded folder."""
     entry, src = resolve(layout, scope, entry_id)
     if entry.original_path is None:
         raise RecoveryError(PAIR_GONE_MSG)
@@ -336,8 +346,11 @@ def _restore_one(
     folder_rel = parent_rel(original)
     # Where it goes now decides (an "unsynced" item may since be inside a sync pair).
     pair = pair_for(scope.pairs, original)
-    if pair is not None and covers(offloaded.get(pair.id, ()), to_pair_rel(pair, folder_rel)):
-        raise RecoveryError(IN_OFFLOADED_MSG)
+    # Back into the offloaded folder it was deleted from: a local put-back only. The folder
+    # stays out of sync (its filter covers the new file too) until Restore to Drive.
+    in_offloaded = pair is not None and covers(
+        offloaded.get(pair.id, ()), to_pair_rel(pair, folder_rel)
+    )
     folder = _usable_folder(scope, pair, folder_rel)
     # Copy beside the target under a hidden name (never synced), then put it in place under
     # the first free name: a sync never sees a half-copied file, and nothing is overwritten.
@@ -348,7 +361,7 @@ def _restore_one(
                 _place(hidden, folder / candidate)
             except FileExistsError:
                 continue
-            return join_rel(folder_rel, candidate)
+            return join_rel(folder_rel, candidate), in_offloaded
         raise RecoveryError("Could not find a free name to restore it under.")
     finally:
         hidden.unlink(missing_ok=True)
@@ -362,14 +375,13 @@ def restore_entries(
     offloaded: Mapping[int, Paths] | None = None,
 ) -> list[RestoreResult]:
     """Copy each entry back to where it came from. offloaded: each pair's open offload paths
-    (store.open_paths); nothing is restored into an offloaded folder."""
+    (store.open_paths); what goes back into an offloaded folder is marked local_only."""
     blocked = offloaded or {}
     results: list[RestoreResult] = []
     for entry_id in dict.fromkeys(ids):
         try:
-            results.append(
-                RestoreResult(entry_id, restored_to=_restore_one(layout, scope, entry_id, blocked))
-            )
+            rel, local_only = _restore_one(layout, scope, entry_id, blocked)
+            results.append(RestoreResult(entry_id, restored_to=rel, local_only=local_only))
         except (RecoveryError, FileOpError) as e:
             results.append(RestoreResult(entry_id, error=str(e)))
         except OSError as e:

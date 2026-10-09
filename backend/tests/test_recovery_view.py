@@ -1,4 +1,5 @@
 import zipfile
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 
 import pytest
@@ -83,6 +84,43 @@ def test_entries_say_where_they_came_from_and_when_they_go(auth_client, env):
     days = [e["day"] for e in body["entries"]]
     assert days == sorted(days, reverse=True)
     assert "stray.txt" not in by_name
+
+
+@pytest.mark.parametrize(
+    ("state", "ids", "listed"),
+    [
+        (S.DELETING, ["F2"], True),
+        (S.VERIFYING, ["F2"], True),
+        (S.ATTENTION, ["F2"], True),  # stopped after the delete began
+        (S.ATTENTION, [], False),  # stopped before anything went to the trash
+        (S.PENDING, [], False),
+        (S.RESTORING, ["F2"], False),
+    ],
+)
+def test_offloads_are_listed_only_once_their_delete_began(auth_client, env, db, state, ids, listed):
+    acc, pair, _, _ = env
+    db.add(Offload(pair_id=pair.id, path="Later", is_dir=True, state=state, trashed_ids=ids))
+    db.commit()
+    names = {e["name"] for e in _list(auth_client, acc, kind="offload")["entries"]}
+    assert ("Later" in names) is listed
+
+
+def test_an_offload_past_googles_trash_date_says_google_emptied_it(auth_client, env, db):
+    acc, pair, _, off = env
+    db.add(
+        Offload(
+            pair_id=pair.id,
+            path="Ancient",
+            is_dir=True,
+            state=S.ACTIVE,
+            trashed_ids=["F9"],
+            created_at=datetime.now(UTC) - timedelta(days=31),
+        )
+    )
+    db.commit()
+    by_name = {e["name"]: e for e in _list(auth_client, acc, kind="offload")["entries"]}
+    assert by_name["Ancient"]["google_emptied"] is True
+    assert by_name["Old"]["google_emptied"] is False
 
 
 def test_filters_and_paging(auth_client, env):
@@ -265,12 +303,6 @@ def test_name_helpers():
     ]
 
 
-IN_OFFLOADED = (
-    "This folder is offloaded: it's kept only on this server and doesn't sync with Google "
-    "Drive. Restore it to Drive to add files here."
-)
-
-
 def _restore(client, acc, *ids):
     r = client.post("/api/recovery/restore", json={"account_id": acc.id, "ids": list(ids)})
     assert r.status_code == 200, r.text
@@ -294,17 +326,39 @@ def test_a_resync_backup_can_be_restored(auth_client, env):
     assert (root / "Docs" / "c.txt").read_text() == "resync"
 
 
-def test_restore_into_an_offloaded_folder_is_refused(auth_client, env, app, stub_queue):
-    acc, pair, root, _ = env
+def test_restore_into_an_offloaded_folder_is_local_only(auth_client, env, app, stub_queue, db):
+    # Deleted from inside an offloaded folder, then wanted back: it goes back there, stays
+    # out of sync with the rest of the folder, and nothing is queued.
+    acc, pair, root, off = env
+    (root / "Docs" / "Old").mkdir()
     b = app.state.layout.backups_dir / acc.email
     _put(b, f"{pair.id}/2026-10-05/.drivesync-deleted-121212-ef56/Old/deep/y.txt", "y")
     _put(b, f"{pair.id}/2026-10-05/Old/w.txt", "w")
     ids = [e["id"] for e in _list(auth_client, acc)["entries"] if e["name"] in ("y.txt", "w.txt")]
     assert len(ids) == 2
     body = _restore(auth_client, acc, *ids)
-    assert [x["error"] for x in body["results"]] == [IN_OFFLOADED, IN_OFFLOADED]
-    assert not (root / "Docs" / "Old").exists()  # not even the folder was made
+    assert sorted(x["restored_to"] for x in body["results"]) == [
+        "Docs/Old/deep/y.txt",
+        "Docs/Old/w.txt",
+    ]
+    assert (root / "Docs" / "Old" / "deep" / "y.txt").read_text() == "y"
     assert stub_queue.requests == [] and body["syncs"] == {}
+    db.refresh(off)
+    assert off.state == S.ACTIVE  # still offloaded, still out of sync
+
+
+def test_restore_into_and_beside_an_offloaded_folder_syncs_only_the_one_beside(
+    auth_client, env, app, stub_queue
+):
+    acc, pair, root, _ = env
+    (root / "Docs" / "Old").mkdir()
+    b = app.state.layout.backups_dir / acc.email
+    _put(b, f"{pair.id}/2026-10-05/Old/w.txt", "w")
+    _put(b, f"{pair.id}/2026-10-05/v.txt", "v")
+    ids = [e["id"] for e in _list(auth_client, acc)["entries"] if e["name"] in ("v.txt", "w.txt")]
+    body = _restore(auth_client, acc, *ids)
+    assert all(x["error"] is None for x in body["results"])
+    assert list(body["syncs"]) == [str(pair.id)]
 
 
 def test_restore_next_to_an_offloaded_folder_still_works(auth_client, env, app):
@@ -485,3 +539,13 @@ def test_resolve_reports_when_an_entry_goes(env, app, db):
     loose = "unsynced/2026-10-04/.drivesync-deleted-111111-cd34/Loose/x.txt"
     entry, _ = resolve(app.state.layout, scope, loose, default_days=30)
     assert str(entry.expires_on) == "2026-11-04"
+
+
+def test_every_route_has_its_own_operation_id(app):
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)  # FastAPI warns about a duplicate operation id
+        schema = app.openapi()
+    ids = [op["operationId"] for path in schema["paths"].values() for op in path.values()]
+    assert len(ids) == len(set(ids))

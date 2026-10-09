@@ -292,6 +292,8 @@ export type RecoveryEntry = {
   expires_on: string | null;
   restorable: boolean;
   offload_id: number | null;
+  /** An offload past Google's 30-day trash: Google has emptied it from its trash. */
+  google_emptied: boolean;
 };
 export type RecoveryList = { total: number; entries: RecoveryEntry[] };
 export type RestoreResult = { id: string; restored_to: string | null; error: string | null };

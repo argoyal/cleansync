@@ -39,7 +39,7 @@ from app.services.files.recovery import (
     resolve,
     restore_entries,
 )
-from app.services.files.scope import Scope
+from app.services.files.scope import Scope, pair_for
 from app.services.files.zipstream import zip_files
 from app.services.offload.store import open_paths
 
@@ -50,6 +50,12 @@ GONE_MSG = "This file is no longer in Recovery (it was cleaned up or removed)."
 TOO_MANY_MSG = f"At most {MAX_ZIP} files can go in one download. Pick fewer."
 ZIP_GONE_MSG = "This download has expired or was already used. Download the files again."
 ZIP_TOKEN_SECONDS = 300
+IN_TRASH_STATES = [
+    OffloadState.DELETING,
+    OffloadState.VERIFYING,
+    OffloadState.ACTIVE,
+    OffloadState.ATTENTION,
+]
 
 
 def _now() -> float:
@@ -113,6 +119,7 @@ def _out(e: RecoveryEntry) -> RecoveryEntryOut:
         expires_on=e.expires_on,
         restorable=e.restorable,
         offload_id=e.offload_id,
+        google_emptied=e.google_emptied,
     )
 
 
@@ -134,13 +141,15 @@ async def list_recovery(
         raise HTTPException(e.status, str(e)) from e
     scope = get_scope(request, db, account_id)
     default_days = _default_days(db)
-    # Files DriveSync sent to Drive's trash in an offload, still there.
+    # Files DriveSync sent to Drive's trash in an offload, still there. trashed_ids is set
+    # when the delete starts, so an offload that stopped before it (its files still live on
+    # Drive) is not listed.
     offloads = db.execute(
         select(Offload, SyncPair)
         .join(SyncPair, SyncPair.id == Offload.pair_id)
         .where(
             SyncPair.account_id == account_id,
-            Offload.state.in_([OffloadState.ACTIVE, OffloadState.ATTENTION]),
+            Offload.state.in_(IN_TRASH_STATES),
             Offload.trash_emptied.is_(False),
         )
     ).all()
@@ -172,8 +181,14 @@ async def restore(
     results = await asyncio.to_thread(
         restore_entries, request.app.state.layout, scope, body.ids, offloaded=offloaded
     )
-    done = [r.restored_to for r in results if r.restored_to]
+    done = [r.restored_to for r in results if r.restored_to and not r.local_only]
     syncs = after_change(request, scope, done) if done else {}
+    local = [r.restored_to for r in results if r.restored_to and r.local_only]
+    if local:  # inside an offloaded folder: no sync, but open tabs show it
+        state = request.app.state
+        for pair_id in {p.id for rel in local if (p := pair_for(scope.pairs, rel))}:
+            state.indexes.invalidate(pair_id)
+        state.file_changes.notify(scope.account.id)
     return RestoreOut(
         results=[
             RestoreResultOut(id=r.id, restored_to=r.restored_to, error=r.error) for r in results
@@ -189,7 +204,8 @@ def _resolve(request: Request, db: Session, scope: Scope, entry_id: str):
         raise HTTPException(e.status, str(e)) from e
 
 
-@router.api_route("/file", methods=["GET", "HEAD"])
+@router.get("/file")
+@router.head("/file", operation_id="check_recovery_file")
 def download_file(
     account_id: int,
     id: str,
