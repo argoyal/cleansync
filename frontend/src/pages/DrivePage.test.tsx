@@ -131,6 +131,19 @@ describe("My Drive", () => {
   });
 });
 
+describe("Not synced", () => {
+  it("marks local-only items outside synced folders as Not synced and says New is off", async () => {
+    setup("/drive", {
+      "GET /api/browse": { account_id: 1, path: "", pair: null, items: [
+        item({ name: "Loose", path: "Loose", is_dir: true, size: null, status: "unsynced", pair_id: null, remote: false, mime: null }),
+      ] },
+    });
+    const folders = await screen.findByRole("region", { name: "Folders" });
+    expect(within(folders).getAllByText("Not synced").length).toBeGreaterThan(0);
+    expect(screen.getByText("This folder isn't synced with Google Drive. Open a synced folder to add files.")).toBeInTheDocument();
+  });
+});
+
 describe("Recent and Search", () => {
   it("lists recent files with their folder", async () => {
     mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/recent": [item({ name: "a.txt", path: "Work/a.txt" })] });

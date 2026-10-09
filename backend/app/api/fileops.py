@@ -381,9 +381,7 @@ async def new_file(
     await run_op(ops.require_folder, scope, folder)  # not hidden, exists, no symlink
     pair = pair_for(scope.pairs, folder)
     if pair is None:
-        raise HTTPException(
-            409, "Google Docs, Sheets and Slides can only be made in a synced folder."
-        )
+        raise HTTPException(409, ops.NOT_SYNCED_MSG)
     if scope.account.status != AccountStatus.CONNECTED:
         raise HTTPException(409, "Reconnect this Google account first (Settings, Accounts).")
     prel = to_pair_rel(pair, folder)

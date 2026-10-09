@@ -10,7 +10,7 @@ import { Icon } from "../components/Icon";
 import { PairStatusPill } from "../components/StatusBadge";
 import { Empty, IconButton, Menu, Notice } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
-import { ONE_WAY_NOTE } from "../lib/files";
+import { NOT_SYNCED_NOTE, ONE_WAY_NOTE } from "../lib/files";
 
 const VIEW_KEY = "drivesync.view";
 
@@ -172,11 +172,20 @@ export function DrivePage() {
           <Notice tone="run">{ONE_WAY_NOTE}</Notice>
         </div>
       )}
+      {browse.data && !browse.data.pair && (
+        <div className="mb-4">
+          <Notice tone="run">{NOT_SYNCED_NOTE}</Notice>
+        </div>
+      )}
       {browse.isPending && <p className="text-ink-2">Loading</p>}
       {browse.isError && <Notice tone="err">{friendlyError(browse.error)}</Notice>}
       {browse.data && browse.data.items.length === 0 && (
         <Empty icon="folder" title="This folder is empty">
-          {oneWay ? "Files added on Google Drive appear here after the next sync." : "Use New to add a folder or upload files."}
+          {oneWay
+            ? "Files added on Google Drive appear here after the next sync."
+            : !browse.data.pair
+              ? NOT_SYNCED_NOTE
+              : "Use New to add a folder or upload files."}
         </Empty>
       )}
       {browse.data && browse.data.items.length > 0 && <FileArea items={browse.data.items} view={view} />}

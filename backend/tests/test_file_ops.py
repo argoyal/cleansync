@@ -1004,3 +1004,37 @@ def test_disk_gone_refuses_drive_moves_before_any_rclone_call(
     assert (root / "Drive/a.txt").exists() and not (root / "Drive/New").exists()
     assert not (root / "Drive/up.txt").exists()
     assert app.state.queue.disabled_reason == MISSING_DISK_MSG
+
+
+NOT_SYNCED = "This folder isn't synced with Google Drive. Open a synced folder to add files."
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c, a: c.post("/api/files/mkdir", json={"account_id": a, "path": "", "name": "New"}),
+        lambda c, a: c.post("/api/files/new", json={"account_id": a, "path": "", "kind": "docx"}),
+        lambda c, a: c.post(
+            "/api/files/new", json={"account_id": a, "path": "", "kind": "document"}
+        ),
+        lambda c, a: c.post(
+            "/api/files/upload",
+            params={"account_id": a, "name": "Trip/day 1/a.txt"},
+            content=b"x",
+        ),
+        lambda c, a: c.post(
+            "/api/files/upload",
+            params={"account_id": a, "path": "Loose", "name": "a.txt"},
+            content=b"x",
+        ),
+    ],
+)
+def test_nothing_new_outside_synced_folders(auth_client, env, stub_queue, call):
+    acc, root, _ = env
+    (root / "Loose").mkdir()
+    before = sorted(p.name for p in root.rglob("*"))
+    r = call(auth_client, acc.id)
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == NOT_SYNCED
+    assert sorted(p.name for p in root.rglob("*")) == before  # not even a folder was made
+    assert stub_queue.requests == []

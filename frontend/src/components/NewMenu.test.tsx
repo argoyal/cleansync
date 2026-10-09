@@ -297,4 +297,17 @@ describe("+ New in a Drive-to-here folder", () => {
     expect(within(sub).getByRole("menuitem", { name: "Blank Google Doc" })).toBeEnabled();
     expect(within(sub).getByRole("menuitem", { name: "Word file (.docx)" })).toBeDisabled();
   });
+
+  it("is off outside synced folders and says why", async () => {
+    setup({ "GET /api/browse": { account_id: 1, path: "Work", pair: null, items: [] } });
+    const menu = await openMenu();
+    expect(await within(menu).findByText("This folder isn't synced with Google Drive. Open a synced folder to add files.")).toBeInTheDocument();
+    for (const name of ["New folder", "Upload files", "Upload folder"]) {
+      expect(within(menu).getByRole("menuitem", { name })).toBeDisabled();
+    }
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Google Docs" }));
+    const sub = screen.getByRole("menu", { name: "Google Docs" });
+    expect(within(sub).getByRole("menuitem", { name: "Blank Google Doc" })).toBeDisabled();
+    expect(within(sub).getByRole("menuitem", { name: "Word file (.docx)" })).toBeDisabled();
+  });
 });

@@ -9,7 +9,7 @@ const ITEM: Record<ItemStatus, { icon: IconName | null; label: string; color: st
   conflict: { icon: "warning", label: "Conflict: two versions", color: "text-warn" },
   native: { icon: null, label: "Google file (lives in Google Drive)", color: "text-ink-2" },
   offloaded: { icon: "inventory_2", label: "Offloaded: only on this server", color: "text-ink-2" },
-  unsynced: { icon: null, label: "Not in a synced folder", color: "text-ink-2" },
+  unsynced: { icon: null, label: "Not synced", color: "text-ink-2" },
   unknown: { icon: null, label: "Not checked yet", color: "text-ink-2" },
 };
 
@@ -29,6 +29,14 @@ export function StatusBadge({ status }: { status: ItemStatus }) {
         className="grid h-[18px] w-[18px] place-items-center rounded-full border border-ink-2/60 text-[10px] font-bold leading-none text-ink-2"
       >
         G
+      </span>
+    );
+  }
+  if (status === "unsynced") {
+    // A visible word, not just a mark (spec §8). Screen readers get it from the item's status text.
+    return (
+      <span aria-hidden="true" className="shrink-0 rounded-full border border-line px-2 text-meta text-ink-2">
+        {s.label}
       </span>
     );
   }

@@ -42,6 +42,9 @@ export function parentOf(path: string): string {
 }
 
 /** Shown in folders of a Drive-to-here pair: the next sync undoes local changes there. */
+/** Spec §8: nothing new can be added where it would never reach Google Drive. */
+export const NOT_SYNCED_NOTE = "This folder isn't synced with Google Drive. Open a synced folder to add files.";
+
 export const ONE_WAY_NOTE =
   "This folder only receives changes from Google Drive. Add, rename, move or delete files on Google Drive; the next sync brings the change here.";
 

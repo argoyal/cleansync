@@ -101,6 +101,7 @@ export function Dialog({
 export type MenuItem =
   | { label: string; icon?: IconName; onSelect: () => void; disabled?: boolean; danger?: boolean }
   | { separator: true }
+  | { note: string }
   | { label: string; icon?: IconName; submenu: MenuItem[] };
 
 /** A floating menu at a fixed point (right-click) or under an anchor; closes on outside click. */
@@ -160,7 +161,11 @@ export function Menu({
       className="fixed z-50 min-w-[220px] rounded-menu border border-line bg-surface py-1.5 shadow-float"
     >
       {items.map((item, i) =>
-        "separator" in item ? (
+        "note" in item ? (
+          <p key={i} className="max-w-[280px] px-4 py-2 text-meta text-ink-2">
+            {item.note}
+          </p>
+        ) : "separator" in item ? (
           <div key={i} role="separator" className="my-1.5 border-t border-line" />
         ) : "submenu" in item ? (
           <div key={i} className="relative" onMouseEnter={() => setOpen(i)} onMouseLeave={() => setOpen(null)}>

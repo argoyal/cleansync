@@ -121,9 +121,20 @@ def _folder(scope: Scope, rel: str) -> Path:
     return path
 
 
+NOT_SYNCED_MSG = "This folder isn't synced with Google Drive. Open a synced folder to add files."
+
+
+def require_synced(scope: Scope, folder_rel: str) -> None:
+    """New items only go into synced folders (spec §8): anywhere else they would never reach
+    Google Drive."""
+    if pair_for(scope.pairs, folder_rel) is None:
+        raise FileOpError(NOT_SYNCED_MSG, 409)
+
+
 def make_folder(scope: Scope, parent: str, name: str) -> str:
     refuse_one_way(scope, [parent])
     _folder(scope, parent)
+    require_synced(scope, parent)
     rel = join_rel(parent, validate_name(name))
     try:
         safe_join(scope.root, rel).mkdir()
@@ -292,6 +303,7 @@ def new_office_file(
     if not template.is_file():
         raise FileOpError("the blank Office files are missing from this installation", 500)
     folder = _folder(scope, folder_rel)
+    require_synced(scope, folder_rel)
     base = validate_name(name) if name else OFFICE_DEFAULT_NAMES[kind]
     if not base.lower().endswith(f".{kind}"):
         base = validate_name(f"{base}.{kind}")
