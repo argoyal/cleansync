@@ -82,6 +82,17 @@ async def post_or_none(
         return None
 
 
+async def request_or_none(
+    http_factory: Callable[[], httpx.AsyncClient], method: str, url: str, **kwargs
+) -> httpx.Response | None:
+    """Like post_or_none, for any method."""
+    try:
+        async with http_factory() as http:
+            return await http.request(method, url, **kwargs)
+    except httpx.HTTPError:
+        return None
+
+
 class TokenProvider:
     def __init__(
         self,

@@ -911,3 +911,143 @@ async def test_real_upload_temp_files_never_sync_at_any_depth(tmp_path):
     )
     assert res.exit_code == 0, res.error_tail
     assert len(list(p1.rglob(".drivesync-upload-*"))) == 3
+
+
+# --- Plan 4a: offload ---------------------------------------------------------------------
+
+
+def _offload_world(tmp_path: Path):
+    """A local folder posing as Drive (a `type = local` remote), and a copy "here"."""
+    env = c.RcloneEnv(
+        binary="rclone",
+        config_file=tmp_path / "rclone.conf",
+        cache_dir=tmp_path / "cache",
+        config_pass="",
+    )
+    (tmp_path / "rclone.conf").write_text("[loc]\ntype = local\n")
+    drive, here = tmp_path / "drive", tmp_path / "here"
+    for side in (drive, here):
+        (side / "Old [1]" / "sub").mkdir(parents=True)
+        (side / "Old [1]" / "a.txt").write_text("a")
+        (side / "Old [1]" / "sub" / "b c.txt").write_text("bb")
+        (side / "Old [1]" / ".drivesync-upload-0").write_text("half")
+        (side / "Old [10]").mkdir()
+        (side / "Old [10]" / "z.txt").write_text("z")
+        (side / "sibling.txt").write_text("s")
+    return env, drive, here
+
+
+async def _list_item(env, remote_parent, name, is_dir):
+    import json
+
+    out: list[str] = []
+    res = await run_rclone(
+        c.offload_list_args(env, remote_parent, name, is_dir),
+        env.env(),
+        log_path=None,
+        on_stdout=out.append,
+    )
+    assert res.exit_code == 0, res.error_tail
+    return json.loads("\n".join(out))
+
+
+async def test_real_offload_listing_and_check_cover_only_the_one_item(tmp_path):
+    env, drive, here = _offload_world(tmp_path)
+    items = await _list_item(env, f"loc:{drive}", "Old [1]", True)
+    assert sorted(i["Path"] for i in items) == ["Old [1]/a.txt", "Old [1]/sub/b c.txt"]
+    assert all(i["Hashes"]["md5"] and not i["IsDir"] for i in items)
+    one = await _list_item(env, f"loc:{drive}", "sibling.txt", False)
+    assert [i["Path"] for i in one] == ["sibling.txt"]
+
+    lines: list[str] = []
+    res = await run_rclone(
+        c.offload_check_args(env, here, f"loc:{drive}", "Old [1]", True),
+        env.env(),
+        log_path=None,
+        on_stdout=lines.append,
+    )
+    assert res.exit_code == 0, res.error_tail
+    parsed = sorted(p for p in map(parse_check_combined, lines) if p is not None)
+    assert parsed == [("=", "Old [1]/a.txt"), ("=", "Old [1]/sub/b c.txt")]
+
+    # A difference inside the item is seen; one outside it is not.
+    (drive / "Old [1]" / "a.txt").write_text("changed on Drive")
+    (drive / "sibling.txt").write_text("changed too")
+    lines.clear()
+    res = await run_rclone(
+        c.offload_check_args(env, here, f"loc:{drive}", "Old [1]", True),
+        env.env(),
+        log_path=None,
+        on_stdout=lines.append,
+    )
+    assert res.exit_code != 0
+    parsed = sorted(p for p in map(parse_check_combined, lines) if p is not None)
+    assert parsed == [("*", "Old [1]/a.txt"), ("=", "Old [1]/sub/b c.txt")]
+
+
+async def test_real_folder_delete_removes_only_the_checked_list(tmp_path):
+    env, drive, _ = _offload_world(tmp_path)
+    items = await _list_item(env, f"loc:{drive}", "Old [1]", True)
+    prefix = "Old [1]/"
+    listed = [i["Path"].removeprefix(prefix) for i in items]
+    files_from = tmp_path / "offload.list"
+    files_from.write_text(c.files_from_raw_text(listed))
+    # Added on "another device" after the listing and check: never in the list.
+    (drive / "Old [1]" / "late.txt").write_text("added later")
+    (drive / "Old [1]" / "sub" / "late too.txt").write_text("added later")
+
+    target = f"loc:{drive / 'Old [1]'}"
+    res = await run_rclone(c.delete_args(env, target, files_from), env.env(), log_path=None)
+    assert res.exit_code == 0, res.error_tail
+    left = sorted(str(p.relative_to(drive)) for p in drive.rglob("*") if p.is_file())
+    assert left == sorted(
+        [
+            "Old [1]/.drivesync-upload-0",
+            "Old [1]/late.txt",
+            "Old [1]/sub/late too.txt",
+            "Old [10]/z.txt",
+            "sibling.txt",
+        ]
+    )
+
+    # rmdirs only takes empty folders: everything still holding a file stays.
+    res = await run_rclone(c.rmdirs_args(env, target), env.env(), log_path=None)
+    assert res.exit_code == 0, res.error_tail
+    assert (drive / "Old [1]" / "sub" / "late too.txt").read_text() == "added later"
+    assert (drive / "Old [1]" / "late.txt").exists()
+
+
+async def test_real_folder_delete_and_rmdirs_clear_a_fully_listed_folder(tmp_path):
+    env, drive, _ = _offload_world(tmp_path)
+    (drive / "Old [1]" / ".drivesync-upload-0").unlink()
+    items = await _list_item(env, f"loc:{drive}", "Old [1]", True)
+    files_from = tmp_path / "offload.list"
+    files_from.write_text(c.files_from_raw_text([i["Path"].split("/", 1)[1] for i in items]))
+    target = f"loc:{drive / 'Old [1]'}"
+    res = await run_rclone(c.delete_args(env, target, files_from), env.env(), log_path=None)
+    assert res.exit_code == 0, res.error_tail
+    res = await run_rclone(c.rmdirs_args(env, target), env.env(), log_path=None)
+    assert res.exit_code == 0, res.error_tail
+    assert not (drive / "Old [1]").exists()
+    assert (drive / "Old [10]" / "z.txt").exists() and (drive / "sibling.txt").exists()
+
+
+async def test_real_folder_delete_with_a_missing_list_deletes_nothing(tmp_path):
+    env, drive, _ = _offload_world(tmp_path)
+    target = f"loc:{drive / 'Old [1]'}"
+    res = await run_rclone(
+        c.delete_args(env, target, tmp_path / "no-such.list"), env.env(), log_path=None
+    )
+    assert res.exit_code != 0
+    assert (drive / "Old [1]" / "a.txt").exists()
+    assert (drive / "Old [1]" / "sub" / "b c.txt").exists()
+
+
+async def test_real_deletefile_removes_just_that_file(tmp_path):
+    env, drive, _ = _offload_world(tmp_path)
+    res = await run_rclone(
+        c.deletefile_args(env, f"loc:{drive / 'sibling.txt'}"), env.env(), log_path=None
+    )
+    assert res.exit_code == 0, res.error_tail
+    assert not (drive / "sibling.txt").exists()
+    assert (drive / "Old [1]" / "a.txt").exists()
