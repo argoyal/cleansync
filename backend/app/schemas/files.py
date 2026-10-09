@@ -22,8 +22,7 @@ class FileItemOut(BaseModel):
     is_dir: bool
     size: int | None
     mtime: UtcDatetime | None
-    # synced | syncing | upload | download | conflict | native | unsynced | unknown
-    # ("offloaded" is reserved for a later version)
+    # synced | syncing | upload | download | conflict | native | offloaded | unsynced | unknown
     status: str
     local: bool
     remote: bool

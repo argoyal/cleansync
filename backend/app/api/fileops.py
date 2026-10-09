@@ -40,11 +40,16 @@ from app.services.files.names import validate_name
 from app.services.files.scope import Scope, join_rel, pair_for, to_pair_rel
 from app.services.files.status import load_overlay
 from app.services.files.upload import new_temp, plan_target, publish, save_stream
+from app.services.offload.store import covers, has_inside, open_paths
 from app.services.queue import is_stopped, stop_message
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files")
 OFFICE_KINDS = ("docx", "xlsx", "pptx")
+OFFLOADED_MSG = (
+    "This is offloaded (kept only on this server). Restore it to Drive first, then rename or "
+    "move it."
+)
 
 
 async def refuse_when_disabled(request: Request) -> None:
@@ -53,6 +58,19 @@ async def refuse_when_disabled(request: Request) -> None:
     # Checks the disk now, so the first action after it drops out never reaches Drive.
     if await is_stopped(queue):
         raise HTTPException(503, stop_message(queue))
+
+
+def refuse_offloaded(db: Session, scope: Scope, rels: list[str], *, inside: bool = True) -> None:
+    """Offloaded items (and folders holding them) keep their place until they are restored:
+    moving them would put them back in sync under a new name, or out of DriveSync's sight."""
+    for rel in rels:
+        pair = pair_for(scope.pairs, rel)
+        if pair is None:
+            continue
+        paths = open_paths(db, pair.id)
+        prel = to_pair_rel(pair, rel)
+        if covers(paths, prel) or (inside and has_inside(paths, prel)):
+            raise HTTPException(409, OFFLOADED_MSG)
 
 
 def os_error(e: OSError) -> HTTPException:
@@ -186,6 +204,7 @@ async def rename(
 ):
     await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
+    refuse_offloaded(db, scope, [clean_path(body.path)])
     step = await run_op(ops.plan_rename, scope, clean_path(body.path), body.new_name)
     return await _move(request, db, scope, [step])
 
@@ -200,6 +219,8 @@ async def move(
     await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
     sources = [clean_path(p) for p in body.paths]
+    refuse_offloaded(db, scope, sources)
+    refuse_offloaded(db, scope, [clean_path(body.to)], inside=False)
     steps = await run_op(ops.plan_move, scope, sources, clean_path(body.to))
     return await _move(request, db, scope, steps)
 

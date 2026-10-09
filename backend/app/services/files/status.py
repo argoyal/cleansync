@@ -23,6 +23,7 @@ from app.models.enums import ConflictState
 from app.paths import Layout
 from app.services.catalog.model import Catalog, CatalogEntry
 from app.services.files.scope import is_hidden, is_hidden_name, parent_rel
+from app.services.offload.store import Paths, covers, excluded_paths
 from app.services.sync.pairs import pair_local_dir
 
 log = logging.getLogger(__name__)
@@ -56,6 +57,7 @@ class PairIndex:
     status: dict[str, str]  # only items that are not "synced"; pair paths
     dir_worst: dict[str, str]  # folder -> most serious status inside it ("" = pair folder)
     total_bytes: int
+    excluded: Paths = ()  # offloaded paths it was built with: they have no sync status
 
     @property
     def has_catalog(self) -> bool:
@@ -112,17 +114,21 @@ def compare(lf: LocalEntry, ent: CatalogEntry | None) -> str:
     return "upload" if newer_here else "download"
 
 
-def build_index(pair_id: int, local_dir: Path, catalog: Catalog | None) -> PairIndex:
+def build_index(
+    pair_id: int, local_dir: Path, catalog: Catalog | None, excluded: Paths = ()
+) -> PairIndex:
     local = _walk(local_dir)
     status: dict[str, str] = {}
     if catalog is not None:
         files = catalog.files
         for rel, lf in local.items():
+            if excluded and covers(excluded, rel):
+                continue  # offloaded: kept here on purpose, never "waiting to upload"
             st = compare(lf, files.get(rel))
             if st != "synced":
                 status[rel] = st
         for rel in files:
-            if rel not in local and not is_hidden(rel):
+            if rel not in local and not is_hidden(rel) and not (excluded and covers(excluded, rel)):
                 status[rel] = "download"
     dir_worst: dict[str, str] = {}
     for rel, st in status.items():
@@ -138,7 +144,7 @@ def build_index(pair_id: int, local_dir: Path, catalog: Catalog | None) -> PairI
             parent = parent_rel(parent)
     total = sum(e.size for e in local.values())
     key = catalog.refreshed_at if catalog is not None else None
-    return PairIndex(pair_id, key, local, status, dir_worst, total)
+    return PairIndex(pair_id, key, local, status, dir_worst, total, excluded)
 
 
 def has_pending_changes(
@@ -169,15 +175,18 @@ def has_pending_changes(
 
 @dataclass
 class Overlay:
-    """Live facts laid over a cached index: open conflicts and a running sync."""
+    """Live facts laid over a cached index: open conflicts, offloaded items, a running sync."""
 
     conflicts: set[str] = field(default_factory=set)
     conflict_dirs: set[str] = field(default_factory=set)
     running: bool = False
+    offloaded: Paths = ()
 
     def apply(self, rel: str, status: str, is_dir: bool) -> str:
         if rel in self.conflicts or (is_dir and rel in self.conflict_dirs):
             return "conflict"
+        if self.offloaded and covers(self.offloaded, rel):
+            return "offloaded"
         if self.running and status in ("upload", "download"):
             return "syncing"
         return status
@@ -198,7 +207,12 @@ def load_overlay(db: Session, pair_id: int, running: bool) -> Overlay:
             if parent == "":
                 break
             parent = parent_rel(parent)
-    return Overlay(conflicts=paths, conflict_dirs=dirs, running=running)
+    return Overlay(
+        conflicts=paths,
+        conflict_dirs=dirs,
+        running=running,
+        offloaded=excluded_paths(db, pair_id),
+    )
 
 
 class StatusIndexes:
@@ -238,22 +252,28 @@ class StatusIndexes:
         self._cache.pop(pair_id, None)
         self._served_stale.discard(pair_id)
 
-    def _fresh(self, pair_id: int, catalog_key: datetime | None) -> PairIndex | None:
+    def _fresh(
+        self, pair_id: int, catalog_key: datetime | None, excluded: Paths = ()
+    ) -> PairIndex | None:
         hit = self._cache.get(pair_id)
         if hit is None:
             return None
         built_at, gen, index = hit
         if gen != self._gen.get(pair_id, 0) or index.catalog_key != catalog_key:
             return None
+        if index.excluded != excluded:
+            return None
         if self.clock() - built_at > self.ttl_s:
             return None
         return index
 
-    async def _rebuild(self, pair: SyncPair, local_dir: Path, catalog: Catalog | None) -> None:
+    async def _rebuild(
+        self, pair: SyncPair, local_dir: Path, catalog: Catalog | None, excluded: Paths = ()
+    ) -> None:
         pid = pair.id
         gen = self._gen.get(pid, 0)
         try:
-            index = await asyncio.to_thread(build_index, pid, local_dir, catalog)
+            index = await asyncio.to_thread(build_index, pid, local_dir, catalog, excluded)
             self._cache[pid] = (self.clock(), gen, index)
         finally:
             self._building.pop(pid, None)
@@ -265,17 +285,20 @@ class StatusIndexes:
                 except Exception:
                     log.exception("telling open tabs about new statuses failed")
 
-    async def get(self, pair: SyncPair, account: Account) -> tuple[PairIndex, Catalog | None]:
-        """The pair's index and the Drive listing it should be shown with."""
+    async def get(
+        self, pair: SyncPair, account: Account, excluded: Paths = ()
+    ) -> tuple[PairIndex, Catalog | None]:
+        """The pair's index and the Drive listing it should be shown with. `excluded` are the
+        pair's offloaded paths now; an index built with others is rebuilt."""
         catalog = await asyncio.to_thread(self.catalog.load, pair.id)
         key = catalog.refreshed_at if catalog is not None else None
-        index = self._fresh(pair.id, key)
+        index = self._fresh(pair.id, key, excluded)
         if index is not None:
             return index, catalog
         task = self._building.get(pair.id)
         if task is None:
             local_dir = pair_local_dir(self.layout, account, pair)
-            task = asyncio.ensure_future(self._rebuild(pair, local_dir, catalog))
+            task = asyncio.ensure_future(self._rebuild(pair, local_dir, catalog, excluded))
             self._building[pair.id] = task
             task.add_done_callback(_log_failure)
         stale = self._cache.get(pair.id)

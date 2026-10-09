@@ -17,6 +17,7 @@ from app.api import (
     files,
     health,
     jobs,
+    offloads,
     pairs,
     serve,
     setup,
@@ -41,6 +42,8 @@ from app.services.files.moves import DriveMover
 from app.services.files.status import StatusIndexes
 from app.services.files.thumbs import Thumbnails
 from app.services.files.upload import clear_uploads, sweep_upload_leftovers
+from app.services.offload.service import OffloadService
+from app.services.offload.store import recover_offloads, sweep_delete_lists
 from app.services.queue import DB_BROKEN_MSG, SyncQueue, make_handler
 from app.services.rclone.setup import build_rclone_env, ensure_config_encrypted
 from app.services.scheduler import Scheduler
@@ -96,7 +99,10 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             # as running forever. Nothing is queued to run again.
             try:
                 with session_factory() as db:
+                    # An offload a stop cut short stays out of sync and shows as needing a look.
+                    recover_offloads(db)
                     recover_interrupted(db)
+                sweep_delete_lists(layout)
             except Exception:
                 logger.exception("could not close jobs left running")
         elif start_background:
@@ -104,8 +110,13 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             sweep = asyncio.ensure_future(asyncio.to_thread(sweep_upload_leftovers, layout.storage))
             sweep.add_done_callback(_log_sweep)
             with session_factory() as db:
+                recover_offloads(db)
                 for pair_id in recover_interrupted(db):
                     app.state.queue.request(pair_id, "RECOVERY")
+            try:
+                sweep_delete_lists(layout)
+            except OSError as e:  # harmless leftovers: never stop startup over them
+                logger.warning("could not remove old offload delete lists: %s", e)
             app.state.scheduler.start()
             try:
                 active = await self_test(layout.storage)
@@ -127,6 +138,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             app.state.watcher.stop()
             app.state.file_changes.stop()
             await app.state.queue.stop()
+            await app.state.offloads.stop()
             await app.state.catalog.stop()
 
     app = FastAPI(
@@ -221,6 +233,16 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         app.state.queue.disabled_reason = DB_BROKEN_MSG
     elif volume is not None:
         app.state.queue.disabled_reason = volume.check()
+    app.state.offloads = OffloadService(
+        engine=app.state.engine,
+        get_queue=lambda: app.state.queue,  # tests swap the queue after startup
+        catalog=app.state.catalog,
+        indexes=app.state.indexes,
+        drive=app.state.drive_api,
+        allow_pretend=settings.allow_local_accounts,
+    )
+    # A Restore to Drive finishes when the pair's safe resync has uploaded the files.
+    app.state.initial.on_resync_done.append(app.state.offloads.resync_done)
     app.state.scheduler = Scheduler(
         session_factory=session_factory,
         queue=app.state.queue,
@@ -254,6 +276,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         serve.router,
         setup.router,
         jobs.router,
+        offloads.router,
         conflicts.router,
         system.router,
         docs.router,

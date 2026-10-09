@@ -216,3 +216,37 @@ def test_hidden_names_ignore_case_in_the_walk(tmp_path):
     _file(tmp_path, ".Google-Exports/a.docx")
     _file(tmp_path, "rclone_test")
     assert build_index(1, tmp_path, None).local == {}
+
+
+def test_offloaded_paths_have_no_sync_status_and_never_raise_their_folder(tmp_path):
+    _file(tmp_path, "Work/Old/a.txt")
+    _file(tmp_path, "Work/b.txt")
+    catalog = _cat(_e("Work", 0, is_dir=True), _e("Work/b.txt"))
+    plain = build_index(1, tmp_path, catalog)
+    assert plain.folder_status("Work") == "upload"  # without the offload: waits to upload
+    idx = build_index(1, tmp_path, catalog, excluded=(("Work/Old", True),))
+    assert idx.folder_status("Work") == "synced"
+    assert "Work/Old/a.txt" in idx.local and idx.excluded == (("Work/Old", True),)
+    overlay = Overlay(offloaded=(("Work/Old", True),))
+    assert overlay.apply("Work/Old", idx.folder_status("Work/Old"), True) == "offloaded"
+    assert overlay.apply("Work/Old/a.txt", idx.item_status("Work/Old/a.txt"), False) == "offloaded"
+    assert overlay.apply("Work/b.txt", "synced", False) == "synced"
+
+
+def test_an_index_built_with_other_offloads_is_rebuilt(monkeypatch, tmp_path):
+    _file(tmp_path, "Old/a.txt")
+    cat = _cat(_e("b.txt"))
+    idx = _indexes(monkeypatch, tmp_path, cat)
+    pair, account = SimpleNamespace(id=1), SimpleNamespace()
+    old = (("Old", True),)
+
+    async def run():
+        plain, _ = await idx.get(pair, account)
+        assert plain.overall() == "download" and plain.item_status("Old/a.txt") == "upload"
+        assert idx._fresh(1, cat.refreshed_at, old) is None  # offloaded since: not fresh
+        idx._cache.clear()
+        built, _ = await idx.get(pair, account, old)
+        assert built.excluded == old and "Old/a.txt" not in built.status
+        assert idx._fresh(1, cat.refreshed_at, old) is built
+
+    asyncio.run(run())
