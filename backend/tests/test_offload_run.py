@@ -486,6 +486,21 @@ async def test_an_item_offloaded_meanwhile_is_not_offloaded_twice(s, fake_rclone
     assert len(db.scalars(select(Offload)).all()) == 1
 
 
+async def test_a_pair_made_one_way_after_planning_is_not_offloaded(s, fake_rclone, db):
+    _drive_has(s, fake_rclone)
+    planned = await s.service.preview(s.acc.id, ["Drive/Old"])
+    pair = db.get(SyncPair, s.pair.id)
+    pair.direction = "LOCAL_TO_REMOTE"
+    db.commit()
+    late = OffloadBatch("late", s.acc.id, [BatchItem("Drive/Old")])
+    await s.service._run_batch(late, planned)
+    assert [(i.state, i.message) for i in late.items] == [
+        ("failed", "Offload works only in folders that sync both ways.")
+    ]
+    assert _subs(fake_rclone) == []
+    assert db.scalars(select(Offload)).all() == []
+
+
 async def test_a_single_file_with_a_twin_on_drive_says_so(s, fake_rclone, db):
     _drive_has(s, fake_rclone, files=(("a.txt", 3, "F1"), ("a.txt", 3, "F9")))
     (s.root / "Drive" / "a.txt").write_text("aaa")

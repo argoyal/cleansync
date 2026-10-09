@@ -1294,3 +1294,36 @@ async def test_real_single_file_with_brackets_leaves_its_neighbour(tmp_path):
         assert (w.drive / "Old" / "a.txt").exists() and (w.drive / "keep.txt").exists()
     finally:
         w.eng.dispose()
+
+
+async def test_real_restore_when_drive_has_a_newer_file_of_the_same_name(tmp_path):
+    from sqlalchemy import select
+
+    from app.models import Offload
+
+    w = await _service_world(tmp_path)
+    try:
+        item = await _offload(w, "Old")
+        assert item.state == "done", item.message
+        await w.initial.safe_resync(w.pair_id, "OFFLOAD")
+        # Meanwhile someone puts a newer Old/a.txt on Drive.
+        (w.drive / "Old").mkdir()
+        (w.drive / "Old" / "a.txt").write_text("newer on Drive")
+        later = (w.local / "Old" / "a.txt").stat().st_mtime + 3600
+        os.utime(w.drive / "Old" / "a.txt", (later, later))
+        await w.service.restore(item.offload_id)
+        await w.engine.run_pair(w.pair_id, "OFFLOAD")
+        # Nothing is lost: Drive's newer file is kept (and synced here), the offloaded copy is
+        # saved to the resync backups first (Recovery lists .drivesync-resync-* folders), and
+        # the rest of the folder goes back up.
+        assert (w.drive / "Old" / "a.txt").read_text() == "newer on Drive"
+        assert (w.local / "Old" / "a.txt").read_text() == "newer on Drive"
+        assert (w.drive / "Old" / "sub" / "b.txt").read_text() == "bb"
+        assert _files(w.drive) == _files(w.local)
+        saved = [p for p in w.layout.backups_dir.rglob("a.txt") if p.is_file()]
+        assert [p.read_text() for p in saved] == ["aaa"]
+        assert saved[0].parent.parent.name.startswith(".drivesync-resync-")
+        with w.sf() as db:
+            assert db.scalars(select(Offload)).one().state == "RESTORED"
+    finally:
+        w.eng.dispose()

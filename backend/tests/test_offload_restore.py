@@ -1,7 +1,9 @@
+import asyncio
 import hashlib
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select
 
 from app.models import Offload, SyncPair
 from app.models.enums import OffloadState as S
@@ -127,7 +129,7 @@ async def test_restore_refusals(s, db):
         await s.service.restore(s.off.id)
     s.queue.running.clear()
     s.service.emptying.add(s.off.id)
-    with pytest.raises(OffloadError, match="busy right now"):
+    with pytest.raises(OffloadError, match="emptying these from the trash right now"):
         await s.service.restore(s.off.id)
     s.service.emptying.clear()
     await s.service.restore(s.off.id)
@@ -304,3 +306,136 @@ async def test_empty_trash_refusals(s, db):
     with pytest.raises(OffloadError, match="checked in the trash"):
         await s.service.empty_trash(s.off.id)
     assert s.drive.deleted == []
+
+
+# ---- Restore and Empty racing (fix round 1) -----------------------------------------------
+
+
+class YieldingQueue(StubQueue):
+    """Like the real queue: checking the disk gives the event loop to others."""
+
+    async def check(self):
+        await asyncio.sleep(0)
+        return self.disabled_reason is not None
+
+
+async def test_restore_then_empty_started_together_only_restore_runs(s, db):
+    queue = YieldingQueue()
+    s.service._get_queue = lambda: queue
+    restored, emptied = await asyncio.gather(
+        s.service.restore(s.off.id), s.service.empty_trash(s.off.id), return_exceptions=True
+    )
+    await s.service.wait_idle()
+    assert restored.state == S.RESTORING
+    assert isinstance(emptied, OffloadError) and "going back to Google Drive" in str(emptied)
+    db.expire_all()
+    off = db.get(Offload, s.off.id)
+    assert s.drive.deleted == [] and off.trash_emptied is False and off.state == S.RESTORING
+
+
+async def test_empty_then_restore_started_together_only_empty_runs(s, db):
+    queue = YieldingQueue()
+    s.service._get_queue = lambda: queue
+    emptied, restored = await asyncio.gather(
+        s.service.empty_trash(s.off.id), s.service.restore(s.off.id), return_exceptions=True
+    )
+    await s.service.wait_idle()
+    assert isinstance(restored, OffloadError) and "emptying" in str(restored)
+    assert not isinstance(emptied, Exception)
+    db.expire_all()
+    off = db.get(Offload, s.off.id)
+    assert sorted(s.drive.deleted) == ["F1", "F2"] and off.state == S.ACTIVE
+    assert queue.requests == []
+
+
+async def test_two_empty_calls_together_run_once(s, db):
+    queue = YieldingQueue()
+    s.service._get_queue = lambda: queue
+    first, second = await asyncio.gather(
+        s.service.empty_trash(s.off.id), s.service.empty_trash(s.off.id), return_exceptions=True
+    )
+    await s.service.wait_idle()
+    assert not isinstance(first, Exception)
+    assert isinstance(second, OffloadError) and "already emptying" in str(second)
+    assert sorted(s.drive.deleted) == ["F1", "F2"]
+
+
+async def test_empty_stops_when_the_offload_is_no_longer_done(s, db):
+    # Belt and braces: whatever moved the row on, no permanent delete follows.
+    real = s.drive.delete_forever
+
+    async def then_restore(remote, file_id, *, size, md5):
+        ok = await real(remote, file_id, size=size, md5=md5)
+        with s.service.sf() as other:
+            other.get(Offload, s.off.id).state = S.RESTORING
+            other.commit()
+        return ok
+
+    s.drive.delete_forever = then_restore
+    await _empty(s)
+    db.expire_all()
+    off = db.get(Offload, s.off.id)
+    assert s.drive.deleted == ["F1"] and off.trash_emptied is False
+    assert "1 of 2" in off.note and "no longer offloaded" in off.note
+
+
+# ---- honest notes (fix round 1) -----------------------------------------------------------
+
+
+async def test_a_partial_empty_says_how_many_were_deleted_and_kept(s, db):
+    from app.models import Event
+
+    s.drive.trashed["F2"] = False
+    await _empty(s)
+    db.expire_all()
+    off = db.get(Offload, s.off.id)
+    assert off.note.startswith("Deleted 1 of 2 files from Google Drive's trash for good.")
+    events = db.scalars(select(Event).where(Event.kind == "offload_trash_emptied")).all()
+    assert [e.level for e in events] == ["warning"]
+    assert "1 of 2" in events[0].message and "1 left in the trash" in events[0].message
+
+
+async def test_a_full_empty_says_so(s, db):
+    from app.models import Event
+
+    await _empty(s)
+    db.expire_all()
+    [event] = db.scalars(select(Event).where(Event.kind == "offload_trash_emptied")).all()
+    assert event.level == "info" and "deleted all 2 files" in event.message
+
+
+async def test_a_recorded_id_missing_from_the_saved_list_is_not_counted_as_emptied(s, db, layout):
+    off = db.get(Offload, s.off.id)
+    off.trashed_ids = ["F1", "F2", "F3"]
+    db.commit()
+    await _empty(s)
+    db.expire_all()
+    off = db.get(Offload, s.off.id)
+    assert sorted(s.drive.deleted) == ["F1", "F2"] and off.trash_emptied is False
+    assert "2 of 3" in off.note and "1 file isn't in DriveSync's saved list" in off.note
+
+
+async def test_a_server_copy_changed_during_the_empty_keeps_that_file(s, db):
+    real = s.drive.delete_forever
+
+    async def then_edit(remote, file_id, *, size, md5):
+        ok = await real(remote, file_id, size=size, md5=md5)
+        (s.root / "Drive" / "Old" / "b.txt").write_text("edited meanwhile")
+        return ok
+
+    s.drive.delete_forever = then_edit
+    await _empty(s)
+    db.expire_all()
+    off = db.get(Offload, s.off.id)
+    assert s.drive.deleted == ["F1"] and off.trash_emptied is False
+    assert "changed on this server" in off.note and "Drive/Old/b.txt" in off.note
+
+
+async def test_restore_refuses_a_pair_that_is_not_two_way(s, db):
+    pair = db.get(SyncPair, s.pair.id)
+    pair.direction = "LOCAL_TO_REMOTE"
+    db.commit()
+    with pytest.raises(OffloadError, match="sync both ways"):
+        await s.service.restore(s.off.id)
+    db.expire_all()
+    assert db.get(Offload, s.off.id).state == S.ACTIVE and s.queue.requests == []
