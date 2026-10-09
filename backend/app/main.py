@@ -97,14 +97,22 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             logger.error("%s", app.state.queue.disabled_reason)
             # The database itself is sound: close jobs a crash left "running", so no pair shows
             # as running forever. Nothing is queued to run again.
+            # Each step on its own: one failing must not skip the others.
+            try:
+                with session_factory() as db:
+                    recover_interrupted(db)
+            except Exception:
+                logger.exception("could not close jobs left running")
             try:
                 with session_factory() as db:
                     # An offload a stop cut short stays out of sync and shows as needing a look.
                     recover_offloads(db)
-                    recover_interrupted(db)
+            except Exception:
+                logger.exception("could not mark offloads a stop cut short")
+            try:
                 sweep_delete_lists(layout)
             except Exception:
-                logger.exception("could not close jobs left running")
+                logger.exception("could not remove old offload delete lists")
         elif start_background:
             # Walking all of storage/ can take a while on a slow disk: don't hold up startup.
             sweep = asyncio.ensure_future(asyncio.to_thread(sweep_upload_leftovers, layout.storage))
@@ -137,8 +145,10 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             app.state.scheduler.shutdown()
             app.state.watcher.stop()
             app.state.file_changes.stop()
-            await app.state.queue.stop()
+            # Offloads first: a cancelled step lets go of its pair (and may ask for a sync)
+            # while the queue still runs, and the queue's stop then ends anything it started.
             await app.state.offloads.stop()
+            await app.state.queue.stop()
             await app.state.catalog.stop()
 
     app = FastAPI(

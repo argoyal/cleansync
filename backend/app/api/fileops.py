@@ -50,6 +50,10 @@ OFFLOADED_MSG = (
     "This is offloaded (kept only on this server). Restore it to Drive first, then rename or "
     "move it."
 )
+IN_OFFLOADED_MSG = (
+    "This folder is offloaded: it's kept only on this server and doesn't sync with Google "
+    "Drive. Restore it to Drive to add files here."
+)
 
 
 async def refuse_when_disabled(request: Request) -> None:
@@ -60,9 +64,17 @@ async def refuse_when_disabled(request: Request) -> None:
         raise HTTPException(503, stop_message(queue))
 
 
-def refuse_offloaded(db: Session, scope: Scope, rels: list[str], *, inside: bool = True) -> None:
+def refuse_offloaded(
+    db: Session,
+    scope: Scope,
+    rels: list[str],
+    *,
+    inside: bool = True,
+    message: str = OFFLOADED_MSG,
+) -> None:
     """Offloaded items (and folders holding them) keep their place until they are restored:
-    moving them would put them back in sync under a new name, or out of DriveSync's sight."""
+    moving them would put them back in sync under a new name, or out of DriveSync's sight.
+    With inside=False only the item itself and what is inside an offloaded folder count."""
     for rel in rels:
         pair = pair_for(scope.pairs, rel)
         if pair is None:
@@ -70,7 +82,13 @@ def refuse_offloaded(db: Session, scope: Scope, rels: list[str], *, inside: bool
         paths = open_paths(db, pair.id)
         prel = to_pair_rel(pair, rel)
         if covers(paths, prel) or (inside and has_inside(paths, prel)):
-            raise HTTPException(409, OFFLOADED_MSG)
+            raise HTTPException(409, message)
+
+
+def refuse_adding_to_offloaded(db: Session, scope: Scope, folder: str) -> None:
+    """New items can't go into an offloaded folder: they would never reach Google Drive (a
+    new Google Doc would even bring the folder back on Drive)."""
+    refuse_offloaded(db, scope, [folder], inside=False, message=IN_OFFLOADED_MSG)
 
 
 def os_error(e: OSError) -> HTTPException:
@@ -191,6 +209,7 @@ async def mkdir(
 ):
     await refuse_when_disabled(request)
     scope = get_scope(request, db, body.account_id)
+    refuse_adding_to_offloaded(db, scope, clean_path(body.path))
     rel = await run_op(ops.make_folder, scope, clean_path(body.path), body.name)
     return OpOut(paths=[rel], syncs=after_change(request, scope, [rel]))
 
@@ -303,6 +322,12 @@ async def upload(
     scope = get_scope(request, db, account_id)
     # Adding a whole new file is safe while a sync runs (it appears atomically and the
     # follow-up sync is marked dirty), so unlike moves and deletes there is no busy check.
+    # The deepest folder the file goes in (a folder upload names sub-folders in `name`); any
+    # offloaded folder above it counts too. Checked before plan_target makes those folders.
+    target = clean_path(path)
+    if "/" in name:
+        target = join_rel(target, name.rsplit("/", 1)[0])
+    refuse_adding_to_offloaded(db, scope, target)
     folder, dir_rel, leaf = await run_op(plan_target, scope, clean_path(path), name)
     layout = request.app.state.layout
     tmp = new_temp(layout)
@@ -350,6 +375,7 @@ async def new_file(
     state = request.app.state
     scope = get_scope(request, db, body.account_id)
     folder = clean_path(body.path)
+    refuse_adding_to_offloaded(db, scope, folder)
     if body.kind in OFFICE_KINDS:
         templates = state.settings.office_templates_dir
         rel = await run_op(ops.new_office_file, scope, templates, folder, body.kind, body.name)

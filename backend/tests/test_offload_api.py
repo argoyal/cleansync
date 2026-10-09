@@ -1,11 +1,14 @@
+import hashlib
 import time
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.main import create_app
-from app.models import Offload, SyncJob
+from app.models import Offload, SyncJob, SyncPair
 from app.models.enums import OffloadState as S
+from app.services.catalog.model import CatalogEntry
 from app.services.offload import store
 from app.services.queue import MISSING_DISK_MSG
 from tests.fake_rclone import check_out
@@ -148,8 +151,12 @@ def test_restore_and_empty_trash_routes(auth_client, env, db, app):
     assert [o["state"] for o in listed] == ["RESTORING"]
 
 
-def test_empty_trash_starts_in_the_background(auth_client, env, db, app):
-    acc, pair, _ = env
+def test_empty_trash_runs_in_the_background_and_deletes_the_recorded_file(
+    auth_client, env, db, app
+):
+    acc, pair, root = env
+    md5 = hashlib.md5(b"aaa").hexdigest()
+    app.state.offloads.drive.files["F1"] = (3, md5)  # in Drive's trash, as it was checked
     off = Offload(
         pair_id=pair.id,
         path="Old",
@@ -163,24 +170,21 @@ def test_empty_trash_starts_in_the_background(auth_client, env, db, app):
     db.add(off)
     db.commit()
     store.write_manifest(
-        app.state.layout,
-        off.id,
-        [{"path": "Old/a.txt", "size": 3, "md5": "md5-F1", "id": "F1"}],
+        app.state.layout, off.id, [{"path": "Old/a.txt", "size": 3, "md5": md5, "id": "F1"}]
     )
-    service = app.state.offloads
-    started = []
-
-    async def held_empty(offload_id):  # stands in for the real work, which keeps it "busy"
-        started.append(offload_id)
-
-    service._empty = held_empty
     r = auth_client.post(f"/api/offloads/{off.id}/empty-trash")
     assert r.status_code == 202, r.text
-    assert r.json()["busy"] is True and r.json()["state"] == "ACTIVE"
-    assert started == [off.id]
-    [row] = auth_client.get("/api/offloads", params={"account_id": acc.id}).json()
-    assert row["busy"] is True
-    service.emptying.clear()
+    assert r.json()["state"] == "ACTIVE"
+    for _ in range(100):
+        [row] = auth_client.get("/api/offloads", params={"account_id": acc.id}).json()
+        if not row["busy"]:
+            break
+        time.sleep(0.05)
+    assert (row["busy"], row["trash_emptied"], row["state"]) == (False, True, "ACTIVE")
+    assert app.state.offloads.drive.deleted == ["F1"]
+    assert (root / "Drive" / "Old" / "a.txt").read_text() == "aaa"  # the copy here stays
+    again = auth_client.post(f"/api/offloads/{off.id}/empty-trash")
+    assert again.status_code == 409
 
 
 def test_restored_offloads_are_listed_only_when_asked(auth_client, env, db):
@@ -194,8 +198,8 @@ def test_restored_offloads_are_listed_only_when_asked(auth_client, env, db):
         "/api/offloads", params={"account_id": acc.id, "include_restored": True}
     ).json()
     assert [o["path"] for o in every] == ["Drive/Old", "Drive/Gone"]  # newest first
-    other = auth_client.get("/api/offloads", params={"account_id": acc.id + 1}).json()
-    assert other == []
+    other = auth_client.get("/api/offloads", params={"account_id": acc.id + 1})
+    assert other.status_code == 404
 
 
 @pytest.mark.parametrize("action", ["rename", "move", "move-into"])
@@ -332,3 +336,139 @@ def test_startup_cleans_up_offloads_while_syncing_is_stopped(
     assert app.state.queue.disabled_reason == MISSING_DISK_MSG
     with TestClient(app):
         _check_cleaned(db, layout, off, done, stale)
+
+
+def test_startup_while_stopped_closes_jobs_even_if_offload_clean_up_fails(
+    settings, layout, db, make_account, make_pair, monkeypatch
+):
+    import app.main as main_mod
+
+    create_app(settings, start_background=False)
+    layout.volume_file.unlink()
+    off, done, stale = _left_by_a_hard_stop(db, layout, make_account, make_pair)
+
+    def broken(db):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main_mod, "recover_offloads", broken)
+    app = create_app(settings, start_background=False)
+    with TestClient(app):
+        db.expire_all()
+        job = db.scalars(select(SyncJob)).one()
+        assert job.state == "INTERRUPTED"  # recover_interrupted still ran
+        assert not stale.exists()  # and so did the sweep
+
+
+def test_shutdown_stops_offloads_before_the_queue(settings):
+    app = create_app(settings, start_background=False)
+    order = []
+
+    class Q(_Queue):
+        async def stop(self):
+            order.append("queue")
+
+    app.state.queue = Q()
+    real = app.state.offloads.stop
+
+    async def stop():
+        order.append("offloads")
+        await real()
+
+    app.state.offloads.stop = stop
+    with TestClient(app):
+        pass
+    assert order == ["offloads", "queue"]
+
+
+# ---- pairs and new items ---------------------------------------------------------------
+PAIR_HAS_OFFLOADS = (
+    "This synced folder has offloaded items. Restore them to Google Drive first, or they "
+    "would be uploaded again if you sync this folder later."
+)
+IN_OFFLOADED = (
+    "This folder is offloaded: it's kept only on this server and doesn't sync with Google "
+    "Drive. Restore it to Drive to add files here."
+)
+
+
+@pytest.mark.parametrize("state", [s for s in S if s != S.RESTORED])
+def test_a_pair_with_open_offloads_cannot_be_deleted(auth_client, env, db, state):
+    acc, pair, root = env
+    db.add(Offload(pair_id=pair.id, path="Old", is_dir=True, state=state))
+    db.commit()
+    r = auth_client.delete(f"/api/sync-pairs/{pair.id}")
+    assert r.status_code == 409 and r.json()["detail"] == PAIR_HAS_OFFLOADS
+    db.expire_all()
+    assert db.get(SyncPair, pair.id) is not None
+    assert db.scalars(select(Offload)).one().state == state
+
+
+def test_a_pair_whose_offloads_are_all_restored_can_be_deleted(auth_client, env, db):
+    acc, pair, _ = env
+    db.add(Offload(pair_id=pair.id, path="Old", is_dir=True, state=S.RESTORED))
+    db.commit()
+    assert auth_client.delete(f"/api/sync-pairs/{pair.id}").status_code == 204
+
+
+def _in_offloaded(db, pair, path="Old"):
+    db.add(Offload(pair_id=pair.id, path=path, is_dir=True, state=S.ACTIVE))
+    db.commit()
+
+
+@pytest.mark.parametrize("folder", ["Drive/Old", "Drive/Old/sub"])
+def test_no_new_folder_inside_an_offloaded_folder(auth_client, env, db, folder):
+    acc, pair, root = env
+    (root / "Drive" / "Old" / "sub").mkdir()
+    _in_offloaded(db, pair)
+    r = auth_client.post(
+        "/api/files/mkdir", json={"account_id": acc.id, "path": folder, "name": "New"}
+    )
+    assert r.status_code == 409 and r.json()["detail"] == IN_OFFLOADED
+    assert not (root / folder / "New").exists()
+
+
+@pytest.mark.parametrize(
+    ("path", "name"), [("Drive/Old", "b.txt"), ("Drive", "Old/b.txt"), ("Drive", "Old/x/b.txt")]
+)
+def test_no_upload_into_an_offloaded_folder(auth_client, env, db, path, name):
+    acc, pair, root = env
+    _in_offloaded(db, pair)
+    r = auth_client.post(
+        "/api/files/upload",
+        params={"account_id": acc.id, "path": path, "name": name},
+        content=b"hello",
+    )
+    assert r.status_code == 409 and r.json()["detail"] == IN_OFFLOADED
+    assert sorted(p.name for p in (root / "Drive" / "Old").iterdir()) == ["a.txt"]
+
+
+def test_upload_next_to_an_offloaded_folder_still_works(auth_client, env, db):
+    acc, pair, root = env
+    _in_offloaded(db, pair)
+    r = auth_client.post(
+        "/api/files/upload",
+        params={"account_id": acc.id, "path": "Drive", "name": "Older/b.txt"},
+        content=b"hello",
+    )
+    assert r.status_code == 200, r.text
+    assert (root / "Drive" / "Older" / "b.txt").read_bytes() == b"hello"
+
+
+@pytest.mark.parametrize("kind", ["docx", "document", "spreadsheet", "presentation"])
+def test_no_new_file_inside_an_offloaded_folder(auth_client, env, db, app, save_catalog, kind):
+    acc, pair, root = env
+    save_catalog(pair.id, [CatalogEntry("Old", True, 0, None, id="OLD1")], root_id="root")
+    _in_offloaded(db, pair)
+    calls = []
+
+    async def create_native(*args):
+        calls.append(args)
+        raise AssertionError("Drive must not be asked")
+
+    app.state.drive_api.create_native = create_native
+    r = auth_client.post(
+        "/api/files/new", json={"account_id": acc.id, "path": "Drive/Old", "kind": kind}
+    )
+    assert r.status_code == 409 and r.json()["detail"] == IN_OFFLOADED
+    assert calls == []
+    assert sorted(p.name for p in (root / "Drive" / "Old").iterdir()) == ["a.txt"]

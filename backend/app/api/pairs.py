@@ -7,10 +7,15 @@ from app.auth.deps import AuthContext, get_db, require_user
 from app.models import Account, SyncPair
 from app.models.enums import AttentionReason, Direction, PairStatus
 from app.schemas.pairs import PairCreate, PairOut, PairUpdate
+from app.services.offload.store import open_paths
 from app.services.queue import is_stopped, stop_message
 from app.services.sync.pairs import PairError, create_pair, delete_pair, to_out, update_pair
 
 router = APIRouter(prefix="/api/sync-pairs")
+PAIR_HAS_OFFLOADS_MSG = (
+    "This synced folder has offloaded items. Restore them to Google Drive first, or they "
+    "would be uploaded again if you sync this folder later."
+)
 
 _ATTENTION = {"BLOCKED", "CONFLICTS", "NEEDS_RESYNC", "AUTH", "PLAN_UNREADABLE"}
 _ERRORS = {"ACCESS_CHECK", "FAILED"}
@@ -92,6 +97,10 @@ def delete(
     db: Session = Depends(get_db),
 ):
     pair, _ = load_pair(db, pair_id)
+    if open_paths(db, pair.id):
+        # Its offload rows would go with it, and the files kept only here would then look
+        # like new files to upload.
+        raise HTTPException(409, PAIR_HAS_OFFLOADS_MSG)
     queue = getattr(request.app.state, "queue", None)
     if queue is not None and queue.is_busy(pair_id):
         raise HTTPException(409, "this pair is syncing or queued; try again when it finishes")

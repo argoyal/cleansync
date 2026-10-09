@@ -130,6 +130,7 @@ def list_offloads(
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
+    get_scope(request, db, account_id)  # 404 for an unknown account
     q = (
         select(Offload)
         .join(SyncPair, SyncPair.id == Offload.pair_id)
