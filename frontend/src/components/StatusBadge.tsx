@@ -13,6 +13,13 @@ const ITEM: Record<ItemStatus, { icon: IconName | null; label: string; color: st
   unknown: { icon: null, label: "Not checked yet", color: "text-ink-2" },
 };
 
+/** The small mark a folder carries on its icon, or null when there is nothing to show. */
+export function folderMark(status: ItemStatus): { icon: IconName; label: string; color: string; spin?: boolean } | null {
+  if (status === "unsynced") return { icon: "cloud_off", label: ITEM.unsynced.label, color: "text-ink-2" };
+  const s = ITEM[status];
+  return s.icon ? { icon: s.icon, label: s.label, color: s.color, spin: s.spin } : null;
+}
+
 export function itemStatusLabel(status: ItemStatus): string {
   return ITEM[status].label;
 }

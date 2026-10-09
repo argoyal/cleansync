@@ -167,8 +167,24 @@ describe("Not synced", () => {
       ] },
     });
     const folders = await screen.findByRole("region", { name: "Folders" });
-    expect(within(folders).getAllByText("Not synced").length).toBeGreaterThan(0);
-    expect(screen.getByText("This folder isn't synced with Google Drive. Open a synced folder to add files.")).toBeInTheDocument();
+    // The state is drawn on the folder icon, not a pill that squeezes the name.
+    expect(within(folders).queryByText("Not synced")).not.toBeInTheDocument();
+    expect(within(folders).getByTitle(/Not synced: only on this server/)).toBeInTheDocument();
+    expect(within(folders).getByTitle("Loose")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "My Drive as a whole isn't synced. Only folders with the green sync mark are kept in step with Google Drive. Open one to add files.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says a folder below the top isn't synced", async () => {
+    setup("/drive?path=Loose", {
+      "GET /api/browse": { account_id: 1, path: "Loose", pair: null, items: [
+        item({ name: "a.txt", path: "Loose/a.txt", status: "unsynced", pair_id: null, remote: false }),
+      ] },
+    });
+    expect(await screen.findByText("This folder isn't synced with Google Drive. Open a synced folder to add files.")).toBeInTheDocument();
   });
 });
 

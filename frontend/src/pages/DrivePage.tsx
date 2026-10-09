@@ -10,7 +10,7 @@ import { Icon } from "../components/Icon";
 import { PairStatusPill } from "../components/StatusBadge";
 import { Empty, IconButton, Menu, type MenuItem, Notice } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
-import { NOT_SYNCED_NOTE, ONE_WAY_NOTE } from "../lib/files";
+import { NOT_SYNCED_NOTE, ONE_WAY_NOTE, ROOT_NOT_SYNCED_NOTE } from "../lib/files";
 
 const VIEW_KEY = "drivesync.view";
 
@@ -165,6 +165,7 @@ export function Breadcrumbs({ path }: { path: string }) {
 export function DrivePage() {
   const [params] = useSearchParams();
   const path = params.get("path") ?? "";
+  const notSyncedNote = path === "" ? ROOT_NOT_SYNCED_NOTE : NOT_SYNCED_NOTE;
   const { accountId, account } = useCurrentAccount();
   const browse = useBrowse(accountId, path);
   const pairs = usePairs().data;
@@ -225,7 +226,7 @@ export function DrivePage() {
       )}
       {browse.data && !browse.data.pair && (
         <div className="mb-4">
-          <Notice tone="run">{NOT_SYNCED_NOTE}</Notice>
+          <Notice tone="run">{notSyncedNote}</Notice>
         </div>
       )}
       {browse.isPending && <p className="text-ink-2">Loading</p>}
@@ -235,7 +236,7 @@ export function DrivePage() {
           {oneWay
             ? "Files added on Google Drive appear here after the next sync."
             : !browse.data.pair
-              ? NOT_SYNCED_NOTE
+              ? notSyncedNote
               : "Use New to add a folder or upload files."}
         </Empty>
       )}

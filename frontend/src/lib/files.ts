@@ -42,6 +42,9 @@ export function parentOf(path: string): string {
 }
 
 /** Spec §8: nothing new can be added where it would never reach Google Drive. */
+/** At the top of an account: My Drive as a whole isn't a synced folder, only the folders chosen under it. */
+export const ROOT_NOT_SYNCED_NOTE =
+  "My Drive as a whole isn't synced. Only folders with the green sync mark are kept in step with Google Drive. Open one to add files.";
 export const NOT_SYNCED_NOTE = "This folder isn't synced with Google Drive. Open a synced folder to add files.";
 
 /** The same idea for the Move dialog: a move out of Drive's sync would leave the file only here. */
