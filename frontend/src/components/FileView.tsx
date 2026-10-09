@@ -54,7 +54,7 @@ function describeItem(item: FileItem): string {
  */
 function FolderIcon({ item, className }: { item: FileItem; className: string }) {
   const pairRoot = !!item.pair_root && item.status === "synced";
-  const mark = pairRoot ? { icon: "sync" as const, label: "Synced folder", color: "text-ok" } : folderMark(item.status);
+  const mark = pairRoot ? { icon: "check_circle" as const, label: "Synced folder", color: "text-ok" } : folderMark(item.status);
   const title = pairRoot
     ? "Synced folder: kept in step with Google Drive"
     : item.status === "unsynced"

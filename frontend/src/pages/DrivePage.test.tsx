@@ -173,7 +173,7 @@ describe("Not synced", () => {
     expect(within(folders).getByTitle("Loose")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "My Drive as a whole isn't synced. Only folders with the green sync mark are kept in step with Google Drive. Open one to add files.",
+        "My Drive as a whole isn't synced. Only folders with the green tick are kept in step with Google Drive. Open one to add files.",
       ),
     ).toBeInTheDocument();
   });
