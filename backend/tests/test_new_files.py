@@ -340,3 +340,52 @@ async def test_cached_token_is_forgotten_when_the_login_changes(app, env):
     tokens._cache[acc.remote_name] = (ACCESS, 1e12)
     await app.state.accounts.disconnect(acc.id)
     assert acc.remote_name not in tokens._cache
+
+
+class FakeDriveApi:
+    """Stands in for Google: records what DriveSync asked to create."""
+
+    def __init__(self):
+        self.made: list[tuple[str, str, str, str]] = []
+
+    async def create_native(self, remote_name, kind, name, parent_id):
+        from app.services.drive_api.client import NATIVE_MIME, CreatedFile
+
+        self.made.append((remote_name, kind, name, parent_id))
+        return CreatedFile(id=f"N{len(self.made)}", name=name, mime=NATIVE_MIME[kind])
+
+
+@pytest.mark.parametrize(
+    ("kind", "name", "editor"),
+    [
+        ("document", "Untitled document", "document"),
+        ("spreadsheet", "Untitled spreadsheet", "spreadsheets"),
+        ("presentation", "Untitled presentation", "presentation"),
+    ],
+)
+def test_every_blank_google_file_is_made_and_opens_in_its_editor(
+    auth_client, app, env, kind, name, editor
+):
+    acc, _, pair = env
+    fake = FakeDriveApi()
+    app.state.drive_api = fake
+    r = _new(auth_client, acc, kind)
+    assert r.status_code == 200, r.text
+    assert fake.made == [(acc.remote_name, kind, name, "WORK1")]
+    assert r.json()["google_url"] == f"https://docs.google.com/{editor}/d/N1/edit"
+    listed = app.state.catalog.load(pair.id)
+    assert any(e.native == kind for e in listed.natives.values())
+
+
+def test_google_files_on_a_pretend_account_say_they_need_real_google(
+    auth_client, app, make_account, make_pair, save_catalog
+):
+    acc = make_account(email="bob@example.com", remote_name="local_abc123")
+    pair = make_pair(acc, initialized=True)
+    root = app.state.layout.account_dir(acc.email)
+    (root / "Work").mkdir()
+    save_catalog(pair.id, [CatalogEntry("Work", True, 0, None)], root_id="root")
+    for kind in ("document", "spreadsheet", "presentation"):
+        r = _new(auth_client, acc, kind)
+        assert r.status_code == 409
+        assert r.json()["detail"] == "Google Docs, Sheets and Slides need a real Google account."

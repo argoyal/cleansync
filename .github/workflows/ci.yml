@@ -95,8 +95,11 @@ jobs:
             -H 'content-type: application/json' \
             -d '{"username":"admin","password":"ci-smoke-password"}' | grep -q must_change_password
           curl -fsSI http://localhost:8080/drive | grep -i "content-security-policy: default-src 'self'"
-      - name: Add a local pretend Google account
-        run: docker exec -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 ds python -m app.devtools.seed_local_account alice@example.com --sample-files
+      - name: Add local pretend Google accounts
+        # bob has nothing synced: the e2e test checks the + New items are off outside synced folders.
+        run: |
+          docker exec -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 ds python -m app.devtools.seed_local_account alice@example.com --sample-files
+          docker exec -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 ds python -m app.devtools.seed_local_account bob@example.com
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

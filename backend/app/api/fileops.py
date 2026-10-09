@@ -46,6 +46,7 @@ from app.services.queue import is_stopped, stop_message
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files")
 OFFICE_KINDS = ("docx", "xlsx", "pptx")
+PRETEND_NATIVE_MSG = "Google Docs, Sheets and Slides need a real Google account."
 OFFLOADED_MSG = (
     "This is offloaded (kept only on this server). Restore it to Drive first, then rename or "
     "move it."
@@ -382,6 +383,9 @@ async def new_file(
     pair = pair_for(scope.pairs, folder)
     if pair is None:
         raise HTTPException(409, ops.NOT_SYNCED_MSG)
+    if scope.account.remote_name.startswith("local_"):
+        # A pretend local account (development and CI only) has no Google behind it.
+        raise HTTPException(409, PRETEND_NATIVE_MSG)
     if scope.account.status != AccountStatus.CONNECTED:
         raise HTTPException(409, "Reconnect this Google account first (Settings, Accounts).")
     prel = to_pair_rel(pair, folder)

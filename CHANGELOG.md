@@ -10,3 +10,4 @@
 - Offload: keep files on the server and remove them from Google Drive into Drive's trash, checked file by file before and after; Restore to Drive; Empty from trash now. Right-click (one or several items) or the Offloaded page. Google Docs, Sheets and Slides are skipped and stay on Drive.
 - Recovery page: everything DriveSync kept, restore one or many without overwriting, download one or many (as a zip). "Show in Recovery" in the right-click menu.
 - New and Upload are off outside synced folders; local-only items there say "Not synced".
+- Every + New item is checked end to end in the built image. Google Docs, Sheets and Slides on a pretend local account say they need a real Google account.
