@@ -27,6 +27,8 @@ STANDARD = [
     "/d/app/data/filters/1.txt",
     "--compare",
     "size,modtime,checksum",
+    "--modify-window",
+    "1s",
     "--slow-hash-sync-only",
     "--conflict-resolve",
     "none",
@@ -475,3 +477,21 @@ def test_moveto_carries_trash_flag_and_needs_remote_targets():
 def test_config_create_alias_rejects_control_characters_in_the_folder(bad):
     with pytest.raises(UnsafeArgument):
         c.config_create_alias_args(ENV, "local_1", Path(bad))
+
+
+def test_time_comparing_commands_allow_one_second_of_modtime_difference():
+    # Some disks keep only whole seconds of a file's modified time (Docker Desktop's
+    # Mac file sharing truncates every time set on it; Drive keeps milliseconds). Without
+    # a window, a resync fails its listing check and the next run sees every file as
+    # changed on both sides.
+    env = c.RcloneEnv("rclone", Path("/c/rclone.conf"), Path("/c/cache"), "pw")
+    t = c.BisyncTarget(Path("/s/a"), "gd_1:Docs", Path("/w"), Path("/f.txt"), None)
+    built = [
+        c.bisync_args(env, t, dry_run=False),
+        c.bisync_args(env, t, dry_run=True, resync=True),
+        c.sync_args(env, "gd_1:Docs", "/s/a", Path("/f.txt"), None, dry_run=False),
+        c.check_args(env, Path("/s/a"), "gd_1:Docs", Path("/f.txt")),
+    ]
+    for args in built:
+        i = args.index("--modify-window")
+        assert args[i + 1] == "1s"

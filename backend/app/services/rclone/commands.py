@@ -12,6 +12,10 @@ from pathlib import Path
 
 TRASH_FLAG = "--drive-use-trash=true"
 NO_PROMPT_FLAG = "--ask-password=false"
+# Some disks keep only whole seconds of a modified time (Docker Desktop's Mac file sharing
+# truncates every time set on it); Drive keeps milliseconds. Without this, a resync fails its
+# listing check and the next run treats every file as changed on both sides.
+MODIFY_WINDOW = ["--modify-window", "1s"]
 LOG_FLAGS = [
     "--use-json-log",
     "--log-level",
@@ -122,6 +126,7 @@ def bisync_args(
         str(t.filters_file),
         "--compare",
         "size,modtime,checksum",
+        *MODIFY_WINDOW,
         "--slow-hash-sync-only",
         "--conflict-resolve",
         "none",
@@ -176,6 +181,7 @@ def sync_args(
         dst_ep,
         "--filter-from",
         str(filters_file),
+        *MODIFY_WINDOW,
         TRASH_FLAG,
         "--drive-skip-gdocs",
         "--create-empty-src-dirs",
@@ -199,6 +205,7 @@ def check_args(env: RcloneEnv, local: Path, remote: str, filters_file: Path) -> 
         "-",
         "--filter-from",
         str(filters_file),
+        *MODIFY_WINDOW,
         "--drive-skip-gdocs",
         "--use-json-log",
         "--log-level",
