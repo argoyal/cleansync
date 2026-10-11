@@ -6,6 +6,7 @@ import ArrowBackSvg from "@material-symbols/svg-400/rounded/arrow_back.svg?react
 import ArrowDownwardSvg from "@material-symbols/svg-400/rounded/arrow_downward.svg?react";
 import ArrowUpwardSvg from "@material-symbols/svg-400/rounded/arrow_upward.svg?react";
 import ArticleSvg from "@material-symbols/svg-400/rounded/article.svg?react";
+import AttachFileSvg from "@material-symbols/svg-400/rounded/attach_file.svg?react";
 import AudioFileSvg from "@material-symbols/svg-400/rounded/audio_file.svg?react";
 import BlockSvg from "@material-symbols/svg-400/rounded/block.svg?react";
 import CheckSvg from "@material-symbols/svg-400/rounded/check.svg?react";
@@ -72,6 +73,7 @@ const ICONS = {
   arrow_downward: ArrowDownwardSvg,
   arrow_upward: ArrowUpwardSvg,
   article: ArticleSvg,
+  attach_file: AttachFileSvg,
   audio_file: AudioFileSvg,
   block: BlockSvg,
   check: CheckSvg,

@@ -344,3 +344,17 @@ export type ActivityJob = {
 };
 
 export type MailCounts = { views: Record<string, number>; labels: { id: string; name: string; count: number }[] };
+export type ThreadRow = {
+  thread_id: string;
+  count: number;
+  last_date: string;
+  message_id: number;
+  from_addr: string;
+  subject: string;
+  snippet: string;
+  has_attachments: boolean;
+  unread: boolean;
+  offloaded: boolean;
+  deleted: boolean;
+};
+export type ThreadPage = { threads: ThreadRow[]; next_cursor: string | null; total: number | null; total_bytes: number | null };

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { api, ApiError, encodePath, query } from "./client";
 import type {
@@ -27,6 +27,7 @@ import type {
   Status,
   Storage,
   SystemInfo,
+  ThreadPage,
 } from "./types";
 
 // Query keys start with a word the live-update hook (hooks/live.ts) can invalidate by.
@@ -217,3 +218,15 @@ export const useMailSetupInfo = (accountId: number, enabled: boolean) =>
   });
 export const useActivityJobs = () =>
   useQuery({ queryKey: ["activity-jobs"], queryFn: () => api<ActivityJob[]>("/api/activity/jobs?limit=30") });
+
+export const useMailThreads = (accountId: number, p: { view: string; label: string; q: string }) =>
+  useInfiniteQuery({
+    queryKey: ["mail-threads", accountId, p.view, p.label, p.q],
+    queryFn: ({ pageParam }) =>
+      api<ThreadPage>(
+        `/api/mail/threads${query({ account_id: accountId, view: p.view, label: p.label || undefined, q: p.q || undefined, cursor: pageParam || undefined, limit: 50 })}`,
+      ),
+    initialPageParam: "",
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    retry: false,
+  });

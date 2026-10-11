@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 
+import { MailReader } from "../components/mail/MailReader";
 import { MailBackupStatus } from "../components/MailBackupStatus";
 import { MailSetUpCard } from "../components/MailSetUpCard";
 import { MailStartCard } from "../components/MailStartCard";
@@ -34,8 +35,11 @@ export function MailPage() {
     );
   }
   return (
-    <div className="space-y-4 p-4 sm:p-6">
-      <MailBackupStatus account={account} />
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="px-4 pt-4 sm:px-6">
+        <MailBackupStatus account={account} />
+      </div>
+      <MailReader account={account} />
     </div>
   );
 }
