@@ -82,7 +82,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Start container
-        # Pretend local accounts on (test only): the e2e test offloads a folder of one.
+        # Pretend local accounts on (test only): the e2e test signs in to one without Google.
         run: |
           docker run -d --name cs -p 8080:8080 --read-only --tmpfs /tmp \
             --tmpfs /drivesync:uid=1000,gid=1000 --cap-drop ALL \
@@ -98,7 +98,7 @@ jobs:
             -d '{"username":"admin","password":"ci-smoke-password"}' | grep -q must_change_password
           curl -fsSI http://localhost:8080/drive | grep -i "content-security-policy: default-src 'self'"
       - name: Add local pretend Google accounts
-        # bob has nothing synced: the e2e test checks the + New items are off outside synced folders.
+        # bob has nothing synced: a second pretend account, used by the New menu tests.
         run: |
           docker exec -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 cs python -m app.devtools.seed_local_account alice@example.com --sample-files
           docker exec -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 cs python -m app.devtools.seed_local_account bob@example.com

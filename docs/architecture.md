@@ -19,6 +19,8 @@ One container, one process.
 4. Real `rclone bisync`. Progress is streamed live.
 5. Record counts, conflicts and errors.
 
+Accounts have a provider (Google today) and one row per service (Files, Mail) in account_services. Each service reaches its provider through an adapter (app/services/adapters/): Files covers the Drive calls made outside rclone's sync runs.
+
 ## Folder layout
     /drivesync/
       app/data/   drivesync.db, db-backups/, rclone/ (encrypted rclone.conf, bisync state),

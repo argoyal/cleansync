@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend dev-seed templates test lint format build fe-install fe-build e2e
+.PHONY: dev dev-backend dev-frontend dev-seed templates test lint format build fe-install fe-build e2e e2e-new
 
 # Keep this path short: rclone's bisync lock file name contains both folder paths.
 DEV_ROOT := $(CURDIR)/drivesync-data
@@ -42,3 +42,8 @@ fe-build:
 
 e2e:
 	cd frontend && E2E_BASE_URL=http://localhost:8080 E2E_ADMIN_PASSWORD=dev-password-change-me npx playwright test
+
+# The New menu's browser tests: an image with New switched on (every release has it off).
+e2e-new:
+	docker build --build-arg VITE_SHOW_NEW=1 -t cleansync:new .
+	cd frontend && E2E_SHOW_NEW=1 E2E_BASE_URL=http://localhost:8080 E2E_ADMIN_PASSWORD=dev-password-change-me npx playwright test

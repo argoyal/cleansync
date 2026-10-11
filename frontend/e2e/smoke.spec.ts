@@ -76,6 +76,22 @@ async function csrf(page: Page): Promise<string> {
   return ((await (await page.request.get("/api/auth/me")).json()) as { csrf_token: string }).csrf_token;
 }
 
+/** The rail (desktop width): the section links. */
+function rail(page: Page) {
+  return page.getByRole("navigation", { name: "Sections", exact: true });
+}
+
+/** Upload one file the way the + New menu would (that menu is hidden in this build). */
+async function uploadViaApi(page: Page, accountId: number, name: string, body: string) {
+  const r = await page.request.post(`/api/files/upload?account_id=${accountId}&path=&name=${encodeURIComponent(name)}`, {
+    headers: { "X-CSRF-Token": await csrf(page), "Content-Type": "application/octet-stream" },
+    data: Buffer.from(body),
+  });
+  expect(r.status(), await r.text()).toBe(200);
+}
+
+const SHOW_NEW = process.env.E2E_SHOW_NEW === "1";
+
 async function openNew(page: Page) {
   await page.getByRole("button", { name: "New", exact: true }).click();
 }
@@ -127,11 +143,9 @@ test("first run: log in, set up a sync, browse, upload", async ({ page }) => {
   await expect(page.locator('img[src^="/api/thumbs/"]')).toBeVisible();
 
   // Upload a file; the app queues a sync and the badge turns to synced.
-  await page.getByLabel("Files to upload").setInputFiles({
-    name: "from-browser.txt",
-    mimeType: "text/plain",
-    buffer: Buffer.from("uploaded by the smoke test"),
-  });
+  await uploadViaApi(page, await accountId(page, "alice@example.com"), "from-browser.txt", "uploaded by the smoke test");
+  await page.goto("/drive");
+
   const uploaded = page.getByRole("button", { name: "from-browser.txt", exact: true });
   await expect(uploaded).toBeVisible();
   await expect(uploaded.getByRole("img", { name: "Synced" })).toBeVisible({ timeout: 90_000 });
@@ -144,6 +158,7 @@ test("first run: log in, set up a sync, browse, upload", async ({ page }) => {
 });
 
 test("every + New item works in the built image", async ({ page }) => {
+  test.skip(!SHOW_NEW, "New is hidden in this build (E2E_SHOW_NEW=1 with an image built with VITE_SHOW_NEW=1)");
   test.setTimeout(420_000);
   const problems: string[] = [];
   page.on("console", (m) => {
@@ -244,6 +259,7 @@ test("every + New item works in the built image", async ({ page }) => {
 });
 
 test("inside an offloaded folder the + New items are off and say why", async ({ page }) => {
+  test.skip(!SHOW_NEW, "New is hidden in this build (E2E_SHOW_NEW=1 with an image built with VITE_SHOW_NEW=1)");
   test.setTimeout(300_000);
   await ready(page);
   const aliceId = await accountId(page, "alice@example.com");
@@ -292,4 +308,34 @@ test("inside an offloaded folder the + New items are off and say why", async ({ 
   }
   await expect(page.getByRole("menuitem", { name: "Sync a Drive folder…", exact: true })).toBeEnabled();
   await page.keyboard.press("Escape");
+});
+
+test("the rail opens each section, New is hidden, and Mail asks to be set up", async ({ page }) => {
+  await ready(page);
+  if (!SHOW_NEW) await expect(page.getByRole("button", { name: "New", exact: true })).toHaveCount(0);
+  await expect(page).toHaveTitle("CleanSync");
+  await expect(rail(page).getByRole("link", { name: /^Files/ })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("navigation", { name: "Files views" }).getByRole("link", { name: /^My Drive/ })).toBeVisible();
+
+  await rail(page).getByRole("link", { name: /^Mail/ }).click();
+  await expect(page).toHaveURL(/\/mail$/);
+  await expect(page.getByRole("heading", { name: "Set up mail backup" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Set up Mail", exact: true })).toBeVisible(); // the panel's card
+
+  await rail(page).getByRole("link", { name: /^Activity/ }).click();
+  await expect(page.getByRole("heading", { name: "Sync activity" })).toBeVisible();
+  await rail(page).getByRole("link", { name: /^Recovery/ }).click();
+  await expect(page.getByRole("navigation", { name: "Recovery views" })).toBeVisible();
+  await rail(page).getByRole("link", { name: /^Settings/ }).click();
+  await expect(page.getByRole("navigation", { name: "Settings views" })).toBeVisible();
+
+  // Phone width: a bottom bar instead of the rail, and the views in a sheet.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(rail(page)).toBeHidden();
+  const bar = page.getByRole("navigation", { name: "Sections at the bottom" });
+  await bar.getByRole("link", { name: /^Files/ }).click();
+  await page.getByRole("button", { name: "Show views" }).click();
+  await page.getByRole("dialog", { name: "Views" }).getByRole("link", { name: /^Recent/ }).click();
+  await expect(page).toHaveURL(/\/recent$/);
+  await page.setViewportSize({ width: 1280, height: 720 });
 });

@@ -16,6 +16,7 @@ CleanSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 - **Before every sync**, does a dry run. If it would delete more files than your limit (default 10), it stops and shows you the list.
 - Files replaced or deleted locally are copied to a backup folder first. Files deleted on Drive go to Drive's trash.
 - If a file changed on both sides, both versions are kept and you choose.
+- **One place for Files and Mail:** a rail on the left picks Files, Mail, Activity, Recovery or Settings; the panel beside it has the account switcher and that section's views. On a phone the rail is a bar along the bottom.
 - **Offload:** keep files on the server and remove them from Google Drive (into Drive's trash) to free Drive space. Only when you ask, checked file by file before and after. Right-click, or pick many at once on the Offloaded page. Google Docs, Sheets and Slides stay on Drive. Restore to Drive any time.
 - **Recovery:** every copy CleanSync kept, with where it came from and when it is cleaned up. Restore one or many (never overwrites), or download them.
 - New files and uploads only go into synced folders.
