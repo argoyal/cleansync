@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { Navigate, Route, Routes, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useSetup } from "./api/queries";
@@ -6,6 +6,7 @@ import { AppShell } from "./components/AppShell";
 import { NewMenu } from "./components/NewMenu";
 import { useToast } from "./components/Toasts";
 import { UploadTray } from "./components/UploadTray";
+import { SHOW_NEW } from "./config";
 import { AccountProvider, useCurrentAccount } from "./hooks/useAccount";
 import { OAUTH_RETURN_KEY } from "./hooks/useConnect";
 import { ActivityPage } from "./pages/ActivityPage";
@@ -18,6 +19,11 @@ import { RecoveryPage } from "./pages/RecoveryPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupWizard, setupSkipped } from "./pages/SetupWizard";
 import { StoragePage } from "./pages/StoragePage";
+
+/** The New menu, or nothing when New is switched off (spec §9). */
+export function newButton(show: boolean = SHOW_NEW): ReactNode | undefined {
+  return show ? <NewMenu /> : undefined;
+}
 
 /**
  * Google's sign-in sends the browser to "/?connected=<id>" or "/?oauth_error=<text>".
@@ -68,7 +74,7 @@ export function AppRoutes() {
     <AccountProvider>
       <Routes>
         <Route path="setup" element={<SetupWizard />} />
-        <Route element={<AppShell newButton={<NewMenu />} />}>
+        <Route element={<AppShell newButton={newButton()} />}>
           <Route index element={<HomeOrSetup />} />
           <Route path="drive" element={<DrivePage />} />
           <Route path="offloaded" element={<OffloadedPage />} />

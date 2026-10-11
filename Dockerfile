@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1.7
 FROM --platform=$BUILDPLATFORM node:22-slim AS web
+# 1 shows the New menu (only for the New browser tests); every release has it off.
+ARG VITE_SHOW_NEW=0
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
-RUN npm run build
+RUN VITE_SHOW_NEW=$VITE_SHOW_NEW npm run build
 
 FROM python:3.12-slim AS rclone
 ARG TARGETARCH

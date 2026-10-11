@@ -19,5 +19,6 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     css: false,
+    env: { VITE_SHOW_NEW: "1" },
   },
 });
