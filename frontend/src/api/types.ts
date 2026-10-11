@@ -342,3 +342,5 @@ export type ActivityJob = {
   message: string | null;
   log_url: string;
 };
+
+export type MailCounts = { views: Record<string, number>; labels: { id: string; name: string; count: number }[] };

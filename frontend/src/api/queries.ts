@@ -13,6 +13,7 @@ import type {
   FolderEntry,
   GoogleUsage,
   Job,
+  MailCounts,
   MailSetupInfo,
   MailStatus,
   Me,
@@ -198,6 +199,12 @@ export const useMailStatus = (accountId: number | null, enabled = true) =>
     enabled: accountId !== null && enabled,
     // Live events say when a job moves; this keeps the progress line fresh between them.
     refetchInterval: (q) => (q.state.data?.running || q.state.data?.waiting ? 3000 : false),
+  });
+export const useMailCounts = (accountId: number | null, enabled = true) =>
+  useQuery({
+    queryKey: ["mail-counts", accountId],
+    queryFn: () => api<MailCounts>(`/api/mail/counts${query({ account_id: accountId })}`),
+    enabled: accountId !== null && enabled,
   });
 export const useMailOverview = () => useQuery({ queryKey: ["mail-overview"], queryFn: () => api<MailStatus[]>("/api/mail/overview") });
 export const useMailSetupInfo = (accountId: number, enabled: boolean) =>

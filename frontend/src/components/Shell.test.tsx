@@ -334,6 +334,31 @@ describe("rail and panel", () => {
     const rail = screen.getByRole("navigation", { name: "Sections" });
     expect(await within(rail).findByText("2 mails could not be backed up")).toBeInTheDocument();
   });
+
+  it("shows mail counts and a Labels list that folds away", async () => {
+    const active = { ...ACCOUNT, services: { files: "active" as const, mail: "active" as const } };
+    mockApi({
+      "GET /api/accounts": [active],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/status": STATUS,
+      "GET /api/mail/counts": {
+        views: { all: 38214, inbox: 1902, sent: 300, starred: 12, important: 40, offloaded: 5000, deleted: 7 },
+        labels: [{ id: "Label_2", name: "Receipts", count: 410 }, { id: "Label_1", name: "Work & <Stuff>", count: 9 }],
+      },
+    });
+    renderApp(<AppShell />, { withAccount: true, route: "/mail?label=Label_2" });
+    const views = await screen.findByRole("navigation", { name: "Mail views" });
+    expect(await within(views).findByRole("link", { name: "All mail 38,214" })).toHaveAttribute("href", "/mail");
+    expect(within(views).getByRole("link", { name: "Inbox 1,902" })).toBeInTheDocument();
+    const labels = within(views).getByRole("list", { name: "Labels" });
+    expect(within(labels).getByRole("link", { name: "Receipts 410" })).toHaveAttribute("aria-current", "page");
+    expect(within(labels).getByRole("link", { name: "Work & <Stuff> 9" })).toHaveAttribute("href", "/mail?label=Label_1");
+    const fold = within(views).getByRole("button", { name: "Labels" });
+    expect(fold).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(fold);
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    expect(within(views).queryByRole("list", { name: "Labels" })).not.toBeInTheDocument();
+  });
 });
 
 describe("content bar", () => {

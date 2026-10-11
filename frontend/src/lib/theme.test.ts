@@ -133,4 +133,11 @@ describe("theme", () => {
       expect(src, file).not.toMatch(/fixed bottom-4/);
     }
   });
+
+  it("defines six label colours for light and both dark blocks", () => {
+    const block = (start: string) => css.slice(css.indexOf(start), css.indexOf("}", css.indexOf(start)));
+    for (const start of [":root {", ':root:not([data-theme="light"])', ':root[data-theme="dark"]']) {
+      for (let i = 1; i <= 6; i++) expect(block(start)).toMatch(new RegExp(`--label-${i}:\\s*\\d+ \\d+ \\d+;`));
+    }
+  });
 });

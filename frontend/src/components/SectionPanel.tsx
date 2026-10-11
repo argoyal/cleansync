@@ -1,10 +1,11 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 
 import { friendlyError } from "../api/client";
-import { useStatus } from "../api/queries";
+import { useMailCounts, useStatus } from "../api/queries";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { useSetUpMail } from "../hooks/useSetUpMail";
+import { labelDot, MAIL_VIEWS, mailHref } from "../lib/mail";
 import { linkActive, SECTION_STYLE, type SectionId, SECTIONS } from "../lib/sections";
 import { TABS } from "../pages/SettingsPage";
 import { AccountSwitcher } from "./AccountSwitcher";
@@ -103,17 +104,44 @@ function FilesViews() {
   );
 }
 
-/** The Mail views (spec §6.1, §9). Plan 3 adds the Labels list below them. */
+/** The Mail views (spec §6.1, §9) with their counts, then the user labels. */
 export function MailViews() {
+  const { account } = useCurrentAccount();
+  const counts = useMailCounts(account?.id ?? null).data;
+  const [open, setOpen] = useState(true);
   return (
     <>
-      <PanelLink section="mail" to="/mail" label="All mail" icon="mail" />
-      <PanelLink section="mail" to="/mail?view=inbox" label="Inbox" icon="inbox" />
-      <PanelLink section="mail" to="/mail?view=sent" label="Sent" icon="send" />
-      <PanelLink section="mail" to="/mail?view=starred" label="Starred" icon="star" />
-      <PanelLink section="mail" to="/mail?view=important" label="Important" icon="label_important" />
-      <PanelLink section="mail" to="/mail?view=offloaded" label="Offloaded" icon="inventory_2" />
-      <PanelLink section="mail" to="/mail?view=deleted" label="Deleted in Gmail" icon="delete" />
+      {MAIL_VIEWS.map((v) => (
+        <PanelLink key={v.id} section="mail" to={mailHref({ view: v.id })} label={v.label} icon={v.icon} count={counts?.views[v.id]} />
+      ))}
+      {counts && counts.labels.length > 0 && (
+        <>
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => setOpen(!open)}
+            className="mt-3 flex items-center gap-1 px-2.5 py-1 text-left text-meta font-bold uppercase tracking-[0.06em] text-ink-2 hover:text-ink"
+          >
+            Labels
+            <Icon name="keyboard_arrow_down" className={`text-[16px] transition-transform ${open ? "" : "-rotate-90"}`} />
+          </button>
+          {open && (
+            <ul aria-label="Labels" className="flex flex-col gap-0.5">
+              {counts.labels.map((l) => (
+                <li key={l.id}>
+                  <PanelLink
+                    section="mail"
+                    to={mailHref({ label: l.id })}
+                    label={l.name}
+                    count={l.count}
+                    badge={<span aria-hidden="true" className={`order-first h-2 w-2 shrink-0 rounded-full ${labelDot(l.id)}`} />}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
     </>
   );
 }

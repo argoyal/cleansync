@@ -29,6 +29,7 @@ export default {
         "rail-mark": token("rail-mark"),
         "rail-badge": token("rail-badge"),
         panel: token("panel"),
+        ...Object.fromEntries([1, 2, 3, 4, 5, 6].map((i) => [`label-${i}`, token(`label-${i}`)])),
         ...Object.fromEntries(
           ["files", "mail", "activity", "recovery", "settings"].flatMap((s) => [
             [`sec-${s}`, token(`sec-${s}`)],
