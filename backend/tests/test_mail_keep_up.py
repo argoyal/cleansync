@@ -123,3 +123,37 @@ async def test_new_mail_arriving_straight_in_spam_or_trash_is_not_kept(box, labe
     mid = box.fake.add(b"Subject: x\r\n\r\ny", labels=labels)
     await box.run()
     assert mid not in {m.provider_id for m in box.rows()}
+
+
+async def test_a_recheck_returns_mail_restored_in_gmail_to_in_mail(box):
+    ids = await _backed_up(box)
+    box.fake.set_labels(ids[0], ("TRASH",))  # the owner deletes it in Gmail
+    await box.run()
+    assert _row(box, ids[0]).state == MailState.DELETED
+    box.fake.set_labels(ids[0], ("INBOX",))  # takes it back out of the trash…
+    box.fake.forget_history()  # …and Gmail no longer has the history that says so
+    state, _, _ = await box.run()
+    assert state == JobState.SUCCESS and box.state().phase == MailPhase.INCREMENTAL
+    assert _row(box, ids[0]).state == MailState.IN_MAIL
+    assert _row(box, ids[0]).labels == ["INBOX"]
+
+
+async def test_a_recheck_returns_offloaded_mail_taken_back_out_of_the_trash(box):
+    ids = await _backed_up(box)
+    with box.sf() as db:
+        row = db.query(MailMessage).filter_by(provider_id=ids[0]).one()
+        row.state, row.offload_id = MailState.OFFLOADED, 7
+        db.commit()
+    box.fake.set_labels(ids[0], ("TRASH",))  # CleanSync's own offload
+    box.fake.set_labels(ids[1], ("TRASH",))  # another offloaded mail that stays in the trash
+    with box.sf() as db:
+        row = db.query(MailMessage).filter_by(provider_id=ids[1]).one()
+        row.state, row.offload_id = MailState.OFFLOADED, 7
+        db.commit()
+    await box.run()
+    box.fake.set_labels(ids[0], ("INBOX",))  # the owner takes it back in Gmail
+    box.fake.forget_history()
+    state, _, _ = await box.run()
+    assert state == JobState.SUCCESS
+    assert _row(box, ids[0]).state == MailState.IN_MAIL and _row(box, ids[0]).offload_id is None
+    assert _row(box, ids[1]).state == MailState.OFFLOADED and _row(box, ids[1]).offload_id == 7

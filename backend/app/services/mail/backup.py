@@ -35,6 +35,7 @@ from app.services.mail.index import (
     count_messages,
     due_failures,
     mark_deleted,
+    mark_seen_back_in_mail,
     mark_unseen_deleted,
     record_failure,
     remember_seen,
@@ -274,8 +275,9 @@ class MailBackup:
         self._progress(r)
 
     async def _recheck(self, r: BackupRun) -> None:
-        """History too old: list every mail again, download what is missing, and mark as
-        deleted what Gmail no longer has. Never deletes files (spec §4.4)."""
+        """History too old: list every mail again, download what is missing, mark as deleted
+        what Gmail no longer has, and mark as in mail again what the owner took back out of
+        Trash or Spam. Never deletes files (spec §4.4)."""
 
         async def on_page(ids: list[str]) -> None:
             with self.sf() as db:
@@ -285,12 +287,16 @@ class MailBackup:
         await self._list_pages(r, on_page)
         with self.sf() as db:
             gone = mark_unseen_deleted(db, r.account_id)
+            back = mark_seen_back_in_mail(db, r.account_id)
             clear_seen(db, r.account_id)
             st = sync_state(db, r.account_id)
             st.phase = MailPhase.INCREMENTAL
             st.cursor = None
             db.commit()
-        self._log(r, f"re-check done: {gone:,} mails are no longer in Gmail")
+        self._log(
+            r,
+            f"re-check done: {gone:,} mails are no longer in Gmail; {back:,} are back in Gmail",
+        )
 
     async def _retry_failures(self, r: BackupRun) -> None:
         with self.sf() as db:

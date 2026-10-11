@@ -287,6 +287,28 @@ def mark_unseen_deleted(db: Session, account_id: int) -> int:
     return result.rowcount or 0
 
 
+def mark_seen_back_in_mail(db: Session, account_id: int) -> int:
+    """After a complete re-check listing: mail marked deleted, or offloaded, that Gmail lists
+    again was taken back out of Trash or Spam by the owner, so it is in Gmail again (as
+    keeping up does). The listing gives no labels, so the stored ones stay."""
+    result = db.execute(
+        text(
+            "UPDATE mail_messages SET state = :in_mail, offload_id = NULL "
+            "WHERE account_id = :a AND state IN (:deleted, :offloaded) "
+            "AND provider_id IN "
+            "(SELECT provider_id FROM mail_recheck_seen WHERE account_id = :a)"
+        ),
+        {
+            "a": account_id,
+            "in_mail": MailState.IN_MAIL.value,
+            "deleted": MailState.DELETED.value,
+            "offloaded": MailState.OFFLOADED.value,
+        },
+    )
+    db.commit()
+    return result.rowcount or 0
+
+
 def clear_seen(db: Session, account_id: int) -> None:
     db.execute(delete(MailRecheckSeen).where(MailRecheckSeen.account_id == account_id))
     db.commit()
