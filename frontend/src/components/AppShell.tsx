@@ -11,25 +11,7 @@ import { ContentBar } from "./ContentBar";
 import { Mark } from "./Mark";
 import { Rail } from "./Rail";
 import { SectionPanel } from "./SectionPanel";
-import { Notice } from "./ui";
-
-const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex='-1'])";
-
-/** The sheet is modal: Tab past its last control comes back to its first, and Shift+Tab back. */
-function keepTabInside(e: KeyboardEvent, box: HTMLElement) {
-  const items = Array.from(box.querySelectorAll<HTMLElement>(FOCUSABLE));
-  if (items.length === 0) return;
-  const first = items[0];
-  const last = items[items.length - 1];
-  const at = document.activeElement;
-  if (e.shiftKey && (at === first || at === box || !box.contains(at))) {
-    e.preventDefault();
-    last.focus();
-  } else if (!e.shiftKey && (at === last || !box.contains(at))) {
-    e.preventDefault();
-    first.focus();
-  }
-}
+import { keepTabInside, Notice } from "./ui";
 
 /** Spec §9, draft B: icon rail, section panel, content (a bottom bar and a sheet on phones). */
 export function AppShell({ newButton }: { newButton?: ReactNode }) {

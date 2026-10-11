@@ -306,3 +306,82 @@ describe("reading a mail", () => {
     });
   });
 });
+
+describe("offload and restore in the reader", () => {
+  it("offers Offload mail… starting from the search, and Restore for offloaded mail", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: 1, total_bytes: 1 },
+      "GET /api/mail/threads/t1": [msg({ id: 1, state: "offloaded", gmail_url: null })],
+      "POST /api/mail/restore": { queued: "queued", count: 1 },
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?q=from%3Abank&thread=t1" });
+    await userEvent.click(await screen.findByRole("button", { name: "Restore to Gmail" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, message_ids: [1] }));
+    expect(await screen.findByText("Putting 1 mail back in Gmail. Sync activity shows when it's done.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Offload mail…" }));
+    expect(screen.getByLabelText("Filter")).toHaveValue("from:bank");
+  });
+
+  it("picks threads in the list and offloads or restores them together", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", subject: "One" }), thread({ thread_id: "t2", subject: "Two" })], next_cursor: null, total: 2, total_bytes: 2 },
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail" });
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Pick Two" }));
+    const bar = screen.getByRole("region", { name: "Picked mail" });
+    expect(within(bar).getByText("2 threads picked")).toBeInTheDocument();
+    await userEvent.click(within(bar).getByRole("button", { name: "Offload" }));
+    expect(screen.getByText("The picked threads.")).toBeInTheDocument();
+  });
+
+  it("restores picked threads together, then clears the picks", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", subject: "One", offloaded: true }), thread({ thread_id: "t2", subject: "Two", offloaded: true })], next_cursor: null, total: 2, total_bytes: 2 },
+      "POST /api/mail/restore": { queued: "queued", count: 2 },
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=offloaded" });
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Pick Two" }));
+    await userEvent.click(within(screen.getByRole("region", { name: "Picked mail" })).getByRole("button", { name: "Restore to Gmail" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, thread_ids: ["t1", "t2"] }));
+    expect(await screen.findByText("Putting 2 mails back in Gmail. Sync activity shows when it's done.")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Picked mail" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Pick One" })).not.toBeChecked();
+  });
+
+  it("keeps a picked row's link and its spoken name", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", unread: true })], next_cursor: null, total: 1, total_bytes: 1 },
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail" });
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick Your invoice for September" }));
+    const link = screen.getByRole("link", { name: /Your invoice for September/ });
+    expect(link).toHaveAccessibleName(/unread.*Oct/);
+    expect(link).toHaveAttribute("data-thread", "t1");
+    expect(link.querySelector("input")).toBeNull(); // the checkbox sits beside the link, not in it
+  });
+
+  it("offers Offload for a mail still in Gmail, and nothing for one whose file is missing", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: 1, total_bytes: 1 },
+      "GET /api/mail/threads/t1": [msg({ id: 1, subject: "Old" }), msg({ id: 2, subject: "Gone", file_missing: true, state: "offloaded" })],
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?thread=t1" });
+    await userEvent.click(await screen.findByRole("button", { name: /^Old, from/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Offload" }));
+    expect(screen.getByText("The picked mails.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restore to Gmail" })).not.toBeInTheDocument();
+  });
+});
+

@@ -64,7 +64,9 @@ describe("live updates", () => {
     const { spy, source } = setup();
     const count = (k: string) => keys(spy).filter((x) => x === k).length;
     act(() => source.emit("mail", { account_id: 1 }));
-    expect(keys(spy)).toEqual(expect.arrayContaining(["mail-status", "mail-counts", "mail-threads", "mail-thread", "activity-jobs"]));
+    expect(keys(spy)).toEqual(
+      expect.arrayContaining(["mail-status", "mail-counts", "mail-threads", "mail-thread", "activity-jobs", "mail-offloads", "mail-offload", "mail-recovery"]),
+    );
     expect(keys(spy)).not.toContain("mail-message"); // whether a mail has remote images never changes
     expect(count("mail-threads")).toBe(1);
     for (let i = 0; i < 20; i++) act(() => source.emit("mail", { account_id: 1 }));
@@ -72,6 +74,7 @@ describe("live updates", () => {
     expect(count("mail-threads")).toBe(1); // held back
     act(() => vi.advanceTimersByTime(1));
     expect(count("mail-threads")).toBe(2); // one catch-up for all twenty
+    expect(count("mail-offload")).toBe(2); // offloads ride the same throttled refresh
     act(() => vi.advanceTimersByTime(20_000));
     expect(count("mail-threads")).toBe(2);
     act(() => source.emit("mail", { account_id: 1 }));

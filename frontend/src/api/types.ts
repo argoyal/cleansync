@@ -380,3 +380,39 @@ export type MailMessageInfo = {
   gmail_url: string | null;
   file_missing: boolean;
 };
+
+/** Mail offload and restore (spec §5). Named Mail… to stay apart from the Drive offload types. */
+export type MailBrief = { id: number; subject: string; from_addr: string; date: string; size: number };
+export type MailOffloadPreview = {
+  filter_text: string;
+  count: number;
+  bytes: number;
+  largest: MailBrief[];
+  oldest: MailBrief[];
+  /** Mail left out, each with how many and why, already written for people. */
+  excluded: { reason: string; count: number; text: string }[];
+};
+/** What an offload or restore starts from: a search, picked mails, or picked threads. */
+export type OffloadStart = { q: string } | { message_ids: number[] } | { thread_ids: string[] };
+export type MailOffloadState = "WAITING" | "RUNNING" | "DONE" | "DONE_WITH_SKIPS" | "FAILED";
+export type MailOffload = {
+  id: number;
+  account_id: number;
+  filter_text: string;
+  state: MailOffloadState;
+  total: number;
+  done: number;
+  skipped: number;
+  not_done: number;
+  bytes: number;
+  reason: string | null;
+  created_at: string;
+  finished_at: string | null;
+  /** The day Gmail empties these from its trash by itself (30 days after the offload). */
+  trash_until: string; // YYYY-MM-DD
+  google_emptied: boolean;
+};
+export type MailOffloadDetail = MailOffload & {
+  skipped_items: { message_id: number; subject: string; from_addr: string; date: string; reason: string }[];
+};
+export type MailRecoveryData = { offloads: MailOffload[]; deleted_count: number };

@@ -44,7 +44,20 @@ export const RECOVERY_REFRESH_MS = 5000;
 /** Mail events come in bursts (one per backup or offload batch): the reader's lists refresh
  * at most once every 5 seconds. */
 export const MAIL_REFRESH_MS = 5000;
-const MAIL_KEYS = ["mail-status", "mail-overview", "mail-counts", "mail-threads", "mail-thread", "activity", "activity-jobs", "google-usage", "accounts"];
+const MAIL_KEYS = [
+  "mail-status",
+  "mail-overview",
+  "mail-counts",
+  "mail-threads",
+  "mail-thread",
+  "mail-offloads",
+  "mail-offload",
+  "mail-recovery",
+  "activity",
+  "activity-jobs",
+  "google-usage",
+  "accounts",
+];
 
 /** Runs `fn` straight away, and at most once per `ms`: calls in between become one catch-up
  * run at the end of that time, so the last state is always shown. */

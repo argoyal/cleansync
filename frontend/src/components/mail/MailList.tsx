@@ -17,7 +17,7 @@ function Mark({ children }: { children: string }) {
   return <span className="ml-1.5 inline-block rounded-full bg-sec-mail-soft px-2 text-meta text-sec-mail-soft-ink">{children}</span>;
 }
 
-function Row({ t, href, open }: { t: ThreadRow; href: string; open: boolean }) {
+function Row({ t, href, open, picked, onToggle }: { t: ThreadRow; href: string; open: boolean; picked: boolean; onToggle?: (threadId: string) => void }) {
   const name = sender(t.from_addr);
   const parts = [name, t.subject || "(no subject)"];
   if (t.count > 1) parts.push(`${t.count} mails`);
@@ -28,13 +28,19 @@ function Row({ t, href, open }: { t: ThreadRow; href: string; open: boolean }) {
   parts.push(formatWhen(t.last_date));
   const label = parts.join(", ");
   return (
-    <li>
+    <li className={`flex items-stretch border-b border-line ${open ? "bg-sec-mail-soft/60" : ""}`}>
+      {onToggle && (
+        // Beside the link, not in it: a checkbox inside a link is not valid HTML.
+        <label className="flex shrink-0 items-center pl-4">
+          <input type="checkbox" className="h-4 w-4 accent-accent" aria-label={`Pick ${t.subject || "(no subject)"}`} checked={picked} onChange={() => onToggle(t.thread_id)} />
+        </label>
+      )}
       <Link
         to={href}
         data-thread={t.thread_id}
         aria-label={label}
         aria-current={open ? "true" : undefined}
-        className={`grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 border-b border-line px-4 py-3 hover:bg-sunken sm:grid-cols-[180px_minmax(0,1fr)_auto] ${open ? "bg-sec-mail-soft/60" : ""} ${t.unread ? "font-semibold" : ""} ${t.offloaded || t.deleted ? "text-ink-2" : ""}`}
+        className={`grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 px-4 py-3 hover:bg-sunken sm:grid-cols-[180px_minmax(0,1fr)_auto] ${t.unread ? "font-semibold" : ""} ${t.offloaded || t.deleted ? "text-ink-2" : ""}`}
       >
         <span className="truncate">
           {name}
@@ -55,7 +61,24 @@ function Row({ t, href, open }: { t: ThreadRow; href: string; open: boolean }) {
   );
 }
 
-export function MailList({ accountId, view, label, q, thread }: { accountId: number; view: string; label: string; q: string; thread: string }) {
+/** `selected` and `onToggle` turn on picking threads (spec §5.1: offload or restore them together). */
+export function MailList({
+  accountId,
+  view,
+  label,
+  q,
+  thread,
+  selected,
+  onToggle,
+}: {
+  accountId: number;
+  view: string;
+  label: string;
+  q: string;
+  thread: string;
+  selected?: Set<string>;
+  onToggle?: (threadId: string) => void;
+}) {
   const list = useMailThreads(accountId, { view, label, q });
   const rows = list.data?.pages.flatMap((p) => p.threads) ?? [];
   if (list.isError && rows.length === 0) return <div className="p-4"><Notice tone="err">{friendlyError(list.error)}</Notice></div>;
@@ -65,7 +88,14 @@ export function MailList({ accountId, view, label, q, thread }: { accountId: num
     <div>
       <ul aria-label="Mail">
         {rows.map((t) => (
-          <Row key={t.thread_id} t={t} open={t.thread_id === thread} href={mailHref({ view, label, q, thread: t.thread_id })} />
+          <Row
+            key={t.thread_id}
+            t={t}
+            open={t.thread_id === thread}
+            href={mailHref({ view, label, q, thread: t.thread_id })}
+            picked={selected?.has(t.thread_id) ?? false}
+            onToggle={onToggle}
+          />
         ))}
       </ul>
       {list.isError && (

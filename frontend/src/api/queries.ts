@@ -15,6 +15,9 @@ import type {
   Job,
   MailCounts,
   MailMessageInfo,
+  MailOffload,
+  MailOffloadDetail,
+  MailRecoveryData,
   MailSetupInfo,
   MailStatus,
   Me,
@@ -245,3 +248,25 @@ export const mailBodyUrl = (id: number, images: boolean) => `/api/mail/messages/
 export const mailAttachmentUrl = (id: number, index: number, download = false) =>
   `/api/mail/messages/${id}/attachments/${index}${download ? "?download=1" : ""}`;
 export const mailEmlUrl = (id: number) => `/api/mail/messages/${id}/eml`;
+
+const OFFLOAD_BUSY = ["WAITING", "RUNNING"];
+export const useMailOffloads = (accountId: number | null) =>
+  useQuery({
+    queryKey: ["mail-offloads", accountId],
+    queryFn: () => api<MailOffload[]>(`/api/mail/offloads${query({ account_id: accountId })}`),
+    enabled: accountId !== null,
+  });
+/** One offload; asked again every 2 s while it waits or runs. */
+export const useMailOffload = (id: number) =>
+  useQuery({
+    queryKey: ["mail-offload", id],
+    queryFn: () => api<MailOffloadDetail>(`/api/mail/offloads/${id}`),
+    refetchInterval: (q) => (OFFLOAD_BUSY.includes(q.state.data?.state ?? "") ? 2000 : false),
+  });
+export const useMailRecovery = (accountId: number | null) =>
+  useQuery({
+    queryKey: ["mail-recovery", accountId],
+    queryFn: () => api<MailRecoveryData>(`/api/recovery/mail${query({ account_id: accountId })}`),
+    enabled: accountId !== null,
+    retry: false,
+  });

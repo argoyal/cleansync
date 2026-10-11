@@ -7,6 +7,7 @@ import type { Account } from "../../api/types";
 import { mailHref } from "../../lib/mail";
 import { Icon } from "../Icon";
 import { Notice } from "../ui";
+import { MessageMailActions } from "./MailActions";
 import { MessageView } from "./MessageView";
 
 /** Wide screens show the list beside the open mail (the xl breakpoint); phones one at a time. */
@@ -41,6 +42,7 @@ export function MailThread({ account, threadId, onBack }: { account: Account; th
             key={m.id}
             message={m}
             open={open.has(m.id)}
+            actions={<MessageMailActions account={account} message={m} />}
             onToggle={() => {
               const next = new Set(open);
               if (next.has(m.id)) next.delete(m.id);
