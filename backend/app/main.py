@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.api import (
     accounts,
+    activity_jobs,
     auth,
     browse,
     catalog,
@@ -18,6 +19,7 @@ from app.api import (
     google,
     health,
     jobs,
+    mail,
     offloads,
     pairs,
     recovery,
@@ -48,6 +50,10 @@ from app.services.files.thumbs import Thumbnails
 from app.services.files.upload import clear_uploads, sweep_upload_leftovers
 from app.services.google.client import GoogleClient
 from app.services.google.quota import ApiBudget, Pacer
+from app.services.mail.adapters import MailAdapters
+from app.services.mail.jobs import recover_mail_jobs
+from app.services.mail.service import MailService
+from app.services.mail.store import sweep_temp_files
 from app.services.offload.service import OffloadService
 from app.services.offload.store import recover_offloads, sweep_delete_lists
 from app.services.queue import DB_BROKEN_MSG, SyncQueue, make_handler
@@ -116,6 +122,11 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             except Exception:
                 logger.exception("could not mark offloads a stop cut short")
             try:
+                with session_factory() as db:
+                    recover_mail_jobs(db)
+            except Exception:
+                logger.exception("could not close mail jobs left running")
+            try:
                 sweep_delete_lists(layout)
             except Exception:
                 logger.exception("could not remove old offload delete lists")
@@ -127,10 +138,17 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 recover_offloads(db)
                 for pair_id in recover_interrupted(db):
                     app.state.queue.request(pair_id, "RECOVERY")
+                # A mail job a stop cut short goes on where it left off.
+                for account_id in recover_mail_jobs(db):
+                    app.state.mail.queue.request(account_id, "backup", trigger="RECOVERY")
             try:
                 sweep_delete_lists(layout)
             except OSError as e:  # harmless leftovers: never stop startup over them
                 logger.warning("could not remove old offload delete lists: %s", e)
+            try:
+                sweep_temp_files(layout)
+            except OSError as e:
+                logger.warning("could not remove half-written mail files: %s", e)
             app.state.scheduler.start()
             try:
                 active = await self_test(layout.storage)
@@ -154,6 +172,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             # Offloads first: a cancelled step lets go of its pair (and may ask for a sync)
             # while the queue still runs, and the queue's stop then ends anything it started.
             await app.state.offloads.stop()
+            await app.state.mail.stop()  # also saves the Google API units counted so far
             await app.state.queue.stop()
             await app.state.catalog.stop()
             app.state.budget.flush()
@@ -278,12 +297,27 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     )
     # A Restore to Drive finishes when the pair's safe resync has uploaded the files.
     app.state.initial.on_resync_done.append(app.state.offloads.resync_done)
+    app.state.mail = MailService(
+        layout=layout,
+        session_factory=session_factory,
+        bus=app.state.bus,
+        accounts=app.state.accounts,
+        adapters=MailAdapters(
+            google=app.state.google,
+            tokens=app.state.tokens,
+            layout=layout,
+            allow_pretend=settings.allow_local_accounts,
+        ),
+        budget=app.state.budget,
+        get_sync_queue=lambda: app.state.queue,  # tests swap the queue after startup
+    )
     app.state.scheduler = Scheduler(
         session_factory=session_factory,
         queue=app.state.queue,
         accounts=app.state.accounts,
         layout=layout,
         catalog=app.state.catalog,
+        mail=app.state.mail,
     )
     # Reconnecting, disconnecting or losing a Google login changes which pairs can run.
     app.state.accounts.on_change = _on_change
@@ -314,6 +348,8 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         offloads.router,
         recovery.router,
         conflicts.router,
+        mail.router,
+        activity_jobs.router,
         system.router,
         google.router,
         docs.router,

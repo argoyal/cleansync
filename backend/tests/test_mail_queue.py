@@ -117,7 +117,7 @@ def test_mail_jobs_are_recorded_settled_and_recovered(db, layout, session_factor
     second = start_mail_job(db, layout, bus, acc.id, MailJobKind.CHECK, "SCHEDULE")
     done = start_mail_job(db, layout, bus, acc.id, MailJobKind.CHECK, "SCHEDULE")
     finish_mail_job(db, bus, done.id, JobState.SUCCESS, "Nothing new", done=0, bytes_=0)
-    assert recover_mail_jobs(db) == 1
+    assert recover_mail_jobs(db) == [acc.id]
     db.expire_all()
     assert db.get(MailJob, second.id).state == JobState.INTERRUPTED
     assert db.get(MailJob, second.id).message == INTERRUPTED_MAIL_MSG

@@ -108,12 +108,13 @@ def settle_mail_jobs(
         return bool(jobs)
 
 
-def recover_mail_jobs(db: Session) -> int:
-    """At startup: jobs a stop left RUNNING."""
+def recover_mail_jobs(db: Session) -> list[int]:
+    """At startup: close jobs a stop left RUNNING (not a failure); return their accounts, to
+    run again."""
     jobs = list(db.scalars(select(MailJob).where(MailJob.state == JobState.RUNNING)))
     for job in jobs:
         job.state = JobState.INTERRUPTED
         job.message = INTERRUPTED_MAIL_MSG
         job.completed_at = utcnow()
     db.commit()
-    return len(jobs)
+    return sorted({job.account_id for job in jobs})

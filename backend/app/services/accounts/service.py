@@ -369,6 +369,24 @@ class AccountService:
             self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
         self._changed()
 
+    async def storage_outside_drive(self, account_id: int) -> int | None:
+        """What Google storage uses outside Drive (Gmail plus Google Photos; Google does not
+        report Gmail on its own), from `rclone about`. None when unknown."""
+        out: list[str] = []
+        with self.session_factory() as db:
+            acc = db.get(Account, account_id)
+            if acc is None:
+                return None
+            remote = acc.remote_name
+        res = await self._rclone(about_args(self.env, remote), on_stdout=out.append)
+        if res.exit_code != 0:
+            return None
+        try:
+            other = json.loads("\n".join(out) or "{}").get("other")
+        except ValueError:
+            return None
+        return int(other) if isinstance(other, int) else None
+
     async def refresh_quota(self, account_id: int) -> Account:
         out: list[str] = []
         with self.session_factory() as db:
