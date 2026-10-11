@@ -149,12 +149,13 @@ def _payload_size(part: Message) -> int:
 _TAG = re.compile(r"<[^<>]*>?")  # stops at the next "<", so unclosed tags can't make it slow
 _SKIPPED = re.compile(r"<(script|style)\b[^<>]*>", re.IGNORECASE)
 
+_CLOSERS = {t: re.compile(rf"</{t}", re.IGNORECASE) for t in ("script", "style")}
+
 
 def html_to_text(html: str) -> str:
     """Plain text for search. Bounded and linear in the size of the HTML, so a hostile body
     can't hang the backup."""
     html = html[: MAX_BODY_CHARS * 2]
-    lowered = html.lower()
     parts: list[str] = []
     pos = 0
     while pos < len(html):
@@ -163,10 +164,10 @@ def html_to_text(html: str) -> str:
         parts.append(_TAG.sub(" ", html[pos:end]))
         if not m:
             break
-        close = lowered.find(f"</{m.group(1).lower()}", m.end())
-        if close < 0:
+        closing = _CLOSERS[m.group(1).lower()].search(html, m.end())
+        if closing is None:
             break
-        gt = html.find(">", close)
+        gt = html.find(">", closing.start())
         pos = len(html) if gt < 0 else gt + 1
     return " ".join(unescape(" ".join(parts)).split())
 
@@ -219,8 +220,10 @@ def parse_eml(raw: bytes) -> ParsedMail:
             for p in attachment_parts(msg)
         ]
         parsed.body_text = _body_text(msg)
-    except Exception:  # keep what was read
-        log.debug("mail read stopped early", exc_info=True)
+    except Exception as exc:  # keep what was read
+        log.warning(
+            "A mail could not be read fully (%s: %s); kept what was read", type(exc).__name__, exc
+        )
     return parsed
 
 
