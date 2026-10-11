@@ -673,15 +673,23 @@ class MailOffloads:
             )
             mine = [r for r in owners if self._own_import(r, info)]
             taken = {r.provider_id for r in owners if r not in mine}
-            files = [eml_path(self.layout, acc.email, r.file_path) for r in mine]
+            # Never lose a mail file: only a byte-for-byte second copy (same SHA-256 as the
+            # kept one) is removed; any other stays in mail/, unlisted.
+            files = [
+                (eml_path(self.layout, acc.email, r.file_path), r.sha256 == info["sha"])
+                for r in mine
+            ]
             if mine:
                 gone = [r.id for r in mine]
                 for r in mine:
                     db.delete(r)
                 db.commit()
                 delete_search_rows(db, gone)
-        for path in files:
+        for path, same in files:
             # The same mail saved a second time by a check: the copy here stays the one.
+            if not same:
+                log.warning("merged a second row for one mail; kept an unlisted copy at %s", path)
+                continue
             try:
                 await asyncio.to_thread(path.unlink, missing_ok=True)
             except OSError:

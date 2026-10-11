@@ -85,7 +85,7 @@ class MailService:
         self.backup = MailBackup(
             layout=layout, session_factory=session_factory, bus=bus, clock=clock, **extra
         )
-        # Plan 4 adds "offload", "empty_trash" and "restore".
+        # Plan 4 adds "offload" and "restore".
         self.actions: dict[str, Callable[[int, dict, str], Awaitable[None]]] = {
             "backup": self._backup
         }

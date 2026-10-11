@@ -115,7 +115,6 @@ class MailJobKind(StrEnum):
     CHECK = "CHECK"  # keeping up
     RECHECK = "RECHECK"
     OFFLOAD = "OFFLOAD"
-    EMPTY_TRASH = "EMPTY_TRASH"
     RESTORE = "RESTORE"
 
 

@@ -602,6 +602,36 @@ async def test_restore_again_merges_a_row_the_check_made_for_its_own_import(
     assert eml_path(box.mail.layout, box.acc.email, row.file_path).exists()
 
 
+async def test_a_merge_keeps_the_other_rows_file_when_its_bytes_differ(
+    auth_client, offload_box, monkeypatch, caplog
+):
+    """Never lose a mail file: the second row's file is removed only when it holds exactly
+    the same bytes as the kept copy; otherwise it stays (unlisted) and the log says so."""
+    from app.services.mail import backup as backup_mod
+
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    box.fake.remove(row.provider_id)
+    _lose_first_import_answer(box)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    (copy,) = _copies(box, "Old photos")
+    copy.raw = b"X-Added-By-Gmail: yes\r\n" + copy.raw  # Gmail's copy is not byte for byte
+    with monkeypatch.context() as m:
+        m.setattr(backup_mod, "adopt_restored_copy", lambda *a, **k: None)
+        await box.backup()
+    (r2,) = [r for r in box.rows_all() if r.subject == "Old photos" and r.id != row.id]
+    r2_file = eml_path(box.mail.layout, box.acc.email, r2.file_path)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    (after,) = [r for r in box.rows_all() if r.subject == "Old photos"]
+    assert after.id == row.id and after.provider_id == copy.id
+    assert r2_file.read_bytes() == copy.raw  # kept, not listed
+    assert eml_path(box.mail.layout, box.acc.email, row.file_path).exists()
+    assert "kept an unlisted copy" in caplog.text
+
+
 async def test_a_successful_import_leaves_no_mark(auth_client, offload_box):
     box = offload_box
     await _offloaded(auth_client, box)
