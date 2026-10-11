@@ -100,18 +100,20 @@ async def test_the_pacer_lets_a_burst_through_then_waits():
 
 def test_a_failed_read_on_a_new_day_does_not_carry_the_old_days_units_over(session_factory, db):
     clock = Clock()
-    fail = [False]
+    calls_until_failure = [None]  # None: never fail
 
     def flaky():
-        if fail[0]:
-            fail[0] = False
-            raise RuntimeError("database is locked")
+        if calls_until_failure[0] is not None:
+            calls_until_failure[0] -= 1
+            if calls_until_failure[0] < 0:
+                calls_until_failure[0] = None
+                raise RuntimeError("database is locked")
         return session_factory()
 
     b = ApiBudget(flaky, budget=lambda: 1000, clock=clock)
     b.spend(50)
     clock.now += timedelta(hours=2)  # a new UTC day
-    fail[0] = True
+    calls_until_failure[0] = 1  # the old day is saved, then the new day's read fails once
     with pytest.raises(RuntimeError):
         b.used_today()
     assert b.used_today() == 0  # tried again, and the old day's 50 are not counted today
