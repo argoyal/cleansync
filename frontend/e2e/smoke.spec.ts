@@ -511,7 +511,11 @@ test("on a phone, opening a mail hides the list and Back returns to it", async (
  * name) to look inside; without it this returns null and the test skips that check. */
 function fakeGmailTrash(): string[] | null {
   const name = process.env.E2E_CONTAINER;
-  if (!name) return null;
+  if (!name) {
+    // In CI a missing name would silently skip the trash checks, so fail instead.
+    if (process.env.CI) throw new Error("E2E_CONTAINER must name the container in CI, or the trash checks are skipped");
+    return null;
+  }
   const json = execFileSync(
     "docker",
     [
