@@ -1,5 +1,6 @@
 """The mail reader (spec §6): the list, counts, opening a mail, attachments, the .eml."""
 
+import logging
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,7 +15,7 @@ from app.models import Account, MailMessage
 from app.models.enums import MailState
 from app.schemas.mail import AttachmentOut, MailCountsOut, MessageOut, ThreadOut, ThreadPageOut
 from app.services.mail.gmail import valid_mail_id
-from app.services.mail.listing import label_counts, list_threads, totals, view_counts
+from app.services.mail.listing import list_threads, mail_counts, totals
 from app.services.mail.reader import (
     MISSING_FILE_MSG,
     AttachmentUnreadable,
@@ -36,6 +37,7 @@ from app.services.mail.search import SearchError, mail_conditions
 from app.services.mail.store import eml_path
 
 MAX_QUERY_CHARS = 1000
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/mail")
 
@@ -83,7 +85,8 @@ def counts(
     account_id: int, ctx: AuthContext = Depends(require_user), db: Session = Depends(get_db)
 ):
     account_or_404(db, account_id)
-    return MailCountsOut(views=view_counts(db, account_id), labels=label_counts(db, account_id))
+    views, labels = mail_counts(db, account_id)
+    return MailCountsOut(views=views, labels=labels)
 
 
 def message_or_404(db: Session, message_id: int) -> tuple[MailMessage, Account]:
@@ -121,6 +124,7 @@ def body(
             "Content-Security-Policy": body_csp(images),
             "X-Frame-Options": "SAMEORIGIN",
             "Cache-Control": "private, no-store",
+            "X-DNS-Prefetch-Control": "off",
         },
     )
 
@@ -149,7 +153,12 @@ def message_out(
         except (MailFileMissing, OSError, ValueError):
             raw = None
         present = raw is not None
-        remote = has_remote_images(raw) if raw is not None else False
+        remote = False
+        if raw is not None:
+            try:
+                remote = has_remote_images(raw)
+            except Exception:  # the mail still opens; "Show images" just isn't offered
+                log.warning("could not check mail %s for remote images", row.id, exc_info=True)
     else:
         present = _file_there(request, account, row)
     attachments = (
@@ -178,7 +187,7 @@ def message_out(
         date=row.date,
         size=row.size,
         file_size=row.file_size,
-        labels=label_names(None, row.account_id, list(row.labels or []), labels),
+        labels=label_names(list(row.labels or []), labels),
         state=row.state,
         offload_id=row.offload_id,
         attachments=attachments,

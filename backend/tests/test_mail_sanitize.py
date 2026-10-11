@@ -242,6 +242,7 @@ def test_the_body_route_sends_the_cleaned_mail_with_its_own_policy(
     assert r.headers["content-security-policy"] == body_csp(False)
     assert r.headers["x-frame-options"] == "SAMEORIGIN"
     assert r.headers["cache-control"] == "private, no-store"
+    assert r.headers["x-dns-prefetch-control"] == "off"
     assert "alert" not in r.text and "<b>there</b>" in r.text
     shown = auth_client.get(f"/api/mail/messages/{row.id}/body?images=1")
     assert shown.headers["content-security-policy"] == body_csp(True)
@@ -269,3 +270,40 @@ def test_the_body_route_says_when_the_mail_or_its_file_is_missing(
 
 def test_the_body_route_needs_a_login(client):
     assert client.get("/api/mail/messages/1/body").status_code == 401
+
+
+def _with_images(*images: tuple[str, bytes]) -> EmailMessage:
+    msg = EmailMessage()
+    msg["From"] = "friend@example.com"
+    msg["Subject"] = "Images"
+    msg.set_content("x")
+    msg.add_alternative("".join(f'<img src="cid:{c}">' for c, _ in images), subtype="html")
+    for cid, data in images:
+        msg.get_payload()[1].add_related(data, "image", "png", cid=f"<{cid}>")
+    return msg
+
+
+def test_the_inline_budget_counts_encoded_length_like_the_cleaner(monkeypatch):
+    monkeypatch.setattr(reader, "INLINE_LIMIT", 1000)
+    # 800 bytes fit a 1000 budget, but as base64 they take about 1090 characters.
+    out = reader.inline_images(_with_images(("big", b"\x89PNG" + b"a" * 796)))
+    assert out == {}
+    small = reader.inline_images(_with_images(("small", b"\x89PNG" + b"a" * 56)))
+    assert set(small) == {"small"} and sum(len(v) for v in small.values()) <= 1000
+
+
+def test_an_image_too_big_for_the_budget_is_skipped_and_smaller_ones_still_fit(monkeypatch):
+    monkeypatch.setattr(reader, "INLINE_LIMIT", 1000)
+    msg = _with_images(
+        ("huge", b"\x89PNG" + b"a" * 2000),
+        ("small1", b"\x89PNG" + b"b" * 100),
+        ("small2", b"\x89PNG" + b"c" * 100),
+    )
+    assert set(reader.inline_images(msg)) == {"small1", "small2"}
+
+
+def test_the_mail_page_turns_off_dns_prefetching():
+    page = render_body(make_mail("Links", html='<a href="https://example.com">x</a>'))
+    assert '<meta http-equiv="x-dns-prefetch-control" content="off">' in page.html
+    text_page = render_body(make_mail("Text", text="plain"))
+    assert '<meta http-equiv="x-dns-prefetch-control" content="off">' in text_page.html

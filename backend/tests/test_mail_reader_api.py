@@ -245,3 +245,31 @@ def test_text_uses_the_charset_it_names_and_ignores_a_bad_one():
     assert served_type("text/plain", safe_charset("iso-8859-1")) == "text/plain; charset=iso-8859-1"
     assert served_type("text/plain", safe_charset("nope\r\nx")) == "text/plain; charset=utf-8"
     assert served_type("text/html") == "text/plain; charset=utf-8"
+
+
+def test_only_real_text_encodings_are_kept():
+    from app.services.mail.reader import safe_charset
+
+    assert safe_charset("utf-8") == "utf-8" and safe_charset("windows-1252") == "windows-1252"
+    for name in ("utf-7", "UTF-7", "base64", "rot13", "hex", "zlib", "bz2", "uu", "quopri"):
+        assert safe_charset(name) is None, name
+
+
+def test_a_mail_whose_images_cannot_be_checked_still_opens(
+    auth_client, app, db, make_account, monkeypatch, caplog
+):
+    from app.api import mail_reader
+
+    acc = make_account()
+    row = _keep(app, db, acc, "m1", make_mail("Odd", html="<p>Hi</p>"))
+
+    def broken(raw):
+        raise RuntimeError("cleaner fell over")
+
+    monkeypatch.setattr(mail_reader, "has_remote_images", broken)
+    with caplog.at_level("WARNING"):
+        r = auth_client.get(f"/api/mail/messages/{row.id}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["has_remote_images"] is False and body["file_missing"] is False
+    assert any("remote images" in rec.getMessage() for rec in caplog.records)

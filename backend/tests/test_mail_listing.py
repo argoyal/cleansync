@@ -159,3 +159,39 @@ def test_a_cursor_with_a_made_up_thread_id_is_a_plain_422(auth_client, make_acco
     cursor = encode_cursor(NOW, "x'; drop table")
     r = auth_client.get("/api/mail/threads", params={"account_id": acc.id, "cursor": cursor})
     assert r.status_code == 422
+
+
+def test_threads_with_the_same_date_each_show_once_across_pages(auth_client, db, make_account):
+    acc = make_account()
+    for i in range(7):
+        _add(db, acc, f"t{i}", days=3)  # every thread has exactly the same newest date
+    _add(db, acc, "newer", days=1)
+    _add(db, acc, "older", days=5)
+    seen: list[str] = []
+    cursor = None
+    while True:
+        page = _page(auth_client, acc, limit=3, **({"cursor": cursor} if cursor else {}))
+        seen += [t["thread_id"] for t in page["threads"]]
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+    assert seen[0] == "newer" and seen[-1] == "older"
+    assert sorted(seen) == sorted({*seen}) and len(seen) == 9
+
+
+def test_counts_read_the_label_tally_once(auth_client, db, make_account, monkeypatch):
+    from app.services.mail import listing
+
+    acc = make_account()
+    _add(db, acc, "a", labels=("INBOX",))
+    calls = []
+    real = listing._label_tally
+
+    def counting(db, account_id):
+        calls.append(account_id)
+        return real(db, account_id)
+
+    monkeypatch.setattr(listing, "_label_tally", counting)
+    body = auth_client.get("/api/mail/counts", params={"account_id": acc.id}).json()
+    assert body["views"]["inbox"] == 1
+    assert calls == [acc.id]

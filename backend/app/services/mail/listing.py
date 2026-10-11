@@ -53,8 +53,9 @@ def decode_cursor(value: str) -> tuple[datetime, str]:
 def list_threads(
     db: Session, conds: list, *, cursor: str | None = None, limit: int = 50
 ) -> tuple[list[ThreadRow], str | None]:
-    """Keyset paging on (newest date, thread id): new mail arriving between pages never
-    makes a thread show twice or go missing."""
+    """Keyset paging on (newest date, thread id), so paging on never shows a thread twice
+    or skips one that was there. A thread that gets new mail after you've paged past it
+    moves to the top, and shows up there after a refresh."""
     last = func.max(MailMessage.date)
     q = (
         select(MailMessage.thread_id, last.label("last"))
@@ -119,8 +120,16 @@ def _label_tally(db: Session, account_id: int) -> dict[str, int]:
     return {str(v): int(n) for v, n in rows}
 
 
-def view_counts(db: Session, account_id: int) -> dict[str, int]:
+def mail_counts(db: Session, account_id: int) -> tuple[dict[str, int], list[dict]]:
+    """The view counts and the label counts, reading the label tally once."""
     tally = _label_tally(db, account_id)
+    return view_counts(db, account_id, tally), label_counts(db, account_id, tally)
+
+
+def view_counts(
+    db: Session, account_id: int, tally: dict[str, int] | None = None
+) -> dict[str, int]:
+    tally = _label_tally(db, account_id) if tally is None else tally
     states = dict(
         db.execute(
             select(MailMessage.state, func.count())
@@ -139,8 +148,8 @@ def view_counts(db: Session, account_id: int) -> dict[str, int]:
     }
 
 
-def label_counts(db: Session, account_id: int) -> list[dict]:
-    tally = _label_tally(db, account_id)
+def label_counts(db: Session, account_id: int, tally: dict[str, int] | None = None) -> list[dict]:
+    tally = _label_tally(db, account_id) if tally is None else tally
     labels = db.scalars(
         select(MailLabel).where(MailLabel.account_id == account_id, MailLabel.type == "user")
     )

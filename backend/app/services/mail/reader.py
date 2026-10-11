@@ -44,7 +44,9 @@ def read_eml_of(layout: Layout, email: str, row: MailMessage) -> bytes:
 
 
 def inline_images(msg: EmailMessage, wanted: set[str] | None = None) -> dict[str, str]:
-    """Content-ID → data: address, for images shown inside the mail (at most INLINE_LIMIT).
+    """Content-ID → data: address, for images shown inside the mail: at most INLINE_LIMIT
+    characters of data: addresses, measured the way the cleaner measures them. An image
+    that doesn't fit is left out, and smaller ones after it can still fit.
     With `wanted`, only the images the HTML points at are read out."""
     out: dict[str, str] = {}
     used = 0
@@ -59,17 +61,19 @@ def inline_images(msg: EmailMessage, wanted: set[str] | None = None) -> dict[str
             data = part.get_payload(decode=True) or b""
         except (ValueError, LookupError):  # a broken image part: the mail shows without it
             continue
-        used += len(data)
-        if used > INLINE_LIMIT:
-            break
-        encoded = base64.b64encode(data).decode()
-        out[key] = f"data:{part.get_content_type()};base64,{encoded}"
+        prefix = f"data:{part.get_content_type()};base64,"
+        if used + len(prefix) + 4 * ((len(data) + 2) // 3) > INLINE_LIMIT:
+            continue  # too big for what is left: show it as a missing image
+        uri = prefix + base64.b64encode(data).decode()
+        used += len(uri)
+        out[key] = uri
     return out
 
 
 def _document(body: str) -> str:
     return (
-        '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">'
+        '<!doctype html><html><head><meta charset="utf-8">'
+        '<meta http-equiv="x-dns-prefetch-control" content="off"><base target="_blank">'
         f"<style>{_STYLE}</style></head><body>{body}</body></html>"
     )
 
@@ -168,13 +172,17 @@ def served_type(content_type: str, charset: str | None = None) -> str:
 
 
 def safe_charset(name: str | None) -> str | None:
-    if not name:
+    """A character set the browser may use for a text attachment: only real text encodings
+    (not base64, rot13 and the like) and never UTF-7, which can hide markup."""
+    if not name or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,40}", name):
         return None
     try:
-        codecs.lookup(name)
+        info = codecs.lookup(name)
     except LookupError:
         return None
-    return name if re.fullmatch(r"[A-Za-z0-9_.:-]{1,40}", name) else None
+    if not getattr(info, "_is_text_encoding", True) or info.name == "utf-7":
+        return None
+    return name
 
 
 def download_name(name: str) -> str:
@@ -208,11 +216,6 @@ def open_attachment(raw: bytes, index: int) -> tuple[str, str, bytes, str | None
     return part_filename(part) or "attachment", clean_type(part.get_content_type()), data, charset
 
 
-def attachment_of(raw: bytes, index: int) -> tuple[str, str, bytes]:
-    name, ctype, data, _ = open_attachment(raw, index)
-    return name, ctype, data
-
-
 def gmail_url(email: str, provider_id: str) -> str:
     return (
         f"https://mail.google.com/mail/u/{quote(email, safe='')}/#all/{quote(provider_id, safe='')}"
@@ -227,11 +230,9 @@ def user_label_map(db: Session, account_id: int) -> dict[str, str]:
     return {r.provider_label_id: r.name for r in rows}
 
 
-def label_names(
-    db: Session, account_id: int, ids: list[str], known: dict[str, str] | None = None
-) -> list[dict]:
-    """User labels of a mail, by name (system labels are what the views show)."""
-    names = known if known is not None else user_label_map(db, account_id)
+def label_names(ids: list[str], names: dict[str, str]) -> list[dict]:
+    """User labels of a mail, by name (system labels are what the views show). `names` is
+    the account's user_label_map."""
     return sorted(
         ({"id": i, "name": names[i]} for i in ids if i in names), key=lambda x: x["name"].lower()
     )

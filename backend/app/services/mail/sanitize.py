@@ -122,8 +122,9 @@ def sanitize_html(html: str, cid_images: dict[str, str]) -> Cleaned:
         if tag == "img" and attr == "src":
             if low.startswith("cid:"):
                 uri = cid_images.get(v[4:].strip().strip("<>"))
-                # Every reference pastes the whole image in again: stop at the limit, so a
-                # mail that repeats one image thousands of times can't fill the memory.
+                # Every reference pastes the whole image in again: drop any that would pass
+                # the limit (a smaller one may still fit), so a mail that repeats one image
+                # thousands of times can't fill the memory.
                 if uri is None or inlined + len(uri) > INLINE_LIMIT:
                     return None  # dropped, shown as a missing image
                 inlined += len(uri)
