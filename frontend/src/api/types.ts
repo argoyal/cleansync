@@ -144,6 +144,11 @@ export type AppSettings = {
   max_parallel_pairs: number;
   session_idle_hours: number;
   log_retention_days: number;
+  mail_check_interval_s: number;
+  mail_min_age_days: number;
+  mail_batch_size: number;
+  mail_disk_floor_gb: number;
+  google_daily_budget_units: number;
 };
 
 export type Job = {
@@ -303,3 +308,37 @@ export type RecoveryEntry = {
 export type RecoveryList = { total: number; entries: RecoveryEntry[] };
 export type RestoreResult = { id: string; restored_to: string | null; error: string | null };
 export type GoogleUsage = { day: string; used: number; budget: number; drive_estimate: number; reached: boolean };
+
+export type MailPhase = "initial" | "incremental" | "recheck";
+export type MailFailure = { provider_id: string; attempts: number; last_error: string };
+export type MailJobBrief = { id: number; kind: string; state: string; started_at: string; completed_at: string | null; done: number; message: string | null };
+export type MailStatus = {
+  account_id: number;
+  email: string;
+  service: ServiceState;
+  phase: MailPhase | null;
+  stored: number;
+  stored_bytes: number;
+  total: number | null;
+  running: boolean;
+  waiting: boolean;
+  time_left_s: number | null;
+  last_run_at: string | null;
+  last_error: string | null;
+  job: MailJobBrief | null;
+  failed: MailFailure[];
+  budget_reached: boolean;
+};
+export type MailSetupInfo = { total: number; size_bytes: number | null };
+export type ActivityJob = {
+  source: "files" | "mail";
+  id: number;
+  account_id: number;
+  title: string;
+  kind: string;
+  state: string;
+  started_at: string | null;
+  completed_at: string | null;
+  message: string | null;
+  log_url: string;
+};

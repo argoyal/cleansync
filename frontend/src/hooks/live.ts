@@ -102,9 +102,11 @@ export function useLiveEvents(): void {
         const d = data(e) as { pair_id: number; state: string } | null;
         if (!d) return;
         if (d.state !== "RUNNING") clearProgress(d.pair_id);
-        invalidate(["pairs", "status", "history", "logs", "activity", "preview", "planned", "conflicts", ...FILE_KEYS]);
+        invalidate(["pairs", "status", "history", "logs", "activity", "activity-jobs", "preview", "planned", "conflicts", ...FILE_KEYS]);
         refreshRecovery();
       });
+      // Mail jobs (spec §4): progress, pauses and the end of each job.
+      source.addEventListener("mail", () => invalidate(["mail-status", "mail-overview", "activity", "activity-jobs", "google-usage", "accounts"]));
       source.addEventListener("pair", () => invalidate(["pairs", "status", "browse"]));
       source.addEventListener("progress", (e) => {
         const p = data(e) as Progress | null;

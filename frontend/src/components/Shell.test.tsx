@@ -322,6 +322,18 @@ describe("rail and panel", () => {
     await within(screen.getByRole("navigation", { name: "Sections" })).findByText("3 open conflicts");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+  it("shows failed mails as a badge on Mail", async () => {
+    const active = { ...ACCOUNT, services: { files: "active" as const, mail: "active" as const } };
+    mockApi({
+      "GET /api/accounts": [active],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/status": STATUS,
+      "GET /api/mail/status": { account_id: 1, failed: [{ provider_id: "a", attempts: 3, last_error: "x" }, { provider_id: "b", attempts: 4, last_error: "y" }] },
+    });
+    renderApp(<AppShell />, { withAccount: true, route: "/mail" });
+    const rail = screen.getByRole("navigation", { name: "Sections" });
+    expect(await within(rail).findByText("2 mails could not be backed up")).toBeInTheDocument();
+  });
 });
 
 describe("content bar", () => {

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, ApiError, encodePath, query } from "./client";
 import type {
   Account,
+  ActivityJob,
   ActivityEvent,
   AppSettings,
   Browse,
@@ -12,6 +13,8 @@ import type {
   FolderEntry,
   GoogleUsage,
   Job,
+  MailSetupInfo,
+  MailStatus,
   Me,
   Offload,
   OffloadBatch,
@@ -187,3 +190,23 @@ export const useRecovery = (accountId: number | null, f: RecoveryFilters) =>
 export const recoveryFileUrl = (accountId: number, id: string) => `/api/recovery/file${query({ account_id: accountId, id })}`;
 /** Where a ticket from POST /api/recovery/zip is downloaded (one use, a few minutes). */
 export const recoveryZipUrl = (token: string) => `/api/recovery/zip/${encodeURIComponent(token)}`;
+
+export const useMailStatus = (accountId: number | null, enabled = true) =>
+  useQuery({
+    queryKey: ["mail-status", accountId],
+    queryFn: () => api<MailStatus>(`/api/mail/status${query({ account_id: accountId })}`),
+    enabled: accountId !== null && enabled,
+    // Live events say when a job moves; this keeps the progress line fresh between them.
+    refetchInterval: (q) => (q.state.data?.running || q.state.data?.waiting ? 3000 : false),
+  });
+export const useMailOverview = () => useQuery({ queryKey: ["mail-overview"], queryFn: () => api<MailStatus[]>("/api/mail/overview") });
+export const useMailSetupInfo = (accountId: number, enabled: boolean) =>
+  useQuery({
+    queryKey: ["mail-setup-info", accountId],
+    queryFn: () => api<MailSetupInfo>(`/api/mail/setup-info${query({ account_id: accountId })}`),
+    enabled,
+    retry: false,
+    staleTime: 60_000,
+  });
+export const useActivityJobs = () =>
+  useQuery({ queryKey: ["activity-jobs"], queryFn: () => api<ActivityJob[]>("/api/activity/jobs?limit=30") });

@@ -1,6 +1,8 @@
 import { Link } from "react-router-dom";
 
+import { MailBackupStatus } from "../components/MailBackupStatus";
 import { MailSetUpCard } from "../components/MailSetUpCard";
+import { MailStartCard } from "../components/MailStartCard";
 import { Empty } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
 
@@ -24,10 +26,16 @@ export function MailPage() {
       </div>
     );
   }
+  if (mail === "setting_up") {
+    return (
+      <div className="p-4 sm:p-6">
+        <MailStartCard account={account} />
+      </div>
+    );
+  }
   return (
-    <div className="p-4 sm:p-6">
-      <h1 className="text-title font-semibold">Mail</h1>
-      <p className="mt-2 text-ink-2">Gmail permission is in place for {account.email}.</p>
+    <div className="space-y-4 p-4 sm:p-6">
+      <MailBackupStatus account={account} />
     </div>
   );
 }
