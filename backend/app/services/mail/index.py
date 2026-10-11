@@ -234,15 +234,21 @@ def apply_labels(
     if row.state == MailState.OFFLOADED:
         if "TRASH" in labels:
             return row  # in the trash because of CleanSync's own offload: no change (spec §4.4)
-        # The owner took an offloaded mail back out of Gmail's trash: it is in Gmail again.
-        row.state, row.offload_id = MailState.IN_MAIL, None
+        if gone:
+            # Moved from Trash to Spam by the owner: Deleted in Gmail, and it stays on its
+            # offload's page.
+            row.state = MailState.DELETED
+            db.commit()
+            return row
     if gone:
         # Moved to Trash or Spam by the owner: Deleted in Gmail. The labels it had are kept,
         # so a restore by import can put them back.
         if row.state == MailState.IN_MAIL:
             row.state = MailState.DELETED
     else:
-        row.state = MailState.IN_MAIL  # back out of Trash or Spam, or a plain label change
+        # Back out of Trash or Spam (an offloaded mail too: it is in Gmail again), or a plain
+        # label change.
+        row.state, row.offload_id = MailState.IN_MAIL, None
         set_flags(row, labels)
     db.commit()
     return row
@@ -290,7 +296,8 @@ def mark_unseen_deleted(db: Session, account_id: int) -> int:
 def mark_seen_back_in_mail(db: Session, account_id: int) -> int:
     """After a complete re-check listing: mail marked deleted, or offloaded, that Gmail lists
     again was taken back out of Trash or Spam by the owner, so it is in Gmail again (as
-    keeping up does). The listing gives no labels, so the stored ones stay."""
+    keeping up does). The listing gives no labels, so the stored ones stay.
+    Relies on offloads being refused while the mail phase is RECHECK or INITIAL (Plan 4)."""
     result = db.execute(
         text(
             "UPDATE mail_messages SET state = :in_mail, offload_id = NULL "

@@ -77,7 +77,8 @@ async def test_offloaded_mail_moved_from_the_trash_to_spam_is_deleted_in_gmail(b
     await box.run()
     box.fake.set_labels(ids[0], ("SPAM",))
     await box.run()
-    assert _row(box, ids[0]).state == MailState.DELETED and _row(box, ids[0]).offload_id is None
+    # Still on its offload's page (controller ruling).
+    assert _row(box, ids[0]).state == MailState.DELETED and _row(box, ids[0]).offload_id == 7
     assert _row(box, ids[0]).labels == ["INBOX"]
 
 
@@ -157,3 +158,15 @@ async def test_a_recheck_returns_offloaded_mail_taken_back_out_of_the_trash(box)
     assert state == JobState.SUCCESS
     assert _row(box, ids[0]).state == MailState.IN_MAIL and _row(box, ids[0]).offload_id is None
     assert _row(box, ids[1]).state == MailState.OFFLOADED and _row(box, ids[1]).offload_id == 7
+
+
+async def test_mail_taken_out_of_spam_is_backed_up(box):
+    await _backed_up(box)
+    mid = box.fake.add(b"Subject: Not spam\r\nFrom: a@example.com\r\n\r\nhi", labels=("SPAM",))
+    await box.run()
+    assert mid not in {m.provider_id for m in box.rows()}
+    box.fake.set_labels(mid, ("INBOX",))  # the owner presses "Not spam": a label change
+    state, _, r = await box.run()
+    assert state == JobState.SUCCESS and r.downloaded == 1
+    assert _row(box, mid).state == MailState.IN_MAIL and _row(box, mid).labels == ["INBOX"]
+    every_row_has_its_file(box)

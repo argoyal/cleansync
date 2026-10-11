@@ -264,9 +264,13 @@ class MailBackup:
                     apply_labels(db, r.account_id, mid, labels)
             elif not (SKIP_LABELS & set(labels)):
                 await self._download(r, mid)
+        for mid, labels in changes.labels.items():
+            with self.sf() as db:
+                row = apply_labels(db, r.account_id, mid, labels)
+            if row is None and not (SKIP_LABELS & set(labels)):
+                # Not backed up yet: it was in Spam or Trash and the owner took it out.
+                await self._download(r, mid)
         with self.sf() as db:
-            for mid, labels in changes.labels.items():
-                apply_labels(db, r.account_id, mid, labels)
             for mid in changes.deleted:
                 mark_deleted(db, r.account_id, mid)
             st = sync_state(db, r.account_id)
