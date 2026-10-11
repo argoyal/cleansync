@@ -17,7 +17,14 @@ from app.services.mail.adapter import (
     MailNotFound,
     MailUnreachable,
 )
-from app.services.mail.gmail import API_OFF_MSG, GmailAdapter, StaticTokens, api_turned_off
+from app.services.mail.gmail import (
+    API_OFF_MSG,
+    GmailAdapter,
+    StaticTokens,
+    api_turned_off,
+    same_message_id,
+    search_message_id,
+)
 from tests.mail_helpers import fake_adapter
 
 WHEN = datetime(2025, 3, 4, 10, 30, tzinfo=UTC)
@@ -276,8 +283,47 @@ async def test_a_mail_is_found_by_its_message_id_in_trash_and_spam_too():
     mid = re.search(rb"^Message-ID: <([^>]+)>", raw, re.M).group(1).decode()
     found = fake.add(raw, labels=("TRASH",))
     assert await gmail.find_by_message_id(f"<{mid}>") == [found]
-    assert fake.calls[-1][2]["q"] == f"rfc822msgid:{mid}"
-    assert fake.calls[-1][2]["includeSpamTrash"] == "true"
+    search = [c for c in fake.calls if "q" in c[2]][-1]
+    assert search[2]["q"] == f"rfc822msgid:{mid}" and search[2]["includeSpamTrash"] == "true"
+    # Each candidate is read for its own Message-ID header before it counts.
+    assert fake.calls[-1][2] == {"format": "metadata", "metadataHeaders": "Message-ID"}
     assert await gmail.find_by_message_id("<nobody@example.com>") == []
     with pytest.raises(ValueError):
         await gmail.find_by_message_id("<a b@example.com> OR in:anywhere")
+
+
+async def test_a_search_answer_whose_message_id_differs_is_not_counted():
+    fake, ids = _fake()
+    gmail = fake_adapter(fake)
+    raw = make_mail("Find me", when=WHEN)
+    mid = re.search(rb"^Message-ID: <([^>]+)>", raw, re.M).group(1).decode()
+    found = fake.add(raw)
+    fake.loose_matches = [ids[0]]  # Gmail's search also answers an unrelated mail
+    assert await gmail.find_by_message_id(f"<{mid}>") == [found]
+    fake.messages.pop(found)
+    assert await gmail.find_by_message_id(f"<{mid}>") == []
+
+
+def test_message_ids_gmail_search_could_misread_are_never_searched_for():
+    for hostile in (
+        "x}{in:inbox@example.com",
+        "a{b@example.com",
+        "a,b@example.com",
+        "a|b@example.com",
+        "-in:trash@example.com",
+        "a b@example.com",
+        'a"b@example.com',
+        "(a)@example.com",
+        "",
+        None,
+    ):
+        assert search_message_id(hostile) is None, hostile
+    assert search_message_id(" <abc.123-x@example.com> ") == "abc.123-x@example.com"
+
+
+def test_message_ids_are_compared_exactly_except_the_domains_case():
+    assert same_message_id("<abc@Example.COM>", " abc@example.com ")
+    assert not same_message_id("<ABC@example.com>", "<abc@example.com>")
+    assert not same_message_id("<abc@example.com>", "<abcd@example.com>")
+    assert not same_message_id("", "")
+    assert not same_message_id(None, "<abc@example.com>")

@@ -62,13 +62,32 @@ def api_turned_off(resp: httpx.Response) -> bool:
 
 
 # A Message-ID safe to put in a Gmail search: no spaces, quotes or brackets inside.
-_MSGID = re.compile(r"[^\s<>\"()]{1,900}")
+# A Message-ID safe to put in a Gmail search. Refused (such mail is imported without a
+# lookup): spaces, quotes, brackets, and { } , | and a leading - , which Gmail's search may
+# read as its own syntax.
+_MSGID = re.compile(r"[^\s<>\"(){},|-][^\s<>\"(){},|]{0,899}")
 
 
 def search_message_id(value: str | None) -> str | None:
     """The Message-ID header without its <>, or None when it can't be searched for safely."""
     mid = (value or "").strip().removeprefix("<").removesuffix(">")
     return mid if _MSGID.fullmatch(mid) else None
+
+
+def same_message_id(a: str | None, b: str | None) -> bool:
+    """Two Message-ID headers name the same mail. Surrounding whitespace and <> are left out;
+    the part before the last @ must match exactly (RFC 5322 leaves its case to the sender),
+    the domain after it ignoring case (domains are case-insensitive)."""
+
+    def norm(v: str | None) -> tuple[str, str] | None:
+        v = (v or "").strip().removeprefix("<").removesuffix(">").strip()
+        if not v:
+            return None
+        local, at, domain = v.rpartition("@")
+        return (local, domain.casefold()) if at else (v, "")
+
+    na, nb = norm(a), norm(b)
+    return na is not None and na == nb
 
 
 # The one place the shape of a Gmail message id is written (the store uses valid_mail_id).
@@ -304,11 +323,31 @@ class GmailAdapter:
             raise ValueError("not a Message-ID that can be searched for")
         params = {"q": f"rfc822msgid:{mid}", "includeSpamTrash": "true", "maxResults": "10"}
         data = _json(await self._call("gmail.messages.list", "GET", "/messages", params=params))
-        return [
-            mid
+        found = [
+            gid
             for m in data.get("messages") or []
-            if isinstance(m, dict) and (mid := valid_mail_id(m.get("id")))
+            if isinstance(m, dict) and (gid := valid_mail_id(m.get("id")))
         ]
+        # Gmail's search is not an exact match: only a mail whose own Message-ID header is
+        # this one counts.
+        return [gid for gid in found if same_message_id(await self._message_id(gid), mid)]
+
+    async def _message_id(self, id: str) -> str | None:
+        """One mail's Message-ID header (None when it has none or is gone)."""
+        try:
+            resp = await self._call(
+                "gmail.messages.get",
+                "GET",
+                f"/messages/{_mail_id(id)}",
+                params={"format": "metadata", "metadataHeaders": "Message-ID"},
+            )
+        except MailNotFound:
+            return None
+        headers = (_json(resp).get("payload") or {}).get("headers") or []
+        for h in headers:
+            if isinstance(h, dict) and str(h.get("name", "")).lower() == "message-id":
+                return str(h.get("value") or "")
+        return None
 
     async def import_raw(self, raw: bytes, labels: list[str], internal_date: datetime) -> str:
         """Put a kept mail back into Gmail (Plan 4's restore). Gmail takes the date from the

@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -406,3 +407,86 @@ def test_a_paused_restore_ends_failed_at_startup(settings, make_account, db):
             assert row.state == JobState.FAILED
             assert row.message.endswith(RESTARTED_RESTORE_MSG)
         assert app.state.mail.queue.requests == []  # a restore is not run again by itself
+
+
+async def test_a_search_answer_that_is_another_mail_is_never_adopted(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    box.fake.remove(row.provider_id)
+    other = box.fake.add(make_mail("Stranger"))  # in Gmail, with no row here
+    box.fake.loose_matches = [other]  # Gmail's search answers it for this Message-ID too
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    new = box.row("Old photos").provider_id
+    assert len(_imports(box)) == 1 and new not in (other, row.provider_id)
+    assert b"Subject: Old photos" in box.fake.messages[new].raw
+    assert "TRASH" not in box.fake.messages[other].labels  # the stranger was never touched
+
+
+async def test_a_mail_with_an_odd_message_id_is_imported_without_a_search(auth_client, offload_box):
+    box = offload_box
+    when = datetime.now(UTC) - timedelta(days=700)
+    raw = make_mail("Odd id", when=when)
+    raw = re.sub(rb"(?m)^Message-ID: .*$", b"Message-ID: <x}{in:inbox@example.com>", raw)
+    box.fake.add(raw, labels=("INBOX",), when=when)
+    await box.backup()
+    r = auth_client.post(
+        "/api/mail/offloads", json={"account_id": box.acc.id, "q": "older_than:1y", "confirm": 4}
+    )
+    assert r.status_code == 202
+    await box.run_queued()
+    row = box.row("Odd id")
+    box.fake.remove(row.provider_id)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    assert not any("rfc822msgid" in c[2].get("q", "") for c in box.fake.calls)
+    assert len(_imports(box)) == 1
+    assert box.row("Odd id").state == MailState.IN_MAIL
+
+
+async def test_a_copy_found_in_spam_is_adopted_and_left_there(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    box.fake.remove(row.provider_id)
+    _lose_first_import_answer(box)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    (copy,) = [m for m in box.fake.messages.values() if b"Subject: Old photos" in m.raw]
+    box.fake.set_labels(copy.id, ("SPAM",))
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    after = box.row("Old photos")
+    assert after.provider_id == copy.id  # known by the copy's id now
+    assert after.state == MailState.OFFLOADED and after.offload_id == row.offload_id
+    assert box.fake.messages[copy.id].labels == ["SPAM"]
+    assert len(_imports(box)) == 1
+    assert _last_job(auth_client)["message"].endswith("1 is in Gmail's Spam, so it was left there")
+
+
+def test_with_the_disk_missing_a_paused_restore_still_ends_failed_at_startup(
+    settings, make_account, db
+):
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+    from app.models.enums import JobState, MailJobKind
+    from app.services.mail.jobs import finish_mail_job, start_mail_job
+    from tests.test_mail_api import StubMailQueue
+
+    first = create_app(settings, start_background=False)  # writes the volume file
+    acc = make_account()
+    paused = start_mail_job(
+        db, first.state.layout, first.state.bus, acc.id, MailJobKind.RESTORE, "MANUAL", 3
+    )
+    finish_mail_job(db, first.state.bus, paused.id, JobState.PAUSED, "Put 1 mail back in Gmail.")
+    first.state.layout.volume_file.unlink()
+    app = create_app(settings)
+    app.state.mail.queue = StubMailQueue()
+    with TestClient(app):
+        assert app.state.queue.disabled_reason == MISSING_DISK_MSG
+        db.expire_all()
+        row = db.get(MailJob, paused.id)
+        assert row.state == JobState.FAILED and row.message.endswith(RESTARTED_RESTORE_MSG)
+        assert app.state.mail.queue.requests == []

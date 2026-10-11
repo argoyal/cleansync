@@ -70,6 +70,8 @@ class FakeGmail:
     calls: list[tuple[str, str, dict]] = field(default_factory=list)
     _failures: list[_Failure] = field(default_factory=list)
     _uploads: dict[str, list[str]] = field(default_factory=dict)  # resumable: id -> labels
+    # Ids every rfc822msgid search also answers: real Gmail's search is not an exact match.
+    loose_matches: list[str] = field(default_factory=list)
     _next: int = 0x18A0000000000000
 
     # ---- building a mailbox ------------------------------------------------------------
@@ -267,7 +269,7 @@ class FakeGmail:
             msgs = [
                 m
                 for m in msgs
-                if _message_id(m.raw) == wanted
+                if (_message_id(m.raw) == wanted or m.id in self.loose_matches)
                 and (spam_trash or not {"SPAM", "TRASH"} & set(m.labels))
             ]
         size = int(p.get("maxResults", "100"))
@@ -290,6 +292,11 @@ class FakeGmail:
             "internalDate": str(msg.internal_date_ms),
             "sizeEstimate": len(msg.raw),
         }
+        if fmt == "metadata":
+            mid = _message_id(msg.raw)
+            body["payload"] = {
+                "headers": [{"name": "Message-ID", "value": f"<{mid}>"}] if mid else []
+            }
         if fmt == "raw":
             body["raw"] = base64.urlsafe_b64encode(msg.raw).decode().rstrip("=")
             body["snippet"] = msg.raw.split(b"\r\n\r\n", 1)[-1][:80].decode("utf-8", "replace")
