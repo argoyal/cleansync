@@ -63,8 +63,9 @@ def api_turned_off(resp: httpx.Response) -> bool:
 
 # A Message-ID safe to put in a Gmail search. Refused (such mail is imported without a
 # lookup): spaces, quotes, brackets, and { } , | and a leading - , which Gmail's search may
-# read as its own syntax; and invisible zero-width characters, which hide what is searched.
-_BAD = '\\s<>"(){},|\u200b-\u200d\u2060\ufeff'
+# read as its own syntax; and invisible characters (zero-width and direction marks, the soft
+# hyphen), which hide what is searched.
+_BAD = '\\s<>"(){},|\u00ad\u200b-\u200f\u2060\ufeff'
 _MSGID = re.compile(rf"[^{_BAD}-][^{_BAD}]{{0,899}}")
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 

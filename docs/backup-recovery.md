@@ -54,7 +54,7 @@ How this is tested: the automated tests use a local folder in place of Google Dr
 
 ## Mail
 
-Mail lives in `mail/` next to `storage/`, one `.eml` file per mail; the list of mails, their labels and the search index are in the database. Back up `mail/` with `storage/` and `app/data/`. Nothing in `mail/` is ever deleted by CleanSync.
+Mail lives in `mail/` next to `storage/`, one `.eml` file per mail; the list of mails, their labels and the search index are in the database. Back up `mail/` with `storage/` and `app/data/`. CleanSync never deletes a mail's only copy. The one file it removes is a second, byte-for-byte identical copy the backup saved for a mail you were restoring.
 
 Restoring an old database copy is safe for mail that is still in Gmail: the next check (or a full re-check) finds what the old copy doesn't know and downloads it again. It is **not** fully safe for mail offloaded after that copy was made, because the old database doesn't know about that offload:
 

@@ -91,3 +91,34 @@ def test_at_startup_a_cut_short_offload_and_its_job_both_end_failed(
         assert row.state == JobState.FAILED and row.message == INTERRUPTED_OFFLOAD_MSG
         assert row.completed_at is not None
         assert db.get(MailJob, backup.id).state == JobState.INTERRUPTED  # other jobs as before
+
+
+def test_with_the_disk_missing_a_failing_offload_recovery_still_closes_mail_jobs(
+    settings, make_account, db, monkeypatch
+):
+    """Each startup step on its own: one failing must not skip the next."""
+    from fastapi.testclient import TestClient
+
+    import app.main as main_mod
+    from app.main import create_app
+    from app.models import MailJob
+    from app.models.enums import JobState, MailJobKind
+    from app.services.mail.jobs import start_mail_job
+    from tests.test_mail_api import StubMailQueue
+
+    first = create_app(settings, start_background=False)
+    acc = make_account()
+    job = start_mail_job(
+        db, first.state.layout, first.state.bus, acc.id, MailJobKind.CHECK, "SCHEDULE", None
+    )
+    first.state.layout.volume_file.unlink()
+
+    def broken(db):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main_mod, "recover_mail_offloads", broken)
+    app = create_app(settings)
+    app.state.mail.queue = StubMailQueue()
+    with TestClient(app):
+        db.expire_all()
+        assert db.get(MailJob, job.id).state == JobState.INTERRUPTED

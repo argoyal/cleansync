@@ -130,12 +130,17 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                     recover_mail_restores(db)
             except Exception:
                 logger.exception("could not close mail restores a restart cut short")
-            try:
-                with session_factory() as db:
+            with session_factory() as db:
+                try:
                     recover_mail_offloads(db)  # first: it closes its own job as failed
+                except Exception:
+                    db.rollback()
+                    logger.exception("could not mark mail offloads a stop cut short")
+                try:
                     recover_mail_jobs(db)
-            except Exception:
-                logger.exception("could not close mail jobs left running")
+                except Exception:
+                    db.rollback()
+                    logger.exception("could not close mail jobs left running")
             try:
                 sweep_delete_lists(layout)
             except Exception:

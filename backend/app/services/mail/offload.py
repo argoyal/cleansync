@@ -685,9 +685,14 @@ class MailOffloads:
                     db.delete(r)
                 db.commit()
                 delete_search_rows(db, gone)
+        kept = eml_path(self.layout, acc.email, info["file_path"])
+        kept_ok = bool(files) and not await asyncio.to_thread(
+            check_eml, kept, info["size"], info["sha"]
+        )
         for path, same in files:
-            # The same mail saved a second time by a check: the copy here stays the one.
-            if not same:
+            # The same mail saved a second time by a check: the copy here stays the one, but
+            # only while it checks out; else the second copy may be the only good one.
+            if not (same and kept_ok):
                 log.warning("merged a second row for one mail; kept an unlisted copy at %s", path)
                 continue
             try:

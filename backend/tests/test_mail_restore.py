@@ -632,6 +632,33 @@ async def test_a_merge_keeps_the_other_rows_file_when_its_bytes_differ(
     assert "kept an unlisted copy" in caplog.text
 
 
+async def test_a_merge_keeps_the_other_file_when_the_kept_one_does_not_check_out(
+    auth_client, offload_box, monkeypatch, caplog
+):
+    """The second copy is removed only while the kept file is whole: if the kept file is
+    damaged or missing, the identical second copy may be the only good one."""
+    from app.services.mail import backup as backup_mod
+
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    box.fake.remove(row.provider_id)
+    _lose_first_import_answer(box)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    with monkeypatch.context() as m:
+        m.setattr(backup_mod, "adopt_restored_copy", lambda *a, **k: None)
+        await box.backup()
+    (r2,) = [r for r in box.rows_all() if r.subject == "Old photos" and r.id != row.id]
+    r2_file = eml_path(box.mail.layout, box.acc.email, r2.file_path)
+    eml_path(box.mail.layout, box.acc.email, row.file_path).write_bytes(b"damaged")
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    assert [r.id for r in box.rows_all() if r.subject == "Old photos"] == [row.id]
+    assert r2_file.exists()  # the kept file didn't check out: the second copy stays
+    assert "kept an unlisted copy" in caplog.text
+
+
 async def test_a_successful_import_leaves_no_mark(auth_client, offload_box):
     box = offload_box
     await _offloaded(auth_client, box)

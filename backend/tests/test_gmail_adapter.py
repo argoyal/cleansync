@@ -329,16 +329,18 @@ def test_message_ids_are_compared_exactly_except_the_domains_case():
 
 
 def test_message_ids_with_invisible_characters_are_never_searched_for():
-    for zw in ("​", "‌", "‍", "⁠", "﻿"):
+    # Zero-width marks, direction marks and the soft hyphen: invisible in a search.
+    for code in (0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF, 0x200E, 0x200F, 0x00AD):
+        zw = chr(code)
         assert search_message_id(f"<a{zw}b@example.com>") is None, repr(zw)
         assert search_message_id(f"<{zw}ab@example.com>") is None, repr(zw)
 
 
 def test_only_the_ascii_case_of_the_domain_is_ignored():
     assert same_message_id("<abc@EXAMPLE.com>", "<abc@example.com>")
-    assert not same_message_id("<abc@straße.de>", "<abc@strasse.de>")  # casefold: ß = ss
-    assert not same_message_id("<abc@Key.com>", "<abc@key.com>")  # lower: Kelvin sign = k
-    assert not same_message_id("<abc@İx.com>", "<abc@ix.com>")
+    assert not same_message_id("<abc@stra\u00dfe.de>", "<abc@strasse.de>")  # casefold: ß = ss
+    assert not same_message_id("<abc@\u212aey.com>", "<abc@key.com>")  # lower: Kelvin sign = k
+    assert not same_message_id("<abc@\u0130x.com>", "<abc@ix.com>")
 
 
 def test_cleansync_can_never_delete_a_mail_for_good():
