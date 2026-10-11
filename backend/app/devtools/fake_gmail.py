@@ -234,9 +234,6 @@ class FakeGmail:
             return self._error(404)
         if request.method == "GET":
             return self._get(msg, params.get("format", "full"))
-        if request.method == "DELETE":
-            self.remove(msg.id)
-            return httpx.Response(204)
         if m.group(2) == "/trash":
             self.set_labels(
                 msg.id,

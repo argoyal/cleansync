@@ -24,7 +24,6 @@ def test_one_table_has_a_cost_for_every_call_cleansync_makes():
         "gmail.history.list",
         "gmail.messages.trash",
         "gmail.messages.untrash",
-        "gmail.messages.delete",
         "gmail.messages.import",
         "gmail.messages.import.upload",
         "drive.files.get",

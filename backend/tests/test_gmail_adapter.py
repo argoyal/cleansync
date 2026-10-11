@@ -85,7 +85,7 @@ async def test_changes_since_collects_adds_label_changes_and_deletes():
     assert await gmail.changes_since(start) is TOO_OLD
 
 
-async def test_trash_untrash_state_delete_and_import():
+async def test_trash_untrash_state_and_import():
     fake, ids = _fake()
     gmail = fake_adapter(fake)
     await gmail.trash(ids[0])
@@ -94,8 +94,7 @@ async def test_trash_untrash_state_delete_and_import():
     st = await gmail.state(ids[0])
     assert st.where == IN_INBOX and st.size == len(fake.messages[ids[0]].raw)
     raw = fake.messages[ids[0]].raw
-    await gmail.trash(ids[0])
-    await gmail.delete_forever(ids[0])
+    fake.remove(ids[0])  # Gmail emptied its trash
     assert (await gmail.state(ids[0])).where == GONE
     new_id = await gmail.import_raw(raw, ["INBOX", "Label_1"], WHEN)
     assert new_id != ids[0]
@@ -327,3 +326,25 @@ def test_message_ids_are_compared_exactly_except_the_domains_case():
     assert not same_message_id("<abc@example.com>", "<abcd@example.com>")
     assert not same_message_id("", "")
     assert not same_message_id(None, "<abc@example.com>")
+
+
+def test_message_ids_with_invisible_characters_are_never_searched_for():
+    for zw in ("​", "‌", "‍", "⁠", "﻿"):
+        assert search_message_id(f"<a{zw}b@example.com>") is None, repr(zw)
+        assert search_message_id(f"<{zw}ab@example.com>") is None, repr(zw)
+
+
+def test_only_the_ascii_case_of_the_domain_is_ignored():
+    assert same_message_id("<abc@EXAMPLE.com>", "<abc@example.com>")
+    assert not same_message_id("<abc@straße.de>", "<abc@strasse.de>")  # casefold: ß = ss
+    assert not same_message_id("<abc@Key.com>", "<abc@key.com>")  # lower: Kelvin sign = k
+    assert not same_message_id("<abc@İx.com>", "<abc@ix.com>")
+
+
+def test_cleansync_can_never_delete_a_mail_for_good():
+    """Carry #1: gmail.modify only; Gmail's trash empties itself after 30 days."""
+    from app.services.mail.adapter import MailAdapter
+    from app.services.mail.gmail import GmailAdapter
+
+    assert not hasattr(GmailAdapter, "delete_forever")
+    assert not hasattr(MailAdapter, "delete_forever")

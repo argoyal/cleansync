@@ -61,11 +61,12 @@ def api_turned_off(resp: httpx.Response) -> bool:
     return bool(reasons & API_OFF_REASONS)
 
 
-# A Message-ID safe to put in a Gmail search: no spaces, quotes or brackets inside.
 # A Message-ID safe to put in a Gmail search. Refused (such mail is imported without a
 # lookup): spaces, quotes, brackets, and { } , | and a leading - , which Gmail's search may
-# read as its own syntax.
-_MSGID = re.compile(r"[^\s<>\"(){},|-][^\s<>\"(){},|]{0,899}")
+# read as its own syntax; and invisible zero-width characters, which hide what is searched.
+_BAD = '\\s<>"(){},|\u200b-\u200d\u2060\ufeff'
+_MSGID = re.compile(rf"[^{_BAD}-][^{_BAD}]{{0,899}}")
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 
 
 def search_message_id(value: str | None) -> str | None:
@@ -77,14 +78,15 @@ def search_message_id(value: str | None) -> str | None:
 def same_message_id(a: str | None, b: str | None) -> bool:
     """Two Message-ID headers name the same mail. Surrounding whitespace and <> are left out;
     the part before the last @ must match exactly (RFC 5322 leaves its case to the sender),
-    the domain after it ignoring case (domains are case-insensitive)."""
+    the domain after it ignoring only A-Z's case (casefold() or lower() would make other
+    letters equal too, say ß and ss)."""
 
     def norm(v: str | None) -> tuple[str, str] | None:
         v = (v or "").strip().removeprefix("<").removesuffix(">").strip()
         if not v:
             return None
         local, at, domain = v.rpartition("@")
-        return (local, domain.casefold()) if at else (v, "")
+        return (local, domain.translate(_ASCII_LOWER)) if at else (v, "")
 
     na, nb = norm(a), norm(b)
     return na is not None and na == nb
@@ -312,9 +314,6 @@ class GmailAdapter:
         size = data.get("sizeEstimate")
         where = IN_TRASH if "TRASH" in labels else IN_INBOX
         return ProviderState(where, labels, int(size) if isinstance(size, int) else None)
-
-    async def delete_forever(self, id: str) -> None:
-        await self._call("gmail.messages.delete", "DELETE", f"/messages/{_mail_id(id)}")
 
     async def find_by_message_id(self, message_id: str) -> list[str]:
         """Gmail's ids of every mail with this Message-ID header, Spam and Trash included."""
