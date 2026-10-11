@@ -13,6 +13,7 @@ import { ActivityPage } from "./pages/ActivityPage";
 import { ConflictsPage } from "./pages/ConflictsPage";
 import { DrivePage } from "./pages/DrivePage";
 import { HomePage, RecentPage, SearchPage, StarredPage } from "./pages/ListPages";
+import { MailPage } from "./pages/MailPage";
 import { OffloadedPage, OffloadPickPage } from "./pages/OffloadedPage";
 import { BlockedPage, PairDetailPage } from "./pages/PairDetailPage";
 import { RecoveryPage } from "./pages/RecoveryPage";
@@ -24,6 +25,10 @@ import { StoragePage } from "./pages/StoragePage";
 export function newButton(show: boolean = SHOW_NEW): ReactNode | undefined {
   return show ? <NewMenu /> : undefined;
 }
+
+export const MAIL_READY_TOAST = "Mail permission added. Next, start the mail backup.";
+export const MAIL_DENIED_TOAST =
+  "Google didn't give permission to read mail, so Mail isn't set up. Try again and tick the box for Gmail.";
 
 /**
  * Google's sign-in sends the browser to "/?connected=<id>" or "/?oauth_error=<text>".
@@ -37,6 +42,7 @@ function OAuthReturn() {
   const rawConnected = params.get("connected");
   const connected = rawConnected && /^[1-9]\d{0,9}$/.test(rawConnected) ? rawConnected : null;
   const error = (params.get("oauth_error") ?? "").slice(0, 300) || null;
+  const mail = params.get("mail");
   const handled = useRef(false);
   useEffect(() => {
     if (handled.current) return; // StrictMode runs effects twice; show the message once
@@ -51,12 +57,14 @@ function OAuthReturn() {
     if (!back.startsWith("/") || back.startsWith("//")) back = "/";
     if (connected) {
       setAccountId(Number(connected));
-      toast("Google account connected.");
+      if (mail === "ready") toast(MAIL_READY_TOAST);
+      else if (mail === "denied") toast(MAIL_DENIED_TOAST, { tone: "error" });
+      else toast("Google account connected.");
       if (back.startsWith("/setup")) back = "/setup?step=folders";
     }
     if (error) toast(error, { tone: "error" });
     navigate(back, { replace: true });
-  }, [connected, error, navigate, toast, setAccountId]);
+  }, [connected, error, mail, navigate, toast, setAccountId]);
   return null;
 }
 
@@ -77,6 +85,7 @@ export function AppRoutes() {
         <Route element={<AppShell newButton={newButton()} />}>
           <Route index element={<HomeOrSetup />} />
           <Route path="drive" element={<DrivePage />} />
+          <Route path="mail/*" element={<MailPage />} />
           <Route path="offloaded" element={<OffloadedPage />} />
           <Route path="offloaded/pick" element={<OffloadPickPage />} />
           <Route path="recent" element={<RecentPage />} />

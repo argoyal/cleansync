@@ -198,6 +198,31 @@ describe("routes", () => {
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/$/));
   });
 
+  it("says the mail permission was added, and goes back to Mail", async () => {
+    sessionStorage.setItem("drivesync.oauthReturn", "/mail");
+    mockApi({
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 1, initialized_pairs: 1 },
+    });
+    renderApp(<AppRoutes />, { route: "/?connected=1&mail=ready" });
+    expect(await screen.findByText("Mail permission added. Next, start the mail backup.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/mail$/));
+  });
+
+  it("says plainly when Google gave no mail permission", async () => {
+    sessionStorage.setItem("drivesync.oauthReturn", "/mail");
+    mockApi({
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 1, initialized_pairs: 1 },
+    });
+    renderApp(<AppRoutes />, { route: "/?connected=1&mail=denied" });
+    expect(await screen.findByText(/Google didn't give permission to read mail/)).toBeInTheDocument();
+  });
+
   it("ignores a connected value that is not a positive whole number and caps long errors", async () => {
     mockApi({
       "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
