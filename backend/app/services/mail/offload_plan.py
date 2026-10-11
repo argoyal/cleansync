@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.core.clock import as_utc, utcnow
 from app.models import Account, MailMessage, MailOffload
@@ -89,18 +89,57 @@ class OffloadPreview:
     message_ids: list[int] = field(default_factory=list)
 
 
+IN_CHUNK = 900  # SQLite allows few bound values in one query; stay far below the limit
+BOTH_PICKS_MSG = "Pick either mails or threads, not both."
+_NEEDED = (
+    MailMessage.id,
+    MailMessage.account_id,
+    MailMessage.thread_id,
+    MailMessage.subject,
+    MailMessage.from_addr,
+    MailMessage.date,
+    MailMessage.size,
+    MailMessage.file_size,
+    MailMessage.file_path,
+    MailMessage.state,
+)
+
+
+def chunked(items: list, n: int = IN_CHUNK):
+    for i in range(0, len(items), n):
+        yield items[i : i + n]
+
+
+def rows_where_in(db: Session, account_id: int, column, values: list) -> list[MailMessage]:
+    """The account's mails whose `column` is one of `values`, asked for in small chunks."""
+    out: list[MailMessage] = []
+    for part in chunked(list(values)):
+        out.extend(
+            db.scalars(
+                select(MailMessage)
+                .where(MailMessage.account_id == account_id, column.in_(part))
+                .options(load_only(*_NEEDED))
+            )
+        )
+    return out
+
+
 def candidates(db: Session, account_id: int, pick: Pick, now: datetime) -> list[MailMessage]:
-    base = select(MailMessage).where(MailMessage.account_id == account_id)
+    if pick.message_ids and pick.thread_ids:
+        raise SearchError(BOTH_PICKS_MSG)
     if pick.message_ids:
-        return list(db.scalars(base.where(MailMessage.id.in_(pick.message_ids))))
+        return rows_where_in(db, account_id, MailMessage.id, pick.message_ids)
     if pick.thread_ids:
-        return list(db.scalars(base.where(MailMessage.thread_id.in_(pick.thread_ids))))
+        return rows_where_in(db, account_id, MailMessage.thread_id, pick.thread_ids)
     q = (pick.q or "").strip()
     if not q:
         raise SearchError(NO_FILTER_MSG)
-    return list(
-        db.scalars(select(MailMessage).where(*mail_conditions(db, account_id, q=q, now=now)))
+    stmt = (
+        select(MailMessage)
+        .where(*mail_conditions(db, account_id, q=q, now=now))
+        .options(load_only(*_NEEDED))
     )
+    return list(db.scalars(stmt))
 
 
 def file_ok(layout: Layout, email: str, row: MailMessage) -> bool:

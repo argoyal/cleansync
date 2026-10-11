@@ -3,6 +3,7 @@ import shutil
 from app.models import MailMessage
 from app.models.enums import MailPhase, MailState, ServiceKind, ServiceState
 from app.services.accounts.services import set_service_state
+from app.services.app_settings import set_settings
 from app.services.mail.index import sync_state
 from app.services.mail.store import eml_path
 from app.services.queue import MISSING_DISK_MSG
@@ -117,3 +118,36 @@ async def test_a_preview_waits_while_the_mailbox_is_being_listed_again(
         r.json()["detail"]
         == "Wait until the mail backup has finished checking your mailbox, then try again."
     )
+
+
+async def test_forty_thousand_picked_ids_do_not_break_the_preview(auth_client, offload_box):
+    box = offload_box
+    await box.backup()
+    ids = [box.row("Old statement").id, *range(10_000_000, 10_040_000)]
+    p = _preview(auth_client, box.acc, message_ids=ids)
+    assert p.status_code == 200, p.text
+    assert p.json()["count"] == 1
+    threads = [box.row("Old photos").thread_id, *(f"none-{i}" for i in range(40_000))]
+    assert _preview(auth_client, box.acc, thread_ids=threads).json()["count"] == 1
+
+
+async def test_picking_mails_and_threads_together_is_refused(auth_client, offload_box):
+    box = offload_box
+    await box.backup()
+    r = _preview(auth_client, box.acc, message_ids=[1], thread_ids=["x"])
+    assert r.status_code == 422 and r.json()["detail"] == "Pick either mails or threads, not both."
+
+
+async def test_the_minimum_age_setting_sets_the_cut_off(auth_client, offload_box, db):
+    box = offload_box
+    await box.backup()
+    set_settings(db, {"mail_min_age_days": 365})
+    p = _preview(auth_client, box.acc, q="newer_than:3y").json()
+    assert p["count"] == 3  # 400, 500 and 900 days old; the 40-day-old mail is now too new
+    assert p["excluded"] == [
+        {
+            "reason": "too_new",
+            "count": 3,
+            "text": "3 mails left out: newer than 365 days. Recent mail always stays in Gmail.",
+        }
+    ]

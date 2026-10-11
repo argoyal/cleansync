@@ -146,6 +146,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 try:
                     recover_mail_offloads(db)
                 except Exception:
+                    db.rollback()
                     logger.exception("could not mark mail offloads a stop cut short")
                 # A mail job a stop cut short goes on where it left off.
                 for account_id in recover_mail_jobs(db):
