@@ -79,6 +79,16 @@ class MailNotFound(MailApiError):
     pass
 
 
+class MailSetupProblem(MailApiError):
+    """Something the owner must fix outside CleanSync (say, the Gmail API turned off for the
+    Cloud project). Its message says how, so it is shown as it is."""
+
+
+class MailUnreachable(MailApiError):
+    """Trouble reaching Gmail at all, not a refusal of one mail: no network, the saved login
+    could not be read, or Gmail's own servers failed (5xx)."""
+
+
 class MailAdapter(Protocol):
     async def profile(self) -> MailboxInfo: ...
 

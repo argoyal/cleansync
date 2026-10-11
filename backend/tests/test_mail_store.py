@@ -167,5 +167,5 @@ def test_hostile_mail_parses_without_hanging():
         raw = b"Content-Type: text/html\r\n\r\n" + bad.encode()
         parse_eml(raw)
     big = b"Content-Type: text/plain\r\n\r\n" + b"word " * 2_000_000
-    assert len(parse_eml(big).body_text) <= 200_000
+    assert len(parse_eml(big).body_text) == 32_000  # search keeps the first 32,000 characters
     assert time.monotonic() - start < 5

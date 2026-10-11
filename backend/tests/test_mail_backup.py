@@ -2,12 +2,15 @@ from datetime import timedelta
 
 import pytest
 
+from app.models import Account
 from app.models.enums import JobState, MailPhase, ServiceKind, ServiceState
+from app.services.accounts.oauth import DRIVE_SCOPE, GMAIL_SCOPE
 from app.services.accounts.services import service_state
 from app.services.google.quota import BUDGET_MSG, ApiBudget
 from app.services.mail import backup as backup_mod
 from app.services.mail import index
-from app.services.mail.backup import DISK_LOW_MSG
+from app.services.mail.backup import DISK_LOW_MSG, TROUBLE_PAUSE_MSG
+from app.services.mail.gmail import API_OFF_MSG
 from app.services.queue import MISSING_DISK_MSG
 from tests.mail_helpers import GB, every_row_has_its_file
 
@@ -114,12 +117,17 @@ async def test_the_budget_pauses_until_the_next_utc_day(box, session_factory):
 
 async def test_a_revoked_mail_permission_asks_to_reconnect_mail(box, db):
     box.add(1)
+    with box.sf() as s:
+        s.get(Account, box.acc.id).scopes = f"{DRIVE_SCOPE} {GMAIL_SCOPE}"
+        s.commit()
     box.fake.fail("GET", r"/labels$", 403, reason="insufficientPermissions")
     state, message, r = await box.run()
     assert state == JobState.FAILED and "Set up mail again" in message
     assert r.login_lost is False
     db.expire_all()
     assert service_state(db, box.acc.id, ServiceKind.MAIL) == ServiceState.NEEDS_RECONNECT
+    # The saved permission no longer says Gmail, so "Reconnect mail" asks Google again.
+    assert db.get(Account, box.acc.id).scopes == DRIVE_SCOPE
     box.fake.revoke()
     _, _, r = await box.run()
     assert r.login_lost is True  # the whole login is gone: the caller marks the account
@@ -135,3 +143,64 @@ async def test_a_missing_disk_stops_failed_mails_being_tried_again(box):
     assert state == JobState.PAUSED and message == MISSING_DISK_MSG
     assert len(box.rows()) == 2
     assert not any(box.layout.mail_root.rglob(f"{ids[0]}.eml"))
+
+
+async def test_the_gmail_api_turned_off_says_how_to_turn_it_on(box, db):
+    box.add(1)
+    box.fake.fail("GET", r"/labels$", 403, reason="accessNotConfigured")
+    state, message, r = await box.run()
+    assert state == JobState.FAILED and message == API_OFF_MSG
+    assert r.login_lost is False
+    db.expire_all()
+    # Not the set-up-again path: the permission is fine, the project is not.
+    assert service_state(db, box.acc.id, ServiceKind.MAIL) == ServiceState.ACTIVE
+
+
+async def test_gmail_trouble_mid_page_pauses_after_three_in_a_row_and_resumes(box):
+    box.add(6)
+    box.fake.fail("GET", r"/messages/[^/]+$", 503, times=99)
+    state, message, r = await box.run(page_size=6)
+    assert state == JobState.PAUSED
+    assert message == TROUBLE_PAUSE_MSG.format(error="Gmail's servers had a problem (HTTP 503)")
+    assert len(box.fetches()) == 3  # stopped after three in a row, not one try per mail
+    assert r.failed == 0
+    with box.sf() as db:
+        assert index.due_failures(db, box.acc.id, box.clock.now + timedelta(days=9)) == []
+    st = box.state()
+    assert st.phase == MailPhase.INITIAL and st.cursor is None and st.last_error == message
+    box.fake._failures.clear()  # Gmail is back
+    state, _, _ = await box.run(page_size=6)
+    assert state == JobState.SUCCESS and len(box.rows()) == 6
+
+
+async def test_one_or_two_troubled_mails_between_good_ones_go_on_the_failed_list(box):
+    ids = box.add(5)
+    box.fake.fail("GET", rf"/messages/({ids[1]}|{ids[3]})$", 503, times=99)
+    state, message, r = await box.run(page_size=5)
+    assert state == JobState.SUCCESS and r.failed == 2
+    assert len(box.rows()) == 3
+
+
+async def test_mails_gmail_refuses_for_themselves_still_go_on_the_failed_list(box):
+    box.add(4)
+    box.fake.fail("GET", r"/messages/[^/]+$", 400, times=99)
+    state, message, r = await box.run(page_size=4)
+    assert state == JobState.SUCCESS and r.failed == 4  # never paused for these
+    assert "4 couldn't be saved" in message
+
+
+async def test_reading_a_mail_runs_off_the_event_loop(box, monkeypatch):
+    import threading
+
+    box.add(1)
+    loop_thread = threading.current_thread()
+    seen = []
+    real = backup_mod.parse_eml
+
+    def watch(raw):
+        seen.append(threading.current_thread())
+        return real(raw)
+
+    monkeypatch.setattr(backup_mod, "parse_eml", watch)
+    await box.run()
+    assert seen and all(t is not loop_thread for t in seen)  # a big mail can't freeze the app

@@ -21,6 +21,8 @@ from app.services.mail.adapter import (
     MailChanges,
     MailMeta,
     MailNotFound,
+    MailSetupProblem,
+    MailUnreachable,
     ProviderLabel,
     ProviderState,
     TooOld,
@@ -35,6 +37,25 @@ HISTORY_TYPES = ("messageAdded", "messageDeleted", "labelAdded", "labelRemoved")
 SCOPE_REASONS = frozenset({"insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"})
 AUTH_MSG = "Google says the login expired or was revoked. Reconnect the account."
 SCOPE_MSG = "Google no longer lets CleanSync read this account's mail. Set up mail again."
+API_OFF_MSG = (
+    "The Gmail API is turned off for this Google Cloud project. Turn it on in Google Cloud "
+    "(APIs & Services → Library → Gmail API) and try again."
+)
+API_OFF_REASONS = frozenset({"accessNotConfigured", "SERVICE_DISABLED"})
+
+
+def api_turned_off(resp: httpx.Response) -> bool:
+    """Google's answer when the Gmail API is not turned on for the Cloud project: the
+    reason sits in `errors` (accessNotConfigured) or in `details` (SERVICE_DISABLED)."""
+    reasons = set(error_reasons(resp))
+    try:
+        details = resp.json()["error"].get("details") or []
+    except (ValueError, KeyError, TypeError, AttributeError):
+        details = []
+    reasons |= {str(d.get("reason")) for d in details if isinstance(d, dict)}
+    return bool(reasons & API_OFF_REASONS)
+
+
 # The one place the shape of a Gmail message id is written (the store uses valid_mail_id).
 _ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
 
@@ -99,7 +120,7 @@ class GmailAdapter:
             except DriveAuthError:
                 raise MailAuthError(AUTH_MSG, login=True) from None
             except DriveApiError as e:
-                raise MailApiError(str(e)) from None
+                raise MailUnreachable(str(e)) from None
             resp = await self.google.request(
                 self.remote,
                 op,
@@ -109,7 +130,7 @@ class GmailAdapter:
                 **kwargs,
             )
             if resp is None:
-                raise MailApiError("could not reach Gmail")
+                raise MailUnreachable("could not reach Gmail")
             if resp.status_code == 401 and attempt == 1:
                 self.tokens.forget(self.remote)  # expired early: one try with a new token
                 continue
@@ -119,8 +140,14 @@ class GmailAdapter:
             raise MailAuthError(AUTH_MSG, login=True)
         if resp.status_code == 403 and error_reasons(resp) & SCOPE_REASONS:
             raise MailAuthError(SCOPE_MSG, login=False)
+        if resp.status_code == 403 and api_turned_off(resp):
+            raise MailSetupProblem(API_OFF_MSG, 403)
         if resp.status_code == 404:
             raise MailNotFound("Gmail has no such mail", 404)
+        if resp.status_code >= 500:
+            raise MailUnreachable(
+                f"Gmail's servers had a problem (HTTP {resp.status_code})", resp.status_code
+            )
         if resp.status_code >= 400:
             raise MailApiError(
                 f"Gmail refused the request (HTTP {resp.status_code})", resp.status_code

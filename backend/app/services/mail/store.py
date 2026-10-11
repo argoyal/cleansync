@@ -21,7 +21,7 @@ from app.services.mail.gmail import valid_mail_id
 
 log = logging.getLogger(__name__)
 TMP_PREFIX = ".tmp-"
-MAX_BODY_CHARS = 200_000
+MAX_BODY_CHARS = 32_000
 MISSING_ROOT_MSG = (
     "The mail folder on the storage disk is missing (is the disk connected?), "
     "so nothing was written."

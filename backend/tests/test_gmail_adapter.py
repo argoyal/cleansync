@@ -1,9 +1,22 @@
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 
 from app.devtools.fake_gmail import FakeGmail, make_mail
-from app.services.mail.adapter import GONE, IN_INBOX, IN_TRASH, TOO_OLD, MailAuthError, MailNotFound
+from app.services.drive_api.tokens import DriveApiError
+from app.services.google.client import GoogleClient
+from app.services.mail.adapter import (
+    GONE,
+    IN_INBOX,
+    IN_TRASH,
+    TOO_OLD,
+    MailApiError,
+    MailAuthError,
+    MailNotFound,
+    MailUnreachable,
+)
+from app.services.mail.gmail import API_OFF_MSG, GmailAdapter, StaticTokens, api_turned_off
 from tests.mail_helpers import fake_adapter
 
 WHEN = datetime(2025, 3, 4, 10, 30, tzinfo=UTC)
@@ -123,3 +136,65 @@ async def test_unknown_mail_and_strange_ids():
         await gmail.fetch_raw("ffffffffffffffff")
     with pytest.raises(ValueError):
         await gmail.fetch_raw("../../etc/passwd")
+
+
+async def test_the_gmail_api_turned_off_is_its_own_plain_message():
+    fake, _ = _fake()
+    gmail = fake_adapter(fake)
+    fake.fail("GET", r"/profile", 403, reason="accessNotConfigured")
+    with pytest.raises(MailApiError) as e:
+        await gmail.profile()
+    assert not isinstance(e.value, MailAuthError)
+    assert str(e.value) == API_OFF_MSG
+    assert "Gmail API is turned off" in API_OFF_MSG
+
+
+def test_service_disabled_in_the_error_details_counts_as_turned_off():
+    body = {
+        "error": {
+            "code": 403,
+            "status": "PERMISSION_DENIED",
+            "details": [
+                {"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "SERVICE_DISABLED"}
+            ],
+        }
+    }
+    assert api_turned_off(httpx.Response(403, json=body))
+    assert not api_turned_off(httpx.Response(403, json={"error": {"errors": []}}))
+    assert not api_turned_off(httpx.Response(403, text="not json"))
+
+
+async def test_server_trouble_is_told_apart_from_a_refused_mail():
+    fake, ids = _fake()
+    gmail = fake_adapter(fake)
+    fake.fail("GET", r"/messages/", 503, times=1)
+    with pytest.raises(MailUnreachable):
+        await gmail.fetch_raw(ids[0])
+    fake.fail("GET", r"/messages/", 400, times=1)
+    with pytest.raises(MailApiError) as e:
+        await gmail.fetch_raw(ids[0])
+    assert not isinstance(e.value, MailUnreachable) and e.value.status == 400
+
+
+async def test_no_network_or_no_token_is_trouble_reaching_gmail():
+    def down(request):
+        raise httpx.ConnectError("no network")
+
+    google = GoogleClient(
+        budget=None,
+        pacer=None,
+        http_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(down)),
+    )
+    with pytest.raises(MailUnreachable):
+        await GmailAdapter(google, StaticTokens("t"), "gd_alice").labels()
+
+    class BrokenTokens(StaticTokens):
+        async def access_token(self, remote_name):
+            raise DriveApiError("could not read the saved login")
+
+    fake, _ = _fake()
+    google = GoogleClient(
+        budget=None, pacer=None, http_factory=lambda: httpx.AsyncClient(transport=fake.transport())
+    )
+    with pytest.raises(MailUnreachable):
+        await GmailAdapter(google, BrokenTokens("t"), "gd_alice").labels()

@@ -20,7 +20,11 @@ from app.models.enums import (
     ServiceState,
 )
 from app.paths import Layout
-from app.services.accounts.services import service_state, set_service_state
+from app.services.accounts.services import (
+    mail_needs_reconnect,
+    service_state,
+    set_service_state,
+)
 from app.services.app_settings import get_setting
 from app.services.events.bus import EventBus, record_event
 from app.services.google.client import RateLimited
@@ -122,9 +126,7 @@ class MailService:
 
     async def _auth_lost(self, account_id: int, e: MailAuthError) -> None:
         with self.sf() as db:
-            set_service_state(
-                db, account_id, ServiceKind.MAIL, ServiceState.NEEDS_RECONNECT, str(e)
-            )
+            mail_needs_reconnect(db, account_id, str(e), permission_gone=not e.login)
         if e.login:
             await self.accounts.mark_needs_reauth(account_id, str(e))
 

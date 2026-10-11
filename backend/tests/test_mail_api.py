@@ -102,6 +102,22 @@ async def test_a_backup_job_runs_and_the_status_shows_it(auth_client, mail_app, 
     assert log.status_code == 200 and "saved" in log.text
 
 
+def test_setup_info_after_gmail_refused_forgets_the_mail_permission(auth_client, mail_app, db):
+    from app.models import Account
+    from app.services.accounts.oauth import DRIVE_SCOPE, GMAIL_SCOPE
+
+    app, acc, fake = mail_app
+    db.get(Account, acc.id).scopes = f"{DRIVE_SCOPE} {GMAIL_SCOPE}"
+    db.commit()
+    set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.SETTING_UP)
+    fake.fail("GET", r"/profile$", 403, reason="insufficientPermissions")
+    r = auth_client.get(f"/api/mail/setup-info?account_id={acc.id}")
+    assert r.status_code == 409
+    db.expire_all()
+    assert service_state(db, acc.id, ServiceKind.MAIL) == ServiceState.NEEDS_RECONNECT
+    assert db.get(Account, acc.id).scopes == DRIVE_SCOPE
+
+
 async def test_a_dead_login_marks_the_whole_account(mail_app, db):
     app, acc, fake = mail_app
     set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.ACTIVE)

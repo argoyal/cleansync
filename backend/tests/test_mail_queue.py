@@ -122,3 +122,41 @@ def test_mail_jobs_are_recorded_settled_and_recovered(db, layout, session_factor
     assert db.get(MailJob, second.id).state == JobState.INTERRUPTED
     assert db.get(MailJob, second.id).message == INTERRUPTED_MAIL_MSG
     assert db.scalars(select(MailJob.state).where(MailJob.id == done.id)).one() == JobState.SUCCESS
+
+
+async def test_a_job_waiting_for_a_free_slot_still_counts_as_waiting():
+    gate = asyncio.Event()
+
+    async def handler(account_id, action, args, trigger):
+        await gate.wait()
+
+    q = MailQueue(handler, max_parallel=1, is_stopped=_never_stopped)
+    q.request(1, "backup")
+    await asyncio.sleep(0.01)  # account 1 holds the only slot
+    q.request(2, "backup")
+    await asyncio.sleep(0.01)  # account 2's worker waits for the slot
+    assert q.is_busy(2) and not q.is_running(2)
+    assert q.waiting(2) == [("backup", {})]
+    assert q.request(2, "backup") == "already_queued"  # collapsed, not run twice
+    gate.set()
+    await q.wait_idle()
+
+
+async def test_no_further_job_starts_once_the_queue_is_stopping():
+    ran: list[str] = []
+    gate = asyncio.Event()
+
+    async def handler(account_id, action, args, trigger):
+        ran.append(action)
+        if action == "backup":
+            try:
+                await gate.wait()
+            except asyncio.CancelledError:
+                pass  # a job that swallows the stop must not let the next one start
+
+    q = MailQueue(handler, is_stopped=_never_stopped)
+    q.request(1, "backup")
+    await asyncio.sleep(0.01)
+    q.request(1, "offload", {"offload_id": 1})
+    await q.stop()
+    assert ran == ["backup"]

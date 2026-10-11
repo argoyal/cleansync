@@ -71,9 +71,13 @@ class MailQueue:
 
     async def _work(self, account_id: int) -> None:
         try:
-            while self._waiting.get(account_id):
-                action, args, trigger = self._waiting[account_id].pop(0)
+            while not self._stopping and self._waiting.get(account_id):
                 async with self._sem:
+                    # Taken off the list only now, inside the slot: while it waits for one,
+                    # the account still shows as busy and a repeat request is collapsed.
+                    if self._stopping or not self._waiting.get(account_id):
+                        return
+                    action, args, trigger = self._waiting[account_id].pop(0)
                     self._running.add(account_id)
                     ran = False
                     try:

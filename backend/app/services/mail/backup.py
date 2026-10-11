@@ -6,15 +6,15 @@ import asyncio
 import logging
 import shutil
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.clock import utcnow
-from app.models.enums import JobState, MailPhase, ServiceKind, ServiceState
+from app.models.enums import JobState, MailPhase
 from app.paths import Layout
-from app.services.accounts.services import set_service_state
+from app.services.accounts.services import mail_needs_reconnect
 from app.services.events.bus import EventBus
 from app.services.google.client import RateLimited
 from app.services.google.quota import BudgetReached
@@ -25,6 +25,8 @@ from app.services.mail.adapter import (
     MailApiError,
     MailAuthError,
     MailNotFound,
+    MailSetupProblem,
+    MailUnreachable,
 )
 from app.services.mail.index import (
     add_message,
@@ -53,6 +55,11 @@ GB = 1024**3
 DISK_LOW_MSG = (
     "Paused: less than {floor} GB free on the storage disk. Free some space, then press Check now."
 )
+TROUBLE_PAUSE_MSG = (
+    "Paused: CleanSync could not reach Gmail ({error}). It goes on at the next check."
+)
+# Trouble reaching Gmail this many mails in a row pauses the run (it is not those mails).
+TROUBLE_IN_A_ROW = 3
 GMAIL_TROUBLE_MSG = "Gmail had a problem ({error}). It tries again at the next check."
 
 
@@ -77,6 +84,9 @@ class BackupRun:
     bytes: int = 0
     failed: int = 0
     login_lost: bool = False
+    # Mails that met trouble reaching Gmail since the last mail that went through: they go
+    # on the failed list only if the trouble passes (else the run pauses and redoes them).
+    troubled: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _plural(n: int, one: str, many: str) -> str:
@@ -124,9 +134,9 @@ class MailBackup:
         except MailAuthError as e:
             r.login_lost = e.login
             with self.sf() as db:
-                set_service_state(
-                    db, r.account_id, ServiceKind.MAIL, ServiceState.NEEDS_RECONNECT, str(e)
-                )
+                mail_needs_reconnect(db, r.account_id, str(e), permission_gone=not e.login)
+            return self._end(r, JobState.FAILED, str(e))
+        except MailSetupProblem as e:
             return self._end(r, JobState.FAILED, str(e))
         except MailApiError as e:
             return self._end(r, JobState.FAILED, GMAIL_TROUBLE_MSG.format(error=e))
@@ -193,6 +203,7 @@ class MailBackup:
                     continue
                 raise
             await on_page(ids)
+            self._settle_troubled(r)
             with self.sf() as db:
                 st = sync_state(db, r.account_id)
                 st.cursor = nxt
@@ -270,6 +281,7 @@ class MailBackup:
             if row is None and not (SKIP_LABELS & set(labels)):
                 # Not backed up yet: it was in Spam or Trash and the owner took it out.
                 await self._download(r, mid)
+        self._settle_troubled(r)
         with self.sf() as db:
             for mid in changes.deleted:
                 mark_deleted(db, r.account_id, mid)
@@ -316,6 +328,7 @@ class MailBackup:
                     clear_failure(db, r.account_id, mid)
                 continue
             await self._download(r, mid)
+        self._settle_troubled(r)
 
     # ---- one mail ------------------------------------------------------------------------
     def _check_disk(self, r: BackupRun) -> None:
@@ -326,33 +339,59 @@ class MailBackup:
         if free < r.floor_bytes:
             raise Paused(DISK_LOW_MSG.format(floor=round(r.floor_bytes / GB)))
 
+    def _parse_and_write(self, email: str, rel: str, raw: bytes):
+        parsed = parse_eml(raw)
+        size, sha = write_eml(self.layout, email, rel, raw)
+        return parsed, size, sha
+
     def _failed(self, r: BackupRun, mid: str, error: str) -> None:
         with self.sf() as db:
             f = record_failure(db, r.account_id, mid, error, self.clock())
         r.failed += 1
         self._log(r, f"could not save {mid} (try {f.attempts}): {error}")
 
+    def _trouble(self, r: BackupRun, mid: str, error: str) -> None:
+        """Trouble reaching Gmail, not this mail's fault. Three in a row pause the run; the
+        place in the list is kept, so the next run tries these mails again."""
+        r.troubled.append((mid, error))
+        self._log(r, f"could not reach Gmail for {mid}: {error}")
+        if len(r.troubled) >= TROUBLE_IN_A_ROW:
+            raise Paused(TROUBLE_PAUSE_MSG.format(error=error))
+
+    def _settle_troubled(self, r: BackupRun) -> None:
+        """The trouble passed (or the page is done): the mails it hit go on the failed list,
+        so they are tried again later instead of being lost."""
+        troubled, r.troubled = r.troubled, []
+        for mid, error in troubled:
+            self._failed(r, mid, error)
+
     async def _download(self, r: BackupRun, mid: str) -> bool:
         self._check_disk(r)  # before anything is written (spec §4.5)
         try:
             raw, meta = await r.adapter.fetch_raw(mid)
+        except MailUnreachable as e:
+            self._trouble(r, mid, str(e))
+            return False
         except MailNotFound:
+            self._settle_troubled(r)
             with self.sf() as db:
                 clear_failure(db, r.account_id, mid)  # deleted in Gmail meanwhile
             return False
-        except MailAuthError:
+        except (MailAuthError, MailSetupProblem):
             raise
         except MailApiError as e:
+            self._settle_troubled(r)
             self._failed(r, mid, str(e))
             return False
+        self._settle_troubled(r)
         if SKIP_LABELS & set(meta.labels):
             with self.sf() as db:
                 clear_failure(db, r.account_id, mid)  # spam, trash, a draft or a chat
             return False
-        parsed = parse_eml(raw)
         try:
             rel = eml_rel(meta.id, meta.internal_date)
-            size, sha = await asyncio.to_thread(write_eml, self.layout, r.email, rel, raw)
+            # Off the event loop: a 25-50 MB mail must not freeze the app.
+            parsed, size, sha = await asyncio.to_thread(self._parse_and_write, r.email, rel, raw)
         except MailRootMissing as e:
             raise Paused(str(e)) from None
         except OSError as e:
