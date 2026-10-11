@@ -1,110 +1,15 @@
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
 
-from app.devtools.fake_gmail import FakeGmail, make_mail
-from app.models import MailMessage, MailSyncState
-from app.models.enums import JobState, MailJobKind, MailPhase, ServiceKind, ServiceState
-from app.services.accounts.services import ensure_services, service_state, set_service_state
-from app.services.events.bus import EventBus
+from app.models.enums import JobState, MailPhase, ServiceKind, ServiceState
+from app.services.accounts.services import service_state
 from app.services.google.quota import BUDGET_MSG, ApiBudget
 from app.services.mail import backup as backup_mod
 from app.services.mail import index
-from app.services.mail.backup import DISK_LOW_MSG, BackupRun, MailBackup
-from app.services.mail.jobs import start_mail_job
-from app.services.mail.store import eml_path
+from app.services.mail.backup import DISK_LOW_MSG
 from app.services.queue import MISSING_DISK_MSG
-from tests.mail_helpers import fake_adapter
-
-GB = 1024**3
-
-
-class Clock:
-    def __init__(self):
-        self.now = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
-
-    def __call__(self):
-        return self.now
-
-
-class Box:
-    """One account with mail set up, a fake Gmail, and a MailBackup to run against it."""
-
-    def __init__(self, session_factory, layout, account, free=100 * GB):
-        self.sf, self.layout, self.acc = session_factory, layout, account
-        self.fake = FakeGmail(account.email)
-        self.clock = Clock()
-        self.free = free
-        self.bus = EventBus()
-        self.backup = MailBackup(
-            layout=layout,
-            session_factory=session_factory,
-            bus=self.bus,
-            clock=self.clock,
-            disk_free=lambda _p: self.free,
-        )
-        self.budget = None
-
-    def add(self, n, labels=("INBOX",), days_ago=10):
-        when = self.clock.now - timedelta(days=days_ago)
-        return [
-            self.fake.add(make_mail(f"Mail {i}", when=when), labels=labels, when=when)
-            for i in range(n)
-        ]
-
-    async def run(self, *, page_size=2, stop_after_pages=None):
-        calls = {"n": 0}
-
-        async def is_stopped():
-            calls["n"] += 1
-            return stop_after_pages is not None and calls["n"] > stop_after_pages
-
-        with self.sf() as db:
-            job = start_mail_job(
-                db, self.layout, self.bus, self.acc.id, MailJobKind.BACKUP, "MANUAL"
-            )
-        r = BackupRun(
-            account_id=self.acc.id,
-            email=self.acc.email,
-            adapter=fake_adapter(self.fake, page_size=page_size, budget=self.budget),
-            job_id=job.id,
-            floor_bytes=2 * GB,
-            is_stopped=is_stopped,
-            log_path=job.log_path,
-        )
-        state, message = await self.backup.run(r)
-        return state, message, r
-
-    def rows(self):
-        with self.sf() as db:
-            return list(
-                db.scalars(select(MailMessage).where(MailMessage.account_id == self.acc.id))
-            )
-
-    def state(self):
-        with self.sf() as db:
-            return db.get(MailSyncState, self.acc.id)
-
-    def fetches(self):
-        return [
-            c
-            for c in self.fake.calls
-            if c[0] == "GET" and "/messages/" in c[1] and c[2].get("format") == "raw"
-        ]
-
-
-@pytest.fixture
-def box(session_factory, layout, make_account, db):
-    acc = make_account()
-    ensure_services(db, acc)
-    set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.ACTIVE)
-    return Box(session_factory, layout, acc)
-
-
-def _every_row_has_its_file(box):
-    for row in box.rows():
-        assert eml_path(box.layout, box.acc.email, row.file_path).is_file(), row.provider_id
+from tests.mail_helpers import GB, every_row_has_its_file
 
 
 async def test_the_first_backup_keeps_every_mail_but_spam_trash_drafts_and_chats(box):
@@ -117,7 +22,7 @@ async def test_the_first_backup_keeps_every_mail_but_spam_trash_drafts_and_chats
     assert state == JobState.SUCCESS
     assert sorted(m.provider_id for m in box.rows()) == sorted(kept)
     assert r.downloaded == 5 and message.startswith("Saved 5 new mails")
-    _every_row_has_its_file(box)
+    every_row_has_its_file(box)
     st = box.state()
     assert st.phase == MailPhase.INCREMENTAL and st.cursor is None
     assert (
@@ -138,7 +43,7 @@ async def test_a_missing_disk_pauses_the_backup_and_it_resumes_later(box):
     assert len(box.rows()) == 6
     assert len(box.fetches()) - before == 4  # page 1's mail was not downloaded again
     assert any(c[2].get("pageToken") == "2" for c in box.fake.calls)
-    _every_row_has_its_file(box)
+    every_row_has_its_file(box)
 
 
 async def test_a_crash_between_file_and_row_heals_on_the_next_run(box, monkeypatch):
@@ -160,7 +65,7 @@ async def test_a_crash_between_file_and_row_heals_on_the_next_run(box, monkeypat
     state, _, _ = await box.run()
     assert state == JobState.SUCCESS
     assert sorted(m.provider_id for m in box.rows()) == sorted(ids)
-    _every_row_has_its_file(box)
+    every_row_has_its_file(box)
 
 
 async def test_one_failing_mail_never_stops_the_run_and_is_listed_after_three_tries(box):

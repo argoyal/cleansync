@@ -1,6 +1,6 @@
 """Mail backup (spec §4.3–4.5). One run does what the account's phase needs: the first
-backup (listing every mail, resumable), then keeping up from Gmail's history (Task 8), or a
-re-check when the history is too old (Task 8); then it tries failed mails again."""
+backup (listing every mail, resumable), then keeping up from Gmail's history, or a re-check
+when the history is too old; then it tries failed mails again."""
 
 import asyncio
 import logging
@@ -20,6 +20,7 @@ from app.services.google.client import RateLimited
 from app.services.google.quota import BudgetReached
 from app.services.mail.adapter import (
     SKIP_LABELS,
+    TOO_OLD,
     MailAdapter,
     MailApiError,
     MailAuthError,
@@ -27,10 +28,16 @@ from app.services.mail.adapter import (
 )
 from app.services.mail.index import (
     add_message,
+    apply_labels,
+    by_provider_id,
     clear_failure,
+    clear_seen,
     count_messages,
     due_failures,
+    mark_deleted,
+    mark_unseen_deleted,
     record_failure,
+    remember_seen,
     save_labels,
     stored_ids,
     sync_state,
@@ -90,9 +97,11 @@ class MailBackup:
         self.bus = bus
         self.clock = clock
         self.disk_free = disk_free
-        # What each phase does. Task 8 adds keeping up and the re-check.
+        # What each phase does.
         self.steps: dict[str, Callable[[BackupRun], Awaitable[None]]] = {
             MailPhase.INITIAL: self._initial,
+            MailPhase.INCREMENTAL: self._incremental,
+            MailPhase.RECHECK: self._recheck,
         }
 
     # ---- the run -------------------------------------------------------------------------
@@ -221,6 +230,67 @@ class MailBackup:
             st.cursor = None
             db.commit()
         self._log(r, "first backup: the whole list is done; keeping up from now on")
+
+    async def _incremental(self, r: BackupRun) -> None:
+        """Every few minutes and on Check now (spec §4.4)."""
+        with self.sf() as db:
+            start = sync_state(db, r.account_id).history_id
+        if start is None:  # never happens after a first backup; start over safely
+            with self.sf() as db:
+                st = sync_state(db, r.account_id)
+                st.phase = MailPhase.INITIAL
+                db.commit()
+            return
+        await self._check_stopped(r)
+        changes = await r.adapter.changes_since(start)
+        if changes is TOO_OLD:
+            info = await r.adapter.profile()
+            with self.sf() as db:
+                st = sync_state(db, r.account_id)
+                st.phase = MailPhase.RECHECK
+                st.cursor = None
+                st.history_id = info.history_id  # where keeping up goes on afterwards
+                st.total = info.total
+                db.commit()
+                clear_seen(db, r.account_id)
+            self._log(r, "Gmail no longer has history that far back; checking every mail again")
+            return
+        for mid, labels in changes.added.items():
+            with self.sf() as db:
+                known = by_provider_id(db, r.account_id, mid) is not None
+            if known:
+                with self.sf() as db:
+                    apply_labels(db, r.account_id, mid, labels)
+            elif not (SKIP_LABELS & set(labels)):
+                await self._download(r, mid)
+        with self.sf() as db:
+            for mid, labels in changes.labels.items():
+                apply_labels(db, r.account_id, mid, labels)
+            for mid in changes.deleted:
+                mark_deleted(db, r.account_id, mid)
+            st = sync_state(db, r.account_id)
+            st.history_id = changes.history_id
+            db.commit()
+        self._progress(r)
+
+    async def _recheck(self, r: BackupRun) -> None:
+        """History too old: list every mail again, download what is missing, and mark as
+        deleted what Gmail no longer has. Never deletes files (spec §4.4)."""
+
+        async def on_page(ids: list[str]) -> None:
+            with self.sf() as db:
+                remember_seen(db, r.account_id, ids)
+            await self._download_new(r, ids)
+
+        await self._list_pages(r, on_page)
+        with self.sf() as db:
+            gone = mark_unseen_deleted(db, r.account_id)
+            clear_seen(db, r.account_id)
+            st = sync_state(db, r.account_id)
+            st.phase = MailPhase.INCREMENTAL
+            st.cursor = None
+            db.commit()
+        self._log(r, f"re-check done: {gone:,} mails are no longer in Gmail")
 
     async def _retry_failures(self, r: BackupRun) -> None:
         with self.sf() as db:

@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.clock import as_utc
-from app.models import MailFailure, MailLabel, MailMessage, MailSyncState
+from app.models import MailFailure, MailLabel, MailMessage, MailRecheckSeen, MailSyncState
 from app.models.enums import MailPhase, MailState
 from app.services.mail.adapter import MailMeta, ProviderLabel
 from app.services.mail.store import ParsedMail
@@ -217,3 +217,76 @@ def shown_failures(db: Session, account_id: int) -> list[MailFailure]:
             .order_by(MailFailure.provider_id)
         )
     )
+
+
+GONE_LABELS = frozenset({"TRASH", "SPAM"})
+
+
+def apply_labels(
+    db: Session, account_id: int, provider_id: str, labels: Iterable[str]
+) -> MailMessage | None:
+    """Gmail says these are the mail's labels now (spec §4.4)."""
+    row = by_provider_id(db, account_id, provider_id)
+    if row is None:
+        return None
+    labels = list(labels)
+    gone = bool(GONE_LABELS & set(labels))
+    if row.state == MailState.OFFLOADED:
+        if "TRASH" in labels:
+            return row  # in the trash because of CleanSync's own offload: no change (spec §4.4)
+        # The owner took an offloaded mail back out of Gmail's trash: it is in Gmail again.
+        row.state, row.offload_id = MailState.IN_MAIL, None
+    if gone:
+        # Moved to Trash or Spam by the owner: Deleted in Gmail. The labels it had are kept,
+        # so a restore by import can put them back.
+        if row.state == MailState.IN_MAIL:
+            row.state = MailState.DELETED
+    else:
+        row.state = MailState.IN_MAIL  # back out of Trash or Spam, or a plain label change
+        set_flags(row, labels)
+    db.commit()
+    return row
+
+
+def mark_deleted(db: Session, account_id: int, provider_id: str) -> MailMessage | None:
+    """Deleted for good in Gmail. The file stays (spec §4.4); an offloaded mail leaving
+    Gmail's trash is Gmail emptying its trash and stays offloaded."""
+    row = by_provider_id(db, account_id, provider_id)
+    if row is not None and row.state == MailState.IN_MAIL:
+        row.state = MailState.DELETED
+        db.commit()
+    return row
+
+
+def remember_seen(db: Session, account_id: int, ids: Iterable[str]) -> None:
+    ids = list(ids)
+    have = set(
+        db.scalars(
+            select(MailRecheckSeen.provider_id).where(
+                MailRecheckSeen.account_id == account_id, MailRecheckSeen.provider_id.in_(ids)
+            )
+        )
+    )
+    for pid in ids:
+        if pid not in have:
+            db.add(MailRecheckSeen(account_id=account_id, provider_id=pid))
+    db.commit()
+
+
+def mark_unseen_deleted(db: Session, account_id: int) -> int:
+    """After a complete re-check listing: mail kept as 'in mail' that Gmail no longer lists."""
+    result = db.execute(
+        text(
+            "UPDATE mail_messages SET state = :deleted WHERE account_id = :a AND state = :in_mail "
+            "AND provider_id NOT IN "
+            "(SELECT provider_id FROM mail_recheck_seen WHERE account_id = :a)"
+        ),
+        {"a": account_id, "deleted": MailState.DELETED.value, "in_mail": MailState.IN_MAIL.value},
+    )
+    db.commit()
+    return result.rowcount or 0
+
+
+def clear_seen(db: Session, account_id: int) -> None:
+    db.execute(delete(MailRecheckSeen).where(MailRecheckSeen.account_id == account_id))
+    db.commit()

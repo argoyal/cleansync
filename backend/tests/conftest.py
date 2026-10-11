@@ -251,3 +251,17 @@ def save_catalog(app):
         app.state.catalog.store.save(Catalog.build(pair_id, utcnow(), root_id, entries))
 
     return _save
+
+
+from app.models.enums import ServiceKind, ServiceState
+from app.services.accounts.services import ensure_services, set_service_state
+from tests.mail_helpers import Box
+
+
+@pytest.fixture
+def box(session_factory, layout, make_account, db):
+    """One account with mail set up, a fake Gmail and a MailBackup (tests/mail_helpers.py)."""
+    acc = make_account()
+    ensure_services(db, acc)
+    set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.ACTIVE)
+    return Box(session_factory, layout, acc)
