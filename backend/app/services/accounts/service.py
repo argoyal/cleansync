@@ -14,6 +14,7 @@ from app.models import Account
 from app.models.enums import AccountStatus, ServiceKind, ServiceState
 from app.paths import Layout, email_dirname
 from app.services.accounts.oauth import (
+    DRIVE_SCOPE,
     GMAIL_SCOPE,
     SCOPES,
     OAuthError,
@@ -190,6 +191,12 @@ class AccountService:
                 verifier=pending.verifier,
             )
             about = await fetch_about(http, tok["access_token"])
+        scopes = granted_scopes(tok)
+        if not has_scope(scopes, DRIVE_SCOPE):
+            raise OAuthError(
+                "Google did not allow Drive access, so nothing was changed. "
+                "Please sign in again and keep Drive ticked."
+            )
         email = email_dirname(about["email"])
         with self.session_factory() as db:
             if pending.reconnect_account_id is not None:
@@ -241,7 +248,7 @@ class AccountService:
                 db.add(acc)
             self._login_changed(name)
             acc.status = AccountStatus.CONNECTED
-            acc.scopes = granted_scopes(tok)
+            acc.scopes = scopes
             acc.quota_total = about["quota_total"]
             acc.quota_used = about["quota_used"]
             acc.quota_trash = about["quota_trash"]

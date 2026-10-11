@@ -72,6 +72,10 @@ def test_mail_setup_without_gmail_permission_changes_nothing(
     body = auth_client.get("/api/accounts").json()[0]
     assert body["status"] == "CONNECTED"  # Drive keeps working
     assert body["mail_permission"] is False
+    # The saved login was replaced by the Drive-only one, never removed.
+    calls = fake_rclone.calls()
+    assert any(c[4:6] == ["config", "create"] for c in calls)
+    assert not any(c[4:6] == ["config", "delete"] for c in calls)
 
 
 def test_a_cancelled_mail_setup_changes_nothing(auth_client, app, make_account):
@@ -118,3 +122,36 @@ def test_mail_setup_on_a_pretend_account_needs_no_google(auth_client, app, setti
 
 def test_mail_setup_for_an_unknown_account_is_404(auth_client):
     assert auth_client.post("/api/accounts/999/mail/setup").status_code == 404
+
+
+def _creates(fake_rclone) -> int:
+    return len([c for c in fake_rclone.calls() if c[4:6] == ["config", "create"]])
+
+
+@respx.mock
+def test_a_sign_in_without_drive_changes_nothing_for_an_existing_account(
+    auth_client, app, make_account, fake_rclone
+):
+    acc = _account(app, make_account)
+    state = _setup_state(auth_client, acc)
+    before = _creates(fake_rclone)
+    _google(GMAIL_SCOPE)  # Drive was left unticked on Google's screen
+    r = auth_client.get(f"/api/oauth/callback?state={state}&code=c", follow_redirects=False)
+    assert "oauth_error=" in r.headers["location"] and "Drive" in r.headers["location"]
+    assert _creates(fake_rclone) == before
+    assert _mail_state(app, acc) == ServiceState.NOT_SET_UP
+    body = auth_client.get("/api/accounts").json()[0]
+    assert body["status"] == "CONNECTED"
+    assert body["mail_permission"] is False
+    assert body["services"]["files"] == "active"
+
+
+@respx.mock
+def test_a_new_sign_in_without_drive_adds_no_account(auth_client, fake_rclone):
+    url = auth_client.post("/api/accounts/connect").json()["auth_url"]
+    state = parse_qs(urlparse(url).query)["state"][0]
+    _google(GMAIL_SCOPE, email="carol@example.com")
+    r = auth_client.get(f"/api/oauth/callback?state={state}&code=c", follow_redirects=False)
+    assert "oauth_error=" in r.headers["location"] and "Drive" in r.headers["location"]
+    assert _creates(fake_rclone) == 0
+    assert auth_client.get("/api/accounts").json() == []
