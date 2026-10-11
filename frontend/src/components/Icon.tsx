@@ -32,12 +32,17 @@ import GridViewSvg from "@material-symbols/svg-400/rounded/grid_view.svg?react";
 import HistorySvg from "@material-symbols/svg-400/rounded/history.svg?react";
 import HomeSvg from "@material-symbols/svg-400/rounded/home.svg?react";
 import ImageSvg from "@material-symbols/svg-400/rounded/image.svg?react";
+import InboxSvg from "@material-symbols/svg-400/rounded/inbox.svg?react";
 import Inventory2Svg from "@material-symbols/svg-400/rounded/inventory_2.svg?react";
 import KeyboardArrowDownSvg from "@material-symbols/svg-400/rounded/keyboard_arrow_down.svg?react";
+import LabelSvg from "@material-symbols/svg-400/rounded/label.svg?react";
+import LabelImportantSvg from "@material-symbols/svg-400/rounded/label_important.svg?react";
 import LinkSvg from "@material-symbols/svg-400/rounded/link.svg?react";
 import LockSvg from "@material-symbols/svg-400/rounded/lock.svg?react";
 import LogoutSvg from "@material-symbols/svg-400/rounded/logout.svg?react";
+import MailSvg from "@material-symbols/svg-400/rounded/mail.svg?react";
 import MenuSvg from "@material-symbols/svg-400/rounded/menu.svg?react";
+import MonitoringSvg from "@material-symbols/svg-400/rounded/monitoring.svg?react";
 import MoreVertSvg from "@material-symbols/svg-400/rounded/more_vert.svg?react";
 import MovieSvg from "@material-symbols/svg-400/rounded/movie.svg?react";
 import OpenInNewSvg from "@material-symbols/svg-400/rounded/open_in_new.svg?react";
@@ -48,6 +53,7 @@ import PlayArrowSvg from "@material-symbols/svg-400/rounded/play_arrow.svg?react
 import RefreshSvg from "@material-symbols/svg-400/rounded/refresh.svg?react";
 import ScheduleSvg from "@material-symbols/svg-400/rounded/schedule.svg?react";
 import SearchSvg from "@material-symbols/svg-400/rounded/search.svg?react";
+import SendSvg from "@material-symbols/svg-400/rounded/send.svg?react";
 import SettingsSvg from "@material-symbols/svg-400/rounded/settings.svg?react";
 import SlideshowSvg from "@material-symbols/svg-400/rounded/slideshow.svg?react";
 import StarSvg from "@material-symbols/svg-400/rounded/star.svg?react";
@@ -92,12 +98,17 @@ const ICONS = {
   history: HistorySvg,
   home: HomeSvg,
   image: ImageSvg,
+  inbox: InboxSvg,
   inventory_2: Inventory2Svg,
   keyboard_arrow_down: KeyboardArrowDownSvg,
+  label: LabelSvg,
+  label_important: LabelImportantSvg,
   link: LinkSvg,
   lock: LockSvg,
   logout: LogoutSvg,
+  mail: MailSvg,
   menu: MenuSvg,
+  monitoring: MonitoringSvg,
   more_vert: MoreVertSvg,
   movie: MovieSvg,
   open_in_new: OpenInNewSvg,
@@ -108,6 +119,7 @@ const ICONS = {
   refresh: RefreshSvg,
   schedule: ScheduleSvg,
   search: SearchSvg,
+  send: SendSvg,
   settings: SettingsSvg,
   slideshow: SlideshowSvg,
   star: StarSvg,

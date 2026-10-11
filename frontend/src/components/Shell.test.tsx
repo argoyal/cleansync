@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -7,9 +7,8 @@ import { progressStore } from "../hooks/live";
 import { ACCOUNT, json, mockApi, PAIR, renderApp } from "../test/utils";
 import { AppShell } from "./AppShell";
 import { AccountSwitcher } from "./AccountSwitcher";
-import { SideNav } from "./SideNav";
+import { ContentBar } from "./ContentBar";
 import { SyncIndicator } from "./SyncIndicator";
-import { TopBar } from "./TopBar";
 
 const STATUS = { accounts: 1, accounts_attention: 0, pairs: 1, new: 0, healthy: 1, attention: 0, running: 0, paused: 0, conflicts: 3 };
 const STORAGE = {
@@ -120,62 +119,6 @@ describe("sign out", () => {
   });
 });
 
-describe("side navigation", () => {
-  it("has the Drive-style entries, a conflicts badge and storage bars", async () => {
-    mockApi({ "GET /api/status": STATUS, "GET /api/accounts": [ACCOUNT], "GET /api/storage": STORAGE });
-    renderApp(<SideNav />, { withAccount: true });
-    for (const name of ["Home", "My Drive", "Recent", "Starred", "Sync activity", "Storage"]) {
-      expect(screen.getByRole("link", { name: new RegExp(name) })).toBeInTheDocument();
-    }
-    expect(await screen.findByText("3 open conflicts")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Offloaded" })).toHaveAttribute("href", "/offloaded");
-    expect(screen.getByRole("link", { name: "Recovery" })).toHaveAttribute("href", "/recovery");
-    expect(document.querySelector("[aria-disabled]")).toBeNull(); // nothing left for later
-    expect(await screen.findByText(/40 GB of 100 GB on Google Drive, 1.0 GB in trash/)).toBeInTheDocument();
-    expect(screen.getByText(/600 GB free on this server, 30 GB synced here/)).toBeInTheDocument();
-  });
-});
-
-describe("popovers", () => {
-  const open = async () => {
-    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR] });
-    renderApp(<TopBar onMenu={() => undefined} />, { withAccount: true });
-    const sync = await screen.findByRole("button", { name: /Sync status/ });
-    const account = await screen.findByRole("button", { name: /Account:/ });
-    return { sync, account };
-  };
-
-  it("closes on Escape and gives focus back to the button", async () => {
-    const { account } = await open();
-    await userEvent.click(account);
-    expect(screen.getByRole("group", { name: "Google accounts" })).toBeInTheDocument();
-    await userEvent.keyboard("{Escape}");
-    expect(screen.queryByRole("group", { name: "Google accounts" })).not.toBeInTheDocument();
-    expect(account).toHaveFocus();
-  });
-
-  it("closes on a click outside", async () => {
-    const { sync } = await open();
-    await userEvent.click(sync);
-    expect(screen.getByRole("region", { name: "Sync progress" })).toBeInTheDocument();
-    await userEvent.click(document.body);
-    expect(screen.queryByRole("region", { name: "Sync progress" })).not.toBeInTheDocument();
-  });
-
-  it("opening one closes the other", async () => {
-    const { sync, account } = await open();
-    await userEvent.click(sync);
-    await userEvent.click(account);
-    expect(screen.queryByRole("region", { name: "Sync progress" })).not.toBeInTheDocument();
-    expect(screen.getByRole("group", { name: "Google accounts" })).toBeInTheDocument();
-  });
-
-  it("tells the search box needs 2 characters", async () => {
-    await open();
-    expect(screen.getByRole("textbox", { name: "Search files" })).toHaveAccessibleDescription(/at least 2 characters/);
-  });
-});
-
 describe("account switcher details", () => {
   it("stays on Storage when switching from there", async () => {
     const bob = { ...ACCOUNT, id: 2, email: "bob@example.com" };
@@ -217,55 +160,185 @@ describe("account switcher details", () => {
   });
 });
 
-describe("mobile drawer", () => {
-  const shell = () => {
-    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": STATUS });
-    renderApp(<AppShell />, { withAccount: true, route: "/recent" });
+describe("rail and panel", () => {
+  const shell = (route: string, account = ACCOUNT) => {
+    mockApi({ "GET /api/accounts": [account], "GET /api/sync-pairs": [PAIR], "GET /api/status": STATUS, "GET /api/storage": STORAGE });
+    renderApp(<AppShell />, { withAccount: true, route });
   };
 
-  it("is a labelled modal dialog that takes focus and returns it on Escape", async () => {
-    shell();
-    const menu = screen.getByRole("button", { name: "Open navigation" });
-    await userEvent.click(menu);
-    const dialog = screen.getByRole("dialog", { name: "Navigation" });
+  it("has the five sections, the active one marked, and a conflicts badge", async () => {
+    shell("/recent");
+    const rail = screen.getByRole("navigation", { name: "Sections" });
+    for (const [name, href] of [["Files", "/drive"], ["Mail", "/mail"], ["Activity", "/activity"], ["Recovery", "/recovery"], ["Settings", "/settings"]]) {
+      expect(within(rail).getByRole("link", { name: new RegExp(`^${name}`) })).toHaveAttribute("href", href);
+    }
+    expect(within(rail).getByRole("link", { name: /^Files/ })).toHaveAttribute("aria-current", "page");
+    expect(await within(rail).findByText("3 open conflicts")).toBeInTheDocument();
+  });
+
+  it("shows the Files views with the account switcher on top", async () => {
+    shell("/recent");
+    const views = screen.getByRole("navigation", { name: "Files views" });
+    for (const [name, href] of [["My Drive", "/drive"], ["Recent", "/recent"], ["Starred", "/starred"], ["Offloaded", "/offloaded"], ["Conflicts", "/conflicts"]]) {
+      expect(within(views).getByRole("link", { name: new RegExp(`^${name}`) })).toHaveAttribute("href", href);
+    }
+    expect(within(views).getByRole("link", { name: /^Recent/ })).toHaveAttribute("aria-current", "page");
+    expect(await screen.findByRole("button", { name: "Account: alice@example.com" })).toBeInTheDocument();
+    expect(within(views).getByRole("link", { name: "Sync a Drive folder…" })).toHaveAttribute("href", "/setup?step=folders&account=1");
+    expect(await screen.findByText(/40 GB of 100 GB on Google Drive/)).toBeInTheDocument();
+  });
+
+  it("shows each section's own views", async () => {
+    const cases: [string, string, [string, string][]][] = [
+      ["/activity", "Activity views", [["Sync activity", "/activity"], ["Storage", "/storage"]]],
+      ["/recovery", "Recovery views", [["All", "/recovery"], ["Files", "/recovery?source=files"], ["Mail", "/recovery?source=mail"]]],
+      ["/settings", "Settings views", [["General", "/settings?tab=general"], ["Accounts", "/settings?tab=accounts"], ["System", "/settings?tab=system"]]],
+    ];
+    for (const [route, label, links] of cases) {
+      shell(route);
+      const views = screen.getByRole("navigation", { name: label });
+      for (const [name, href] of links) expect(within(views).getByRole("link", { name })).toHaveAttribute("href", href);
+      cleanup();
+    }
+  });
+
+  it("asks to set up Mail instead of showing its views", async () => {
+    shell("/mail");
+    expect(await screen.findByRole("heading", { name: "Set up Mail" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Mail views" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up mail backup" })).toBeInTheDocument();
+  });
+
+  it("shows the Mail views once mail is set up", async () => {
+    shell("/mail?view=inbox", { ...ACCOUNT, services: { files: "active", mail: "active" }, mail_permission: true });
+    const views = await screen.findByRole("navigation", { name: "Mail views" });
+    for (const [name, href] of [["All mail", "/mail"], ["Inbox", "/mail?view=inbox"], ["Sent", "/mail?view=sent"], ["Starred", "/mail?view=starred"], ["Important", "/mail?view=important"], ["Offloaded", "/mail?view=offloaded"], ["Deleted in Gmail", "/mail?view=deleted"]]) {
+      expect(within(views).getByRole("link", { name })).toHaveAttribute("href", href);
+    }
+    expect(within(views).getByRole("link", { name: "Inbox" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("textbox", { name: "Search mail" })).toBeInTheDocument();
+  });
+
+  it("asks to set up Files when an account has no file storage set up", async () => {
+    shell("/drive", { ...ACCOUNT, services: { files: "not_set_up", mail: "not_set_up" } });
+    expect(await screen.findByRole("heading", { name: "Set up Files" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Files views" })).not.toBeInTheDocument();
+  });
+
+  it("puts the New button in the Files panel only", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": STATUS });
+    renderApp(<AppShell newButton={<button type="button">Make new</button>} />, { withAccount: true, route: "/drive" });
+    expect(screen.getAllByRole("button", { name: "Make new" })).toHaveLength(1);
+    cleanup();
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": STATUS });
+    renderApp(<AppShell newButton={<button type="button">Make new</button>} />, { withAccount: true, route: "/activity" });
+    expect(screen.queryByRole("button", { name: "Make new" })).not.toBeInTheDocument();
+  });
+
+  it("keeps only one New button while the views sheet is open", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": STATUS });
+    renderApp(<AppShell newButton={<button type="button">Make new</button>} />, { withAccount: true, route: "/recent" });
+    expect(screen.getAllByRole("button", { name: "Make new" })).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Show views" }));
+    expect(screen.getAllByRole("button", { name: "Make new" })).toHaveLength(1);
+    expect(within(screen.getByRole("dialog", { name: "Views" })).getByRole("button", { name: "Make new" })).toBeInTheDocument();
+  });
+
+  it("the views sheet is a labelled dialog that closes on a link or Escape", async () => {
+    shell("/recent");
+    const opener = screen.getByRole("button", { name: "Show views" });
+    await userEvent.click(opener);
+    const dialog = screen.getByRole("dialog", { name: "Views" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(dialog).toHaveFocus();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(menu).toHaveFocus();
+    expect(opener).toHaveFocus();
+    await userEvent.click(opener);
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Views" })).getByRole("link", { name: /^Recent/ }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(); // even the page already open
   });
 
-  it("keeps only one + New button while the drawer is open", async () => {
-    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": STATUS });
-    renderApp(<AppShell newButton={<button type="button">Make new</button>} />, { withAccount: true, route: "/recent" });
-    expect(screen.getAllByRole("button", { name: "Make new" })).toHaveLength(1);
-    await userEvent.click(screen.getByRole("button", { name: "Open navigation" }));
-    expect(screen.getAllByRole("button", { name: "Make new" })).toHaveLength(1);
-    expect(within(screen.getByRole("dialog", { name: "Navigation" })).getByRole("button", { name: "Make new" })).toBeInTheDocument();
+  it("has a bottom bar with every section for phones", () => {
+    shell("/mail");
+    const bar = screen.getByRole("navigation", { name: "Sections at the bottom" });
+    expect(within(bar).getAllByRole("link").map((l) => l.textContent?.replace(/\d+.*/, "").trim())).toEqual(["Files", "Mail", "Activity", "Recovery", "Settings"]);
+    expect(within(bar).getByRole("link", { name: /^Mail/ })).toHaveAttribute("aria-current", "page");
   });
 
-  it("closes when any link is used, even the current page", async () => {
-    shell();
-    await userEvent.click(screen.getByRole("button", { name: "Open navigation" }));
-    const dialog = screen.getByRole("dialog", { name: "Navigation" });
-    await userEvent.click(within(dialog).getByRole("link", { name: /Recent/ }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  });
-});
-
-describe("stopped syncing", () => {
-  const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart CleanSync.";
-
-  it("says so on every page", async () => {
+  it("says when syncing stopped, on every page", async () => {
+    const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart CleanSync.";
     mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": { ...STATUS, sync_stopped: MSG } });
-    renderApp(<AppShell />, { withAccount: true, route: "/recent" });
+    renderApp(<AppShell />, { withAccount: true, route: "/mail" });
     expect(await screen.findByRole("alert")).toHaveTextContent(MSG);
   });
 
-  it("shows nothing while syncing runs", async () => {
+  it("shows no stop notice while syncing runs", async () => {
     mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": { ...STATUS, sync_stopped: null } });
     renderApp(<AppShell />, { withAccount: true, route: "/recent" });
-    await screen.findByText("3 open conflicts");
+    await within(screen.getByRole("navigation", { name: "Sections" })).findByText("3 open conflicts");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("content bar", () => {
+  const open = async (route = "/drive") => {
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR] });
+    renderApp(<><ContentBar section={route.startsWith("/mail") ? "mail" : "files"} onViews={() => undefined} /><AccountSwitcher /></>, { withAccount: true, route });
+    const sync = await screen.findByRole("button", { name: /Sync status/ });
+    const account = await screen.findByRole("button", { name: /Account:/ });
+    return { sync, account };
+  };
+
+  it("closes popovers on Escape and gives focus back", async () => {
+    const { account } = await open();
+    await userEvent.click(account);
+    expect(screen.getByRole("group", { name: "Google accounts" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: "Google accounts" })).not.toBeInTheDocument();
+    expect(account).toHaveFocus();
+  });
+
+  it("closes popovers on a click outside", async () => {
+    const { sync } = await open();
+    await userEvent.click(sync);
+    expect(screen.getByRole("region", { name: "Sync progress" })).toBeInTheDocument();
+    await userEvent.click(document.body);
+    expect(screen.queryByRole("region", { name: "Sync progress" })).not.toBeInTheDocument();
+  });
+
+  it("opening one popover closes the other", async () => {
+    const { sync, account } = await open();
+    await userEvent.click(sync);
+    await userEvent.click(account);
+    expect(screen.queryByRole("region", { name: "Sync progress" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Google accounts" })).toBeInTheDocument();
+  });
+
+  it("searches files, or mail in the Mail section", async () => {
+    await open("/drive");
+    expect(screen.getByRole("textbox", { name: "Search files" })).toHaveAccessibleDescription(/at least 2 characters/);
+    await userEvent.type(screen.getByRole("textbox", { name: "Search files" }), "budget{Enter}");
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/search?q=budget");
+    cleanup();
+    await open("/mail");
+    await userEvent.type(screen.getByRole("textbox", { name: "Search mail" }), "from:bank{Enter}");
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/mail?q=from%3Abank");
+  });
+});
+
+describe("switching account", () => {
+  it("switching account stays in the section", async () => {
+    const bob = { ...ACCOUNT, id: 2, email: "bob@example.com" };
+    // The whole address is checked, so "/mail?view=inbox" staying put would fail.
+    for (const [route, to] of [["/mail?view=inbox", "/mail"], ["/recovery?source=files", "/recovery?source=files"], ["/recent", "/drive"]]) {
+      mockApi({ "GET /api/accounts": [ACCOUNT, bob] });
+      renderApp(<AccountSwitcher />, { withAccount: true, route });
+      await userEvent.click(await screen.findByRole("button", { name: /Account:/ }));
+      await userEvent.click(screen.getByRole("button", { name: /bob@example.com/ }));
+      await waitFor(() => expect(screen.getAllByTestId("location")[0].textContent).toBe(to));
+      cleanup();
+      localStorage.clear();
+    }
   });
 });

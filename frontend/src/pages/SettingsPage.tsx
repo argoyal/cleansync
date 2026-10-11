@@ -14,7 +14,8 @@ import { useConnectGoogle } from "../hooks/useConnect";
 import { formatBytes, formatRelative } from "../lib/format";
 import { PasswordForm } from "./ChangePasswordPage";
 
-const TABS = { general: "General", accounts: "Accounts", sync: "Sync defaults", security: "Security", system: "System" } as const;
+/** The Settings tabs; the section panel lists the same ones. */
+export const TABS = { general: "General", accounts: "Accounts", sync: "Sync defaults", security: "Security", system: "System" } as const;
 type Tab = keyof typeof TABS;
 
 export function SettingsPage() {
@@ -24,7 +25,7 @@ export function SettingsPage() {
   return (
     <div className="p-4 sm:p-6">
       <h1 className="mb-4 text-title font-semibold">Settings</h1>
-      <nav aria-label="Settings sections" className="mb-6 flex gap-1 overflow-x-auto border-b border-line">
+      <nav aria-label="Settings sections" className="mb-6 flex gap-1 md:hidden overflow-x-auto border-b border-line">
         {(Object.keys(TABS) as Tab[]).map((t) => (
           <Link
             key={t}

@@ -238,7 +238,7 @@ describe("setup wizard skip", () => {
     renderApp(<AppRoutes />, { route: "/setup" });
     await userEvent.click(await screen.findByRole("link", { name: "Skip for now" }));
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/drive$/));
-    await userEvent.click(screen.getAllByRole("link", { name: /^Home$/ })[0]);
+    await userEvent.click(screen.getByRole("link", { name: "CleanSync home" }));
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/$/));
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/$/);

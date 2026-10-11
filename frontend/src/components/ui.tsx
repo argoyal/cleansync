@@ -19,7 +19,7 @@ const TONES: Record<Tone, string> = {
   plain: "border border-line bg-surface text-ink hover:bg-sunken",
   danger: "bg-err text-white hover:bg-err/90",
   quiet: "text-ink-2 hover:bg-sunken hover:text-ink",
-  main: "bg-rail font-semibold text-white hover:bg-rail/90",
+  main: "bg-rail font-semibold text-rail-mark hover:bg-rail/90",
 };
 
 export function Button({

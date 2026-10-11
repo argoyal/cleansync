@@ -6,6 +6,7 @@ import { api, clearCsrfToken, friendlyError } from "../api/client";
 import { forgetAccount, useCurrentAccount } from "../hooks/useAccount";
 import { useDismiss } from "../hooks/useDismiss";
 import { useConnectGoogle } from "../hooks/useConnect";
+import { sectionFor } from "../lib/sections";
 import { Icon } from "./Icon";
 import { ACCOUNT_DOT } from "./StatusBadge";
 import { ThemeSwitch } from "./ThemeSwitch";
@@ -25,7 +26,7 @@ export function Avatar({ email, size = 36 }: { email: string; size?: number }) {
   );
 }
 
-/** The avatar top right: shows the current Google account and switches between them. */
+/** At the top of the section panel: shows the current Google account and switches between them. */
 export function AccountSwitcher() {
   const { account, accounts, setAccountId } = useCurrentAccount();
   const [open, setOpen] = useState(false);
@@ -57,16 +58,18 @@ export function AccountSwitcher() {
         type="button"
         aria-label={account ? `Account: ${account.email}` : "Accounts"}
         aria-expanded={open}
-        className="rounded-full p-0.5 hover:ring-4 hover:ring-sunken"
+        className="flex w-full items-center gap-2 rounded-menu border border-line bg-bg px-2.5 py-2 text-left hover:bg-sunken"
         onClick={() => setOpen(!open)}
       >
-        {account ? <Avatar email={account.email} /> : <Icon name="person_add" className="m-2 text-[20px] text-ink-2" />}
+        {account ? <Avatar email={account.email} size={26} /> : <Icon name="person_add" className="text-[20px] text-ink-2" />}
+        <span className="min-w-0 flex-1 truncate">{account ? account.email : "Add a Google account"}</span>
+        <Icon name="keyboard_arrow_down" className="text-ink-2" />
       </button>
       {open && (
         <div
           role="group"
           aria-label="Google accounts"
-          className="absolute right-0 top-12 z-50 w-[min(320px,calc(100vw-2rem))] rounded-card border border-line bg-surface py-2 shadow-float"
+          className="absolute left-0 top-12 z-50 w-[min(320px,calc(100vw-2rem))] rounded-card border border-line bg-surface py-2 shadow-float"
         >
           {accounts.map((a) => (
             <button
@@ -79,8 +82,11 @@ export function AccountSwitcher() {
                 setAccountId(a.id);
                 setOpen(false);
                 trigger.current?.focus();
-                // Settings and Storage are not about one folder, so stay there.
-                if (!/^\/(settings|storage)(\/|$)/.test(pathname)) navigate("/drive");
+                // Stay in the section: Files and Mail open the new account's main view;
+                // Activity, Recovery and Settings are not about one account's folder, so stay.
+                const section = sectionFor(pathname);
+                if (section === "files") navigate("/drive");
+                else if (section === "mail") navigate("/mail");
               }}
             >
               <Avatar email={a.email} size={30} />
