@@ -102,4 +102,19 @@ describe("theme", () => {
     expect(system.length).toBeGreaterThan(10);
     expect(picked).toEqual(system);
   });
+
+  it("defines the rail, panel and section colours for light and both dark blocks", () => {
+    const sections = ["files", "mail", "activity", "recovery", "settings"];
+    const names = ["rail", "rail-ink", "rail-mark", "panel", ...sections.flatMap((s) => [`sec-${s}`, `sec-${s}-ink`, `sec-${s}-soft`, `sec-${s}-soft-ink`])];
+    const block = (start: string) => css.slice(css.indexOf(start), css.indexOf("}", css.indexOf(start)));
+    for (const start of [":root {", ':root:not([data-theme="light"])', ':root[data-theme="dark"]']) {
+      const b = block(start);
+      for (const n of names) expect(b, `${n} in ${start}`).toMatch(new RegExp(`--${n}:\\s*\\d+ \\d+ \\d+;`));
+    }
+    // The rail is deep indigo in both themes, and the page is the light grey-blue of the mock-up.
+    expect(block(":root {")).toContain("--rail: 46 35 99;");
+    expect(block(':root[data-theme="dark"]')).toContain("--rail: 46 35 99;");
+    expect(block(":root {")).toContain("--bg: 245 246 250;");
+    expect(block(":root {")).toContain("--sec-mail: 242 163 107;");
+  });
 });
