@@ -1,4 +1,4 @@
-"""mail offloads and the mails in each
+"""mail offloads and the mails in each; when a restore started importing a mail
 
 Revision ID: 0007
 Revises: 0006
@@ -45,9 +45,15 @@ def upgrade() -> None:
     )
     op.create_index("ix_mail_offload_items_offload_id", "mail_offload_items", ["offload_id"])
     op.create_index("ix_mail_offload_items_message_id", "mail_offload_items", ["message_id"])
+    op.add_column(
+        "mail_messages",
+        sa.Column("import_started_at", sa.DateTime(timezone=True), nullable=True),
+    )
 
 
 def downgrade() -> None:
+    with op.batch_alter_table("mail_messages") as batch:
+        batch.drop_column("import_started_at")
     op.drop_index("ix_mail_offload_items_message_id", table_name="mail_offload_items")
     op.drop_index("ix_mail_offload_items_offload_id", table_name="mail_offload_items")
     op.drop_table("mail_offload_items")

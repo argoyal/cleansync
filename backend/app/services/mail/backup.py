@@ -30,6 +30,7 @@ from app.services.mail.adapter import (
 )
 from app.services.mail.index import (
     add_message,
+    adopt_restored_copy,
     apply_labels,
     by_provider_id,
     clear_failure,
@@ -339,11 +340,6 @@ class MailBackup:
         if free < r.floor_bytes:
             raise Paused(DISK_LOW_MSG.format(floor=round(r.floor_bytes / GB)))
 
-    def _parse_and_write(self, email: str, rel: str, raw: bytes):
-        parsed = parse_eml(raw)
-        size, sha = write_eml(self.layout, email, rel, raw)
-        return parsed, size, sha
-
     def _failed(self, r: BackupRun, mid: str, error: str) -> None:
         with self.sf() as db:
             f = record_failure(db, r.account_id, mid, error, self.clock())
@@ -388,10 +384,20 @@ class MailBackup:
             with self.sf() as db:
                 clear_failure(db, r.account_id, mid)  # spam, trash, a draft or a chat
             return False
+        rel = eml_rel(meta.id, meta.internal_date)
+        # Off the event loop: a 25-50 MB mail must not freeze the app.
+        parsed = await asyncio.to_thread(parse_eml, raw)
+        with self.sf() as db:
+            adopted = adopt_restored_copy(db, r.account_id, parsed.message_id, meta)
+            kept = adopted.file_path if adopted is not None else None
+            if kept is not None:
+                clear_failure(db, r.account_id, mid)
+        if kept is not None:
+            # A restore's import whose answer got lost: the mail is kept here already.
+            self._log(r, f"{mid} is the mail a restore put back; kept as {kept}")
+            return True
         try:
-            rel = eml_rel(meta.id, meta.internal_date)
-            # Off the event loop: a 25-50 MB mail must not freeze the app.
-            parsed, size, sha = await asyncio.to_thread(self._parse_and_write, r.email, rel, raw)
+            size, sha = await asyncio.to_thread(write_eml, self.layout, r.email, rel, raw)
         except MailRootMissing as e:
             raise Paused(str(e)) from None
         except OSError as e:

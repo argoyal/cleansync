@@ -48,9 +48,16 @@ from app.services.mail.adapter import (
 )
 from app.services.mail.backup import Paused
 from app.services.mail.gmail import search_message_id
-from app.services.mail.index import sync_state
+from app.services.mail.index import delete_search_rows, mark_restored, sync_state
 from app.services.mail.jobs import finish_mail_job, job_log, start_mail_job, update_mail_job
-from app.services.mail.offload_plan import GMAIL_TRASH_DAYS, OffloadPreview, Pick, plan_offload
+from app.services.mail.offload_plan import (
+    GMAIL_TRASH_DAYS,
+    OffloadPreview,
+    Pick,
+    chunked,
+    plan_offload,
+    rows_where_in,
+)
 from app.services.mail.search import SearchError, mail_conditions
 from app.services.mail.service import MailError, MailService
 from app.services.mail.store import check_eml, check_eml_bytes, eml_path
@@ -179,16 +186,19 @@ def restore_targets(
 ) -> list[int]:
     """The offloaded and Deleted-in-Gmail mails of a pick (or of one offload): the only ones
     a restore touches. Mail already in Gmail is never part of it."""
+    restorable = (MailState.OFFLOADED, MailState.DELETED)
+    if offload_id is None and (pick.message_ids or pick.thread_ids):
+        # A picked list can be longer than SQLite takes in one query: asked in chunks.
+        column = MailMessage.id if pick.message_ids else MailMessage.thread_id
+        rows = rows_where_in(db, account_id, column, pick.message_ids or pick.thread_ids or [])
+        found = {r.id: r for r in rows if r.state in restorable}
+        return [r.id for r in sorted(found.values(), key=lambda r: (as_utc(r.date), r.id))]
     q = select(MailMessage.id).where(
         MailMessage.account_id == account_id,
-        MailMessage.state.in_([MailState.OFFLOADED, MailState.DELETED]),
+        MailMessage.state.in_(restorable),
     )
     if offload_id is not None:
         q = q.where(MailMessage.offload_id == offload_id)
-    elif pick.message_ids:
-        q = q.where(MailMessage.id.in_(pick.message_ids))
-    elif pick.thread_ids:
-        q = q.where(MailMessage.thread_id.in_(pick.thread_ids))
     elif (pick.q or "").strip():
         q = q.where(*mail_conditions(db, account_id, q=(pick.q or "").strip(), now=now))
     else:
@@ -616,12 +626,19 @@ class MailOffloads:
             return None
         return raw
 
-    async def _import_copy(self, acc: Account, adapter, info: dict, log_path) -> str | None:
+    async def _import_copy(
+        self, acc: Account, adapter, msg_id: int, info: dict, log_path
+    ) -> str | None:
         """Gmail no longer has the mail: send the copy here. Returns the new Gmail id, or None
-        when the copy can't be used."""
+        when the copy can't be used. The row is marked first: should Gmail take the import
+        and its answer get lost, the backup and the next restore know that new mail is this
+        one (see adopt_restored_copy and _copy_in_gmail)."""
         raw = await self._read_copy(acc, info, log_path)
         if raw is None:
             return None
+        with self.sf() as db:
+            db.get(MailMessage, msg_id).import_started_at = self.clock()
+            db.commit()
         try:
             return await adapter.import_raw(raw, info["labels"], info["date"])
         except (MailAuthError, MailSetupProblem, MailUnreachable, MailNotFound):
@@ -645,16 +662,44 @@ class MailOffloads:
         if not ids:
             return None
         with self.sf() as db:
-            taken = set(
+            owners = list(
                 db.scalars(
-                    select(MailMessage.provider_id).where(
+                    select(MailMessage).where(
                         MailMessage.account_id == acc.id,
                         MailMessage.provider_id.in_(ids),
                         MailMessage.id != msg_id,
                     )
                 )
             )
+            mine = [r for r in owners if self._own_import(r, info)]
+            taken = {r.provider_id for r in owners if r not in mine}
+            files = [eml_path(self.layout, acc.email, r.file_path) for r in mine]
+            if mine:
+                gone = [r.id for r in mine]
+                for r in mine:
+                    db.delete(r)
+                db.commit()
+                delete_search_rows(db, gone)
+        for path in files:
+            # The same mail saved a second time by a check: the copy here stays the one.
+            try:
+                await asyncio.to_thread(path.unlink, missing_ok=True)
+            except OSError:
+                log.warning("could not remove the second copy %s", path, exc_info=True)
         return next((x for x in ids if x not in taken), None)
+
+    @staticmethod
+    def _own_import(other: MailMessage, info: dict) -> bool:
+        """A row a check made for this restore's own import whose answer got lost: same
+        Message-ID, first seen after the import started, and nothing done with it since."""
+        started = info["import_started_at"]
+        return (
+            started is not None
+            and other.message_id == info["message_id"]
+            and other.state == MailState.IN_MAIL
+            and other.offload_id is None
+            and as_utc(other.first_seen_at) >= as_utc(started)
+        )
 
     async def _untrash(self, adapter, pid: str) -> ProviderState:
         try:
@@ -682,6 +727,7 @@ class MailOffloads:
                 "file_path": row.file_path,
                 "size": row.file_size,
                 "sha": row.sha256,
+                "import_started_at": row.import_started_at,
             }
         pid, new_id, outcome = info["pid"], None, None
         st = await adapter.state(pid)
@@ -709,7 +755,7 @@ class MailOffloads:
         if outcome is None:
             if st.where == GONE:
                 # Gmail has no copy at all: only now is the copy here sent.
-                new_id = await self._import_copy(acc, adapter, info, log_path)
+                new_id = await self._import_copy(acc, adapter, msg_id, info, log_path)
                 if new_id is None:
                     return FAILED
                 outcome = IMPORTED
@@ -722,17 +768,9 @@ class MailOffloads:
             row = db.get(MailMessage, msg_id)
             if new_id is not None:
                 row.provider_id = new_id  # the file stays where it is (row.file_path)
+            row.import_started_at = None  # the outcome is known
             if outcome != IN_SPAM:
-                if row.offload_id is not None:
-                    item = db.scalar(
-                        select(MailOffloadItem).where(
-                            MailOffloadItem.offload_id == row.offload_id,
-                            MailOffloadItem.message_id == row.id,
-                        )
-                    )
-                    if item is not None:
-                        item.result = MailItemResult.RESTORED
-                row.state, row.offload_id = MailState.IN_MAIL, None
+                mark_restored(db, row)
             db.commit()
         if outcome != IN_SPAM:
             job_log(log_path, f"{pid}: {outcome}" + (f" as {new_id}" if new_id else ""))
@@ -837,16 +875,18 @@ class MailOffloads:
 
     def _restore_done(self, account_id: int, ids: list[int]) -> list[int]:
         """Of these, the mails no restore has to touch any more (back in Gmail, or gone)."""
+        open_: set[int] = set()
         with self.sf() as db:
-            open_ = set(
-                db.scalars(
-                    select(MailMessage.id).where(
-                        MailMessage.account_id == account_id,
-                        MailMessage.id.in_(ids),
-                        MailMessage.state.in_([MailState.OFFLOADED, MailState.DELETED]),
+            for part in chunked(ids):  # SQLite takes few values in one query
+                open_ |= set(
+                    db.scalars(
+                        select(MailMessage.id).where(
+                            MailMessage.account_id == account_id,
+                            MailMessage.id.in_(part),
+                            MailMessage.state.in_([MailState.OFFLOADED, MailState.DELETED]),
+                        )
                     )
                 )
-            )
         return [i for i in ids if i not in open_]
 
     async def _restore_all(self, acc: Account, ids: list[int], job, counts: Counter) -> None:

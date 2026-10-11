@@ -8,8 +8,15 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.clock import as_utc
-from app.models import MailFailure, MailLabel, MailMessage, MailRecheckSeen, MailSyncState
-from app.models.enums import MailPhase, MailState
+from app.models import (
+    MailFailure,
+    MailLabel,
+    MailMessage,
+    MailOffloadItem,
+    MailRecheckSeen,
+    MailSyncState,
+)
+from app.models.enums import MailItemResult, MailPhase, MailState
 from app.services.mail.adapter import MailMeta, ProviderLabel
 from app.services.mail.store import ParsedMail
 
@@ -108,6 +115,48 @@ def add_message(
             "body": parsed.body_text,
         },
     )
+    db.commit()
+    return row
+
+
+def mark_restored(db: Session, row: MailMessage) -> None:
+    """The mail is in Gmail again: its offload's page shows it restored. Not committed."""
+    if row.offload_id is not None:
+        item = db.scalar(
+            select(MailOffloadItem).where(
+                MailOffloadItem.offload_id == row.offload_id,
+                MailOffloadItem.message_id == row.id,
+            )
+        )
+        if item is not None:
+            item.result = MailItemResult.RESTORED
+    row.state, row.offload_id, row.import_started_at = MailState.IN_MAIL, None, None
+
+
+def adopt_restored_copy(
+    db: Session, account_id: int, message_id: str | None, meta: MailMeta
+) -> MailMessage | None:
+    """A new mail in Gmail that is a restore's own import whose answer got lost: the row
+    that started that import (same Message-ID, still marked) takes Gmail's new id, so the
+    mail never gets a second row. None when it is a mail of its own."""
+    if not message_id:
+        return None
+    row = db.scalar(
+        select(MailMessage)
+        .where(
+            MailMessage.account_id == account_id,
+            MailMessage.message_id == message_id,
+            MailMessage.import_started_at.is_not(None),
+            MailMessage.state.in_([MailState.OFFLOADED, MailState.DELETED]),
+        )
+        .order_by(MailMessage.import_started_at.desc())
+        .limit(1)
+    )
+    if row is None:
+        return None
+    row.provider_id = meta.id  # the file stays where it is (row.file_path)
+    mark_restored(db, row)
+    set_flags(row, meta.labels)
     db.commit()
     return row
 

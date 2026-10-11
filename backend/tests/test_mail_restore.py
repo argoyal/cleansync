@@ -2,6 +2,7 @@ import re
 from datetime import UTC, datetime, timedelta
 
 import httpx
+from sqlalchemy import text
 
 from app.devtools.fake_gmail import make_mail
 from app.models import MailJob, MailOffload, MailOffloadItem
@@ -12,6 +13,7 @@ from app.services.mail.offload import RESTARTED_RESTORE_MSG, RESTORE_SLOW_MSG
 from app.services.mail.store import eml_path
 from app.services.queue import MISSING_DISK_MSG
 from tests.mail_helpers import fake_adapter
+from tests.offload_helpers import NOW
 from tests.test_mail_api import OneAdapter
 
 OLD = ("Old statement", "Old photos", "Ancient note")
@@ -529,3 +531,104 @@ async def test_recovery_pages_offloads_newest_first(auth_client, offload_box, db
     first = auth_client.get(url, params={**p, "limit": 2}).json()["offloads"]
     second = auth_client.get(url, params={**p, "limit": 2, "offset": 2}).json()["offloads"]
     assert [o["id"] for o in first + second] == ids[::-1][:4]
+
+
+def _copies(box, subject: str) -> list:
+    return [m for m in box.fake.messages.values() if f"Subject: {subject}".encode() in m.raw]
+
+
+async def test_a_check_between_a_lost_import_answer_and_restore_again_adopts_the_copy(
+    auth_client, offload_box
+):
+    """Gmail took the import but its answer was lost; the 5-minute check then sees the
+    imported mail before the owner restores again. It belongs to the offloaded mail's row:
+    one copy in Gmail, one row here."""
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    box.fake.remove(row.provider_id)
+    _lose_first_import_answer(box)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    assert box.row("Old photos").import_started_at is not None
+    await box.backup()  # the check runs before the owner asks again
+    (copy,) = _copies(box, "Old photos")
+    (after,) = [r for r in box.rows_all() if r.subject == "Old photos"]
+    assert after.id == row.id and after.provider_id == copy.id
+    assert after.state == MailState.IN_MAIL and after.offload_id is None
+    assert after.import_started_at is None
+    assert after.file_path == row.file_path  # the file stays where it is
+    files = list(box.mail.layout.mail_dir(box.acc.email).rglob(f"{copy.id}.eml"))
+    assert files == []  # no second file for it either
+    r = _restore(auth_client, box, message_ids=[row.id])
+    assert r.status_code == 409  # nothing to restore: it is in Gmail
+    assert len(_copies(box, "Old photos")) == 1 and len(_imports(box)) == 1
+    assert len(box.rows_all()) == 6
+
+
+async def test_restore_again_merges_a_row_the_check_made_for_its_own_import(
+    auth_client, offload_box, monkeypatch
+):
+    """Should a check still have saved the lost import as a new row, restore again finds
+    the copy owned by that newer row and merges the two: no second import, one row."""
+    from app.services.mail import backup as backup_mod
+
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    box.fake.remove(row.provider_id)
+    _lose_first_import_answer(box)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    with monkeypatch.context() as m:
+        m.setattr(backup_mod, "adopt_restored_copy", lambda *a, **k: None)
+        await box.backup()
+    (r2,) = [r for r in box.rows_all() if r.subject == "Old photos" and r.id != row.id]
+    r2_file = eml_path(box.mail.layout, box.acc.email, r2.file_path)
+    assert r2_file.exists()
+    r = _restore(auth_client, box, message_ids=[row.id])
+    assert r.status_code == 202
+    await box.run_queued()
+    (copy,) = _copies(box, "Old photos")
+    (after,) = [r for r in box.rows_all() if r.subject == "Old photos"]
+    assert after.id == row.id and after.provider_id == copy.id
+    assert after.state == MailState.IN_MAIL and after.import_started_at is None
+    assert after.file_path == row.file_path
+    assert len(_imports(box)) == 1 and len(box.rows_all()) == 6
+    with box.app.state.session_factory() as db:
+        left = db.execute(text("SELECT rowid FROM mail_fts WHERE rowid = :i"), {"i": r2.id})
+        assert left.all() == []  # no search row left for the other
+    assert not r2_file.exists()  # its file was a second copy of the same mail
+    assert eml_path(box.mail.layout, box.acc.email, row.file_path).exists()
+
+
+async def test_a_successful_import_leaves_no_mark(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    box.fake.remove(row.provider_id)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    assert box.row("Old photos").import_started_at is None
+
+
+async def test_a_restore_of_more_ids_than_sqlite_takes_in_one_query_works(auth_client, offload_box):
+    """SQLite takes at most 32,766 values in one query; a big pick is asked in chunks."""
+    from app.services.mail.offload import restore_targets
+    from app.services.mail.offload_plan import Pick
+
+    box = offload_box
+    await _offloaded(auth_client, box)
+    old = [box.row(s) for s in ("Ancient note", "Old photos", "Old statement")]  # oldest first
+    ids = [*range(100_000, 140_000), *(r.id for r in old), box.row("Yesterday").id]
+    assert box.offloads._restore_done(box.acc.id, ids) == [
+        i for i in ids if i not in {r.id for r in old}
+    ]
+    threads = [*(f"t{i}" for i in range(40_000)), *(r.thread_id for r in old)]
+    with box.app.state.session_factory() as db:
+        assert restore_targets(db, box.acc.id, Pick(message_ids=ids), None, NOW) == [
+            r.id for r in old
+        ]
+        assert restore_targets(db, box.acc.id, Pick(thread_ids=threads), None, NOW) == [
+            r.id for r in old
+        ]

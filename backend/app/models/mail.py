@@ -54,6 +54,12 @@ class MailMessage(Base):
     state: Mapped[str] = mapped_column(String(24), default=MailState.IN_MAIL)
     # Plan 4's mail_offloads row; a plain number (SQLite can't add the link to an old table).
     offload_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Set just before a restore sends this mail to Gmail, cleared once the outcome is known.
+    # While set, a new Gmail mail with the same Message-ID is that import (its answer got
+    # lost), never a mail of its own.
+    import_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
