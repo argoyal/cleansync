@@ -239,6 +239,8 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         guard=volume.check if volume is not None else None,
         # Nothing is written to the database here: it lives on the disk that just went away.
         on_stop=lambda reason: app.state.bus.publish("pair", {"sync_stopped": reason}),
+        # Whatever ends a job, nothing it opened stays RUNNING (spec §4.5, the stuck busy flag).
+        settle=app.state.engine.settle_pair,
     )
     if not app.state.db_ok:
         app.state.queue.disabled_reason = DB_BROKEN_MSG

@@ -198,3 +198,64 @@ async def test_hold_refuses_a_busy_pair():
             pass
     gate.set()
     await q.wait_idle()
+
+
+async def test_a_cancelled_or_crashed_job_never_leaves_its_pair_busy():
+    gate = asyncio.Event()
+    settled: list[int] = []
+
+    async def handler(pair_id, action, trigger):
+        if pair_id == 1:
+            await gate.wait()  # never set: hangs until it is cancelled
+        if pair_id == 3:
+            raise asyncio.CancelledError  # e.g. a timeout inside the job
+
+    q = SyncQueue(handler, max_parallel=1, settle=settled.append)
+    assert q.request(1, "MANUAL") == "queued"
+    await asyncio.sleep(0.01)
+    assert q.request(2, "SCHEDULE") == "queued"  # waits for the one free slot
+    await q.stop()  # cancels the running job and the one still waiting
+    assert not q.is_busy(1)
+    assert not q.is_busy(2)  # cancelled while waiting: not left "queued" forever
+    assert settled == [1]  # pair 2 never started, so there is nothing to tidy up
+
+    assert q.request(3, "MANUAL") == "queued"
+    await q.wait_idle()
+    assert not q.is_busy(3)
+    assert settled == [1, 3]
+    assert q.request(2, "MANUAL") == "queued"  # pair 2 can run again
+    await q.wait_idle()
+    assert settled == [1, 3, 2]
+
+
+async def test_settle_runs_before_the_pair_stops_being_busy_and_never_breaks_the_queue():
+    seen: list[bool] = []
+    q: SyncQueue
+
+    def settle(pair_id):
+        seen.append(q.is_running(pair_id))  # still busy: nothing else may start meanwhile
+        raise RuntimeError("database locked")  # a failing tidy-up is logged, not fatal
+
+    async def handler(pair_id, action, trigger):
+        raise RuntimeError("boom")
+
+    q = SyncQueue(handler, settle=settle)
+    q.request(1, "MANUAL")
+    await q.wait_idle()
+    assert seen == [True]
+    assert not q.is_busy(1)
+    assert q.request(1, "MANUAL") == "queued"
+    await q.wait_idle()
+
+
+async def test_settle_is_not_called_when_the_disk_check_stops_a_job():
+    settled: list[int] = []
+
+    async def handler(pair_id, action, trigger):
+        raise AssertionError("must not run")
+
+    q = SyncQueue(handler, guard=lambda: "Storage disk is missing", settle=settled.append)
+    q.request(1, "MANUAL")
+    await q.wait_idle()
+    assert settled == []
+    assert not q.is_busy(1)

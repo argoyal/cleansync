@@ -35,6 +35,7 @@ from app.services.sync.pairs import pair_local_dir, pair_remote
 log = logging.getLogger(__name__)
 _MAX_PLANNED_ROWS = 10_000
 PLAN_UNREADABLE_MSG = "Couldn't read rclone's plan; nothing was changed"
+SETTLED_MSG = "The sync stopped before it finished. It runs again at the next sync."
 # Pairs waiting on the user are not retried by timers or file changes, only by explicit actions.
 # The pair stopped for the owner to look first; only a manual sync (or a Resolve) goes on.
 WAITING_FOR_USER = {
@@ -138,6 +139,34 @@ class SyncEngine:
             pair.override_next = False
         db.commit()
         self.bus.publish("pair", {"pair_id": pair.id, "status": status, "reason": reason})
+
+    def settle_pair(self, pair_id: int) -> bool:
+        """After every queue job: close a job row a crash left RUNNING and take the pair out
+        of RUNNING, so it never shows as syncing forever. True when something was left open.
+
+        The queue calls this while the pair still counts as busy, so no other job (and no
+        offload or file action, which hold the pair) can be running for it."""
+        with self.session_factory() as db:
+            pair = db.get(SyncPair, pair_id)
+            if pair is None:
+                return False
+            jobs = list(
+                db.scalars(
+                    select(SyncJob).where(
+                        SyncJob.pair_id == pair_id, SyncJob.state == JobState.RUNNING
+                    )
+                )
+            )
+            if not jobs and pair.status != PairStatus.RUNNING:
+                return False
+            log.warning("pair %s: a job ended without closing; marking it failed", pair_id)
+            for job in jobs:
+                self.finish_job(db, job, JobState.FAILED, error=SETTLED_MSG)
+            if pair.status == PairStatus.RUNNING:
+                pair.last_error = SETTLED_MSG
+                pair.last_error_at = self.clock()
+                self.set_status(db, pair, PairStatus.ERROR, AttentionReason.FAILED)
+            return True
 
     @staticmethod
     def _paused_now(db: Session, pair: SyncPair) -> bool:

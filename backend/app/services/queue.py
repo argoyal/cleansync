@@ -41,6 +41,7 @@ class SyncQueue:
         *,
         guard: Callable[[], str | None] | None = None,
         on_stop: Callable[[str], None] | None = None,
+        settle: Callable[[int], None] | None = None,
     ) -> None:
         self._handler = handler
         self._sem = asyncio.Semaphore(max_parallel)
@@ -57,6 +58,9 @@ class SyncQueue:
         # not freeze the app.
         self._guard = guard
         self._on_stop = on_stop
+        # Called after every job that ran, however it ended: closes what a crash left open
+        # (a job row still RUNNING, a pair still RUNNING), so nothing shows as syncing forever.
+        self._settle = settle
 
     async def check(self) -> bool:
         """True when syncing is off. Once the guard objects, it stays off until a restart."""
@@ -130,35 +134,50 @@ class SyncQueue:
         return self._finished.get(pair_id)
 
     async def _run(self, pair_id: int) -> None:
-        async with self._sem:
-            action, trigger = self._pending.pop(pair_id)
-            self._running.add(pair_id)  # busy while the disk is checked: no second job slips in
-            try:
-                stopped = await self.check()
-            except BaseException:
+        holding = False  # this job marked the pair busy
+        ran = False  # the handler was called
+        try:
+            async with self._sem:
+                action, trigger = self._pending.pop(pair_id)
+                self._running.add(pair_id)  # busy while the disk is checked: no second job slips in
+                holding = True
+                if await self.check():
+                    # The disk went away while this job waited: run nothing, re-run nothing.
+                    self._dirty.pop(pair_id, None)
+                    return
+                ran = True
+                try:
+                    await self._handler(pair_id, action, trigger)
+                except Exception:
+                    # The engine already marked the job FAILED and the pair ERROR; keep going.
+                    log.exception("job for pair %s (%s) failed unexpectedly", pair_id, action)
+        finally:
+            # However the job ended (an error, a cancel, a stop), the pair is never left busy.
+            self._pending.pop(pair_id, None)  # cancelled while it waited for a free slot
+            if ran:
+                self._job_ended(pair_id)
+            elif holding:
                 self._running.discard(pair_id)
-                raise
-            if stopped:
-                # The disk went away while this job waited: run nothing, re-run nothing.
-                self._running.discard(pair_id)
-                self._dirty.pop(pair_id, None)
-                return
+
+    def _job_ended(self, pair_id: int) -> None:
+        self._finished[pair_id] = time.monotonic()
+        if self._settle is not None:
             try:
-                await self._handler(pair_id, action, trigger)
+                self._settle(pair_id)
             except Exception:
-                # The engine already marked the job FAILED and the pair ERROR; keep going.
-                log.exception("job for pair %s (%s) failed unexpectedly", pair_id, action)
-            finally:
-                self._finished[pair_id] = time.monotonic()
-                self._running.discard(pair_id)
-                for listener in self._finish_listeners:
-                    try:
-                        listener(pair_id)
-                    except Exception:
-                        log.exception("finish listener failed for pair %s", pair_id)
-                again = self._dirty.pop(pair_id, None)
-                if again is not None:
-                    self.request(pair_id, again)
+                log.exception("could not close what the job for pair %s left open", pair_id)
+        self._running.discard(pair_id)
+        for listener in self._finish_listeners:
+            try:
+                listener(pair_id)
+            except Exception:
+                log.exception("finish listener failed for pair %s", pair_id)
+        again = self._dirty.pop(pair_id, None)
+        if again is not None:
+            try:
+                self.request(pair_id, again)
+            except RuntimeError:  # no event loop any more: the app is shutting down
+                log.info("not re-running pair %s: shutting down", pair_id)
 
     async def wait_idle(self) -> None:
         while self._tasks:
@@ -169,6 +188,8 @@ class SyncQueue:
         for t in list(self._tasks):
             t.cancel()
         await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        # A job cancelled before it ever started never reaches its own tidy-up.
+        self._pending.clear()
 
 
 def make_handler(engine, initial, on_change: Callable[[], None] = lambda: None) -> Handler:
