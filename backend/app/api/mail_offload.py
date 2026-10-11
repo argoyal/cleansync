@@ -2,19 +2,21 @@
 
 from dataclasses import asdict
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api.mail_reader import account_or_404
 from app.auth.deps import AuthContext, get_db, require_user
 from app.core.clock import utcnow
 from app.models import MailMessage, MailOffload, MailOffloadItem
-from app.models.enums import MailItemResult
+from app.models.enums import MailItemResult, MailState
 from app.schemas.mail import (
     MailBriefOut,
     MailOffloadDetailOut,
     MailOffloadOut,
     MailPickIn,
+    MailRecoveryOut,
     OffloadPreviewOut,
     OffloadStartedOut,
     OffloadStartIn,
@@ -116,3 +118,32 @@ async def restore(body: RestoreMailIn, request: Request, ctx: AuthContext = Depe
     except MailError as e:
         raise HTTPException(e.status, str(e)) from e
     return RestoreQueuedOut(queued=queued, count=count)
+
+
+@router.get("/api/recovery/mail", response_model=MailRecoveryOut)
+def recovery_mail(
+    account_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Spec 3.4: Recovery shows mail offloads (newest first, a page at a time) and how many
+    mails were deleted in Gmail, next to the Drive items."""
+    account_or_404(db, account_id)
+    offloads = db.scalars(
+        select(MailOffload)
+        .where(MailOffload.account_id == account_id, MailOffload.done > 0)
+        .order_by(MailOffload.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    deleted = db.scalar(
+        select(func.count())
+        .select_from(MailMessage)
+        .where(MailMessage.account_id == account_id, MailMessage.state == MailState.DELETED)
+    )
+    now = utcnow()
+    return MailRecoveryOut(
+        offloads=[offload_out(db, o, now) for o in offloads], deleted_count=deleted or 0
+    )

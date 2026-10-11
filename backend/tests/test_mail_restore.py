@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from app.devtools.fake_gmail import make_mail
-from app.models import MailJob, MailOffloadItem
+from app.models import MailJob, MailOffload, MailOffloadItem
 from app.models.enums import MailItemResult, MailPhase, MailState
 from app.services.google.quota import ApiBudget
 from app.services.mail.index import sync_state
@@ -490,3 +490,42 @@ def test_with_the_disk_missing_a_paused_restore_still_ends_failed_at_startup(
         row = db.get(MailJob, paused.id)
         assert row.state == JobState.FAILED and row.message.endswith(RESTARTED_RESTORE_MSG)
         assert app.state.mail.queue.requests == []
+
+
+async def test_recovery_lists_mail_offloads_and_mail_deleted_in_gmail(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    # A mail the owner trashes in Gmail by hand counts as deleted there; offloaded ones do not.
+    box.fake.set_labels(box.provider_id("Last week"), ("TRASH",))
+    await box.backup()
+    body = auth_client.get("/api/recovery/mail", params={"account_id": box.acc.id}).json()
+    assert body["deleted_count"] == 1
+    (off,) = body["offloads"]
+    assert off["done"] == 3 and off["google_emptied"] is False
+    assert "emptyable" not in off
+
+
+async def test_recovery_leaves_out_offloads_that_moved_nothing_and_checks_the_account(
+    auth_client, offload_box, db
+):
+    box = offload_box
+    await box.backup()
+    db.add(MailOffload(account_id=box.acc.id, filter_text="x", state="failed", total=2, done=0))
+    db.commit()
+    body = auth_client.get("/api/recovery/mail", params={"account_id": box.acc.id}).json()
+    assert body == {"offloads": [], "deleted_count": 0}
+    assert auth_client.get("/api/recovery/mail", params={"account_id": 999}).status_code == 404
+
+
+async def test_recovery_pages_offloads_newest_first(auth_client, offload_box, db):
+    box = offload_box
+    ids = []
+    for n in range(5):
+        o = MailOffload(account_id=box.acc.id, filter_text=f"f{n}", state="done", total=1, done=1)
+        db.add(o)
+        db.commit()
+        ids.append(o.id)
+    url, p = "/api/recovery/mail", {"account_id": box.acc.id}
+    first = auth_client.get(url, params={**p, "limit": 2}).json()["offloads"]
+    second = auth_client.get(url, params={**p, "limit": 2, "offset": 2}).json()["offloads"]
+    assert [o["id"] for o in first + second] == ids[::-1][:4]

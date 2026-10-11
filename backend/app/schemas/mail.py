@@ -199,6 +199,11 @@ class MailOffloadDetailOut(MailOffloadOut):
     skipped_items: list[SkippedOut]
 
 
+class MailRecoveryOut(BaseModel):
+    offloads: list[MailOffloadOut]
+    deleted_count: int
+
+
 class RestoreMailIn(MailPickIn):
     offload_id: int | None = None
 
