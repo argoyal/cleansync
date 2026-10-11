@@ -144,8 +144,9 @@ class AccountService:
         """Ask Google again, now with Gmail too (spec §3.1). Drive keeps syncing meanwhile.
 
         A pretend local account has no Google behind it: it goes straight to "setting up"
-        (Plan 2 gives it a fake Gmail) and None is returned. So does an account whose
-        sign-in already allows Gmail."""
+        (Plan 2 gives it a fake Gmail) and None is returned. So does a connected account
+        whose sign-in already allows Gmail, unless Mail is waiting to be reconnected (Gmail
+        refused the saved permission, so only Google can say whether it is back)."""
         with self.session_factory() as db:
             acc = db.get(Account, account_id)
             if acc is None:
@@ -157,7 +158,12 @@ class AccountService:
                 if row is None or row.state == ServiceState.NOT_SET_UP:
                     set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.SETTING_UP)
                 return None
-            if has_scope(acc.scopes, GMAIL_SCOPE):
+            row = get_service(db, acc.id, ServiceKind.MAIL)
+            if (
+                has_scope(acc.scopes, GMAIL_SCOPE)
+                and acc.status == AccountStatus.CONNECTED
+                and (row is None or row.state != ServiceState.NEEDS_RECONNECT)
+            ):
                 # Google already allows Gmail for this account: no need to ask again.
                 self._follow_mail_permission(db, acc, "mail")
                 return None
@@ -353,6 +359,8 @@ class AccountService:
             acc = db.get(Account, account_id)
             if acc is None:
                 return
+            if acc.status == AccountStatus.DISCONNECTED:
+                return  # disconnected on purpose: a late failure must not undo that
             self._login_changed(acc.remote_name)
             if acc.status == AccountStatus.NEEDS_REAUTH:
                 return

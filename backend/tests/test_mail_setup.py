@@ -174,3 +174,26 @@ def test_a_new_sign_in_without_drive_adds_no_account(auth_client, fake_rclone):
     assert "oauth_error=" in r.headers["location"] and "Drive" in r.headers["location"]
     assert _creates(fake_rclone) == 0
     assert auth_client.get("/api/accounts").json() == []
+
+
+def test_reconnect_mail_after_gmail_refused_asks_google_again(auth_client, app, make_account):
+    # Gmail answered 403 missing-permission: Mail needs reconnecting even though the saved
+    # scopes still list Gmail. Reconnect mail must go through Google, not flip Mail back on.
+    acc = _account(app, make_account)
+    with app.state.session_factory() as db:
+        db.get(type(acc), acc.id).scopes = f"{DRIVE_SCOPE} {GMAIL_SCOPE}"
+        db.commit()
+        set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.NEEDS_RECONNECT)
+    _setup_state(auth_client, acc)  # a Google sign-in link
+    assert _mail_state(app, acc) == ServiceState.NEEDS_RECONNECT
+
+
+def test_mail_setup_on_an_account_needing_reauth_asks_google(auth_client, app, make_account):
+    acc = _account(app, make_account)
+    with app.state.session_factory() as db:
+        row = db.get(type(acc), acc.id)
+        row.scopes = f"{DRIVE_SCOPE} {GMAIL_SCOPE}"
+        row.status = "NEEDS_REAUTH"
+        db.commit()
+    _setup_state(auth_client, acc)
+    assert _mail_state(app, acc) == ServiceState.NOT_SET_UP
