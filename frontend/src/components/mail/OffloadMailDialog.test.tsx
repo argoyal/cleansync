@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
-import { buildQuery, combine, EMPTY_FIELDS, OffloadMailDialog, parseTyped } from "./OffloadMailDialog";
+import { buildQuery, combine, EMPTY_FIELDS, OffloadMailDialog, parseTyped, twice } from "./OffloadMailDialog";
 
 const ACTIVE = { ...ACCOUNT, services: { files: "active" as const, mail: "active" as const }, mail_permission: true };
 const brief = (id: number, subject: string, size: number, date: string) => ({ id, subject, from_addr: "bank@example.com", date, size });
@@ -33,6 +33,11 @@ describe("the offload filter", () => {
     expect(parseTyped("")).toBeNull();
     expect(combine("from:bank ", "older_than:1y")).toBe("from:bank older_than:1y");
     expect(combine("", "")).toBe("");
+    expect(combine("a ", "")).toBe("a "); // a typed space is never swallowed
+    expect(combine("  ", "older_than:1y")).toBe("older_than:1y");
+    expect(twice("older_than:1y from:x", { ...EMPTY_FIELDS, age: "2", from: "y", to: "z" })).toEqual(["Older than", "From"]);
+    expect(twice("has:attachment", { ...EMPTY_FIELDS, attachments: true })).toEqual(["Has attachments"]);
+    expect(twice("bank older", { ...EMPTY_FIELDS, age: "2" })).toEqual([]);
   });
 });
 
@@ -235,5 +240,44 @@ describe("Offload mail…", () => {
     expect(screen.getByLabelText("From")).toBeDisabled();
     finish(json(202, { offload_id: 7, queued: "queued" }));
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/mail/offloads/7"));
+  });
+
+  it("keeps the spaces typed in the filter box, and sends the filter as typed", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "POST /api/mail/offloads/preview": PREVIEW,
+    });
+    renderApp(<OffloadMailDialog account={ACTIVE} start={{ q: "" }} onClose={() => undefined} />, { withAccount: true, route: "/mail" });
+    const dialog = screen.getByRole("dialog", { name: "Offload mail" });
+    const filter = within(dialog).getByLabelText("Filter");
+    await userEvent.type(filter, "a b");
+    expect(filter).toHaveValue("a b");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/offloads/preview")?.body).toEqual({ account_id: 1, q: "a b" }));
+  });
+
+  it("types with a builder term present, and says when a field appears twice", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "POST /api/mail/offloads/preview": PREVIEW,
+    });
+    renderApp(<OffloadMailDialog account={ACTIVE} start={{ q: "" }} onClose={() => undefined} />, { withAccount: true, route: "/mail" });
+    const dialog = screen.getByRole("dialog", { name: "Offload mail" });
+    const filter = within(dialog).getByLabelText("Filter");
+    const age = within(dialog).getByLabelText("Older than");
+    // Typing after a builder term: every space and term stays as typed.
+    await userEvent.type(age, "3");
+    await userEvent.type(filter, " is:unread from:bank");
+    expect(filter).toHaveValue("older_than:3y is:unread from:bank");
+    // Typed text first, then the same field in the builder: both show, with a note.
+    await userEvent.clear(filter);
+    await userEvent.type(filter, "older_than:1y from:bank");
+    await userEvent.type(age, "2");
+    expect(filter).toHaveValue("older_than:1y from:bank older_than:2y");
+    expect(within(dialog).getByText("Older than appears twice; both apply.")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/offloads/preview")?.body).toEqual({ account_id: 1, q: "older_than:1y from:bank older_than:2y" }));
   });
 });

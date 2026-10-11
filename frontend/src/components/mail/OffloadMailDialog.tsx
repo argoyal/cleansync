@@ -33,9 +33,28 @@ export function parseTyped(text: string): number | null {
 }
 
 /** The Filter box shows the hand-typed text (or the search it started from) AND the builder's
- * terms. The builder only ever adds to the text: it never drops a term, so it can't widen. */
+ * terms. The builder only ever adds to the text: it never drops a term, so it can't widen.
+ * The text shows exactly as typed (spaces too); one space goes before the builder's terms
+ * only when the text doesn't already end in one. Trim it before sending. */
 export function combine(text: string, built: string): string {
-  return [text.trim(), built].filter(Boolean).join(" ");
+  if (!built) return text;
+  if (!text.trim()) return built;
+  return /\s$/.test(text) ? `${text}${built}` : `${text} ${built}`;
+}
+
+const FIELD_NAMES: [keyof FilterFields, string, string][] = [
+  ["age", "older_than", "Older than"],
+  ["from", "from", "From"],
+  ["to", "to", "To"],
+  ["label", "label", "Label"],
+  ["larger", "larger", "Larger than"],
+  ["attachments", "has", "Has attachments"],
+];
+
+/** Builder fields whose search word is also typed in the text, like older_than: in both. */
+export function twice(text: string, f: FilterFields): string[] {
+  const typed = new Set(Array.from(text.matchAll(/(?:^|\s)([A-Za-z_]+):/g), (m) => m[1].toLowerCase()));
+  return FIELD_NAMES.filter(([key, op]) => (typeof f[key] === "string" ? (f[key] as string).trim() !== "" : f[key]) && typed.has(op)).map(([, , name]) => name);
 }
 
 function Briefs({ title, name, items, show }: { title: string; name: string; items: MailBrief[]; show: (m: MailBrief) => string }) {
@@ -88,7 +107,9 @@ export function OffloadMailDialog({
     forget();
   };
   const built = buildQuery(fields);
-  const q = combine(text, built);
+  const shown = combine(text, built);
+  const q = shown.trim();
+  const doubled = twice(text, fields);
   // A hand edit of the Filter box: when the builder's terms are still at its end, the rest is
   // the text; otherwise the whole box becomes the text and the builder starts empty again.
   // Either way every term typed stays in the filter.
@@ -194,10 +215,15 @@ export function OffloadMailDialog({
             <Field label="Filter" hint="The same search language as the search box, like older_than:1y larger:5M.">
               <input
                 className={inputClass}
-                value={q}
+                value={shown}
                 onChange={(e) => editFilter(e.target.value)}
               />
             </Field>
+            {doubled.length > 0 && (
+              <p className="mt-1 text-meta text-ink-2">
+                {doubled.join(", ")} {doubled.length === 1 ? "appears" : "appear"} twice; both apply.
+              </p>
+            )}
           </div>
         </fieldset>
       )}
