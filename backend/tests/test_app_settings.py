@@ -60,7 +60,7 @@ def test_invalid_values_rejected(db, bad):
         {"mail_batch_size": 1001},
         {"mail_min_age_days": 3651},
         {"mail_disk_floor_gb": 10_001},
-        {"google_daily_budget_units": 80_000_001},
+        {"google_daily_budget_units": 40_000_001},  # half of Google's 80M paid line
     ],
 )
 def test_non_int_and_oversized_rejected(db, bad):
@@ -76,5 +76,6 @@ def test_upper_bounds_are_accepted(db):
         "default_max_deletions": 1_000_000,
         "log_retention_days": 3650,
         "default_interval_s": None,
+        "google_daily_budget_units": 40_000_000,
     }
     assert set_settings(db, ok)["max_parallel_pairs"] == 8

@@ -34,7 +34,7 @@ MAX_VALUES = {
     "mail_min_age_days": 3650,
     "mail_batch_size": 1000,
     "mail_disk_floor_gb": 10_000,
-    "google_daily_budget_units": 80_000_000,
+    "google_daily_budget_units": 40_000_000,  # half of Google's 80M paid line
 }
 
 
