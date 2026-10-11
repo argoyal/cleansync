@@ -8,7 +8,7 @@
 - New navigation: an icon rail (Files, Mail, Activity, Recovery, Settings) with a panel for each section; a bottom bar on phones.
 - Mail backup: every Gmail message except Spam and Trash is kept on the server as its original .eml, kept up to date every few minutes; the first backup resumes after any stop. Set it up from the new Mail section (docs/mail-backup.md); it needs the Gmail API and the `gmail.modify` scope on your Google client.
 - Mail reader: views, labels, conversations, search with operators, safe display (no scripts, images on request), attachments.
-- Mail offload: by filter or by pick, with a preview and a typed count; each mail is checked here before it goes to Gmail's trash, and Gmail empties its trash after 30 days. Offloads wait while the backup is checking the mailbox. Restore to Gmail never makes a duplicate. Recovery shows mail too.
+- Mail offload: by filter or by pick, with a preview and a typed count; each mail is checked here before it goes to Gmail's trash, and Gmail empties its trash after 30 days. Offloads wait while the backup is checking the mailbox. Restore to Gmail takes mail out of Gmail's trash or imports it, and never imports a mail with a Message-ID twice, even after Gmail's answer got lost (a mail without one could, rarely, end up twice). Recovery shows mail too.
 - Cost guard: Google API calls are paced and kept under a daily budget (default 10 million units, at most 40 million; Settings → Google API). Drive is counted but never held back.
 - Fix: a sync that fails or is cut off no longer leaves its folder "syncing right now".
 

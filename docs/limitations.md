@@ -41,7 +41,10 @@ When a new version changes the list of files that never sync (for example, the v
 - Mail that cannot be downloaded from Gmail is never offloaded, and the offload preview does not count it among the mails it leaves out.
 - Offloaded mail goes to Gmail's trash and Gmail empties it after 30 days. CleanSync cannot empty it sooner: that needs Google's full mailbox permission, and CleanSync asks only for `gmail.modify`.
 - Offloads wait while the mail backup is checking the mailbox.
-- A mail without a usable Message-ID that is restored after a lost Gmail answer could be duplicated in Gmail (rare).
+- A mail without a usable Message-ID that is restored after a lost Gmail answer could be duplicated in Gmail (rare). Mail with a Message-ID is never imported twice.
+- A restore that is queued but has not started yet is lost if CleanSync stops or the storage disk is missing at that moment. The mails stay safe (still offloaded); ask for the restore again.
+- CleanSync waits at most 60 seconds on each step of sending a restored mail to Gmail. A very large mail on a slow upload connection may not make it; the restore then stops with "CleanSync couldn't reach Gmail" and the rest stays offloaded. Try again from a faster connection.
+- Restoring an old database copy: mail offloaded after that copy needs taking out of Gmail's trash within 30 days (see [backup and recovery](backup-recovery.md#mail)).
 - The size shown before the first backup is what Gmail and Google Photos use together; Google doesn't report Gmail alone.
 - Images inside a mail are shown up to 10 MB per mail; the mail frame has a fixed height and scrolls by itself.
 - If CleanSync stops right after moving a mail to Gmail's trash but before marking it offloaded, that mail shows as "Deleted in Gmail" after the next check; restore it from there.

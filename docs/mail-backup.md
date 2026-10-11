@@ -41,7 +41,7 @@ Offloads wait while the mail backup is still checking your mailbox (the first ba
 
 ## Putting mail back
 
-**Restore to Gmail** works on one mail, a conversation, a search, a whole offload, or everything deleted in Gmail (Recovery → Mail). A mail still in Gmail's trash is taken out of it; a mail Gmail no longer has is imported from its stored `.eml` with its labels; a mail already in Gmail is left as it is. Restore does not make a second copy.
+**Restore to Gmail** works on one mail, a conversation, a search, a whole offload, or everything deleted in Gmail (Recovery → Mail). A mail still in Gmail's trash is taken out of it; a mail Gmail no longer has is imported from its stored `.eml` with its labels; a mail already in Gmail is left as it is. Before importing, CleanSync looks in Gmail for the mail by its Message-ID, so a restore asked again after Gmail's answer got lost doesn't import it twice; and if the mail backup sees that import first, it keeps it as the same mail, not a new one. The one exception is below.
 
 ## Cost
 
@@ -50,7 +50,9 @@ The Gmail API is free today; Google plans to charge above 80 million units a day
 ## Limits to know about
 
 - Mails that cannot be downloaded from Gmail ("failed" mails) are never offloaded. They are also not counted in the preview's left-out list.
-- A mail with no usable Message-ID header that is restored after Gmail's answer was lost could end up twice in Gmail. This is rare; CleanSync looks for the mail by Message-ID before importing.
+- A mail with no usable Message-ID header (missing, or with characters a Gmail search can't take) can't be looked for in Gmail. If Gmail takes its import but the answer gets lost on the way back, restoring it again imports it a second time, and the backup keeps both. This is rare; delete the extra copy in Gmail.
+- A restore that is asked for but has not started yet is forgotten if CleanSync stops or the storage disk goes missing before it starts. The mails are safe and still show as offloaded; ask for the restore again.
+- CleanSync waits at most 60 seconds on each step of sending a mail to Gmail. A very large mail (tens of MB) on a slow upload connection may not get there in time: the restore stops with "CleanSync couldn't reach Gmail", and the mails not put back yet stay offloaded. Try again from a faster connection. Mail already sent is never imported twice.
 - Drafts, chats, Spam and Trash are not backed up.
 - Mail deleted in Gmail stays here, marked "Deleted in Gmail"; CleanSync never deletes its own copy.
 

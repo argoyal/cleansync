@@ -54,7 +54,14 @@ How this is tested: the automated tests use a local folder in place of Google Dr
 
 ## Mail
 
-Mail lives in `mail/` next to `storage/`, one `.eml` file per mail; the list of mails, their labels and the search index are in the database. Back up `mail/` with `storage/` and `app/data/`. Restoring an old database copy is safe: mail files it doesn't know about are downloaded again by the next re-check, and nothing in `mail/` is ever deleted by CleanSync.
+Mail lives in `mail/` next to `storage/`, one `.eml` file per mail; the list of mails, their labels and the search index are in the database. Back up `mail/` with `storage/` and `app/data/`. Nothing in `mail/` is ever deleted by CleanSync.
+
+Restoring an old database copy is safe for mail that is still in Gmail: the next check (or a full re-check) finds what the old copy doesn't know and downloads it again. It is **not** fully safe for mail offloaded after that copy was made, because the old database doesn't know about that offload:
+
+- A mail the old copy already knew shows as "Deleted in Gmail" after the next check (Gmail has it in its trash). Restore it from Recovery → Mail or the Deleted in Gmail view while Gmail still has it in its trash (30 days after the offload).
+- A mail backed up after that copy was made isn't in the old database at all. Its `.eml` file is still in `mail/`, but CleanSync doesn't list it, and it doesn't download it again because it is in Gmail's trash. Within 30 days of the offload, take it out of the trash in Gmail; the next check then lists it again. After that, the `.eml` file in `mail/<email>/<year>/<month>/` is the only copy; open it with any mail program.
+
+So after restoring an old database, look at Gmail's trash for mail you offloaded since that copy and take it out of the trash before Gmail empties it.
 
 Recovery → Mail lists your mail offloads (with how long Gmail keeps them in its trash) and the mail deleted in Gmail, with **Restore all to Gmail**. After a mail offload, the copy here is the only one once Gmail empties its trash (after 30 days), so keep `mail/` backed up.
 
