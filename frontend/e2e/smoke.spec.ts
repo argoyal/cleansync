@@ -94,9 +94,10 @@ async function uploadViaApi(page: Page, accountId: number, name: string, body: s
 async function setUpMail(page: Page) {
   await page.goto("/mail");
   const status = page.getByText(/^24 mails · .* · checked/);
-  if (await status.isVisible().catch(() => false)) return;
   const setUp = page.getByRole("button", { name: "Set up mail backup" }).first();
-  if (await setUp.isVisible().catch(() => false)) await setUp.click();
+  await expect(status.or(setUp)).toBeVisible(); // wait for the page to settle before choosing
+  if (await status.isVisible()) return;
+  await setUp.click();
   await expect(page.getByRole("heading", { name: "Start mail backup" })).toBeVisible();
   await expect(page.getByText("About 26 mails. The first backup takes a few hours. Nothing in Gmail changes.")).toBeVisible();
   await page.getByRole("button", { name: "Start", exact: true }).click();
@@ -361,12 +362,21 @@ test("mail backup of the pretend account, with its job on Sync activity", async 
   await ready(page);
   await setUpMail(page);
   await expect(page.getByRole("heading", { name: "Mail backup" })).toBeVisible();
+  const logs = page.getByRole("link", { name: "Log of Mail: alice@example.com" });
+  await rail(page).getByRole("link", { name: /^Activity/ }).click();
+  await expect(page.getByRole("region", { name: "Mail: alice@example.com" })).toBeVisible();
+  await expect(logs.first()).toBeVisible();
+  const before = await logs.count();
+
+  await rail(page).getByRole("link", { name: /^Mail/ }).click();
   await page.getByRole("button", { name: "Check now" }).click();
   await expect(page.getByText(/^24 mails · .* · checked/)).toBeVisible({ timeout: 60_000 });
 
+  // The click made a new job: one more log than before.
   await rail(page).getByRole("link", { name: /^Activity/ }).click();
-  await expect(page.getByRole("region", { name: "Mail: alice@example.com" })).toBeVisible();
-  const log = page.getByRole("link", { name: "Log of Mail: alice@example.com" }).last();
+  await expect(logs).toHaveCount(before + 1, { timeout: 60_000 });
+  // The list is newest first, so the last link is the oldest mail job: the first backup, whose log has "saved ".
+  const log = logs.last();
   const r = await page.request.get((await log.getAttribute("href"))!);
   expect(await r.text()).toContain("saved ");
 
