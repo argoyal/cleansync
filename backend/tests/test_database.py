@@ -21,11 +21,14 @@ def test_pragmas_are_safe_for_network_and_windows_drives(tmp_path):
 
 
 def test_migrations_match_models(tmp_path):
+    from app.database.fts import include_name
+
     db_file = tmp_path / "m.db"
     run_migrations(db_file)
     engine = make_engine(db_file)
     with engine.connect() as c:
-        diff = compare_metadata(MigrationContext.configure(c), Base.metadata)
+        ctx = MigrationContext.configure(c, opts={"include_name": include_name})
+        diff = compare_metadata(ctx, Base.metadata)
     assert diff == []
 
 

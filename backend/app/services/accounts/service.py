@@ -64,6 +64,7 @@ def check_local_folder(layout: Layout, env: RcloneEnv, folder: Path) -> Path:
     folder = folder.resolve()
     own = [layout.root.resolve(), (layout.root / "app").resolve(), layout.data.resolve()]
     own.append(layout.storage.resolve())
+    own.append(layout.mail_root.resolve())
     for p in own:
         if folder == p or (folder.is_relative_to(p) and p != layout.root.resolve()):
             raise AccountError("That folder is inside the app's own folders; pick another one.")

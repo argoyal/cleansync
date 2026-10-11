@@ -30,6 +30,7 @@ class JobState(StrEnum):
     BLOCKED = "BLOCKED"
     CANCELLED = "CANCELLED"
     INTERRUPTED = "INTERRUPTED"
+    PAUSED = "PAUSED"  # waits for something outside CleanSync (budget, disk space)
 
 
 class JobKind(StrEnum):
@@ -95,3 +96,24 @@ class ServiceState(StrEnum):
     ACTIVE = "active"
     NEEDS_RECONNECT = "needs_reconnect"  # the login or the permission went away
     PAUSED = "paused"  # in the model for a later "pause mail" switch; nothing sets it yet
+
+
+class MailState(StrEnum):
+    IN_MAIL = "in_mail"  # in Gmail, and kept here
+    OFFLOADED = "offloaded"  # CleanSync moved it out of Gmail; kept here
+    DELETED = "deleted_in_provider"  # deleted in Gmail by someone else; kept here
+
+
+class MailPhase(StrEnum):
+    INITIAL = "initial"  # the first backup: listing every mail
+    INCREMENTAL = "incremental"  # keeping up from Gmail's history
+    RECHECK = "recheck"  # history too old: listing every mail again
+
+
+class MailJobKind(StrEnum):
+    BACKUP = "BACKUP"  # part of the first backup
+    CHECK = "CHECK"  # keeping up
+    RECHECK = "RECHECK"
+    OFFLOAD = "OFFLOAD"
+    EMPTY_TRASH = "EMPTY_TRASH"
+    RESTORE = "RESTORE"
