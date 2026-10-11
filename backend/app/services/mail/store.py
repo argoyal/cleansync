@@ -2,14 +2,16 @@
 all; and what CleanSync reads back out of a .eml (headers, attachments, text for search)."""
 
 import hashlib
+import logging
 import os
+import re
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime
 from email import policy
 from email.message import EmailMessage, Message
 from email.parser import BytesParser
-from html.parser import HTMLParser
+from html import unescape
 from pathlib import Path
 
 from app.core.clock import as_utc
@@ -17,6 +19,7 @@ from app.core.pathsafe import safe_join
 from app.paths import Layout
 from app.services.mail.gmail import valid_mail_id
 
+log = logging.getLogger(__name__)
 TMP_PREFIX = ".tmp-"
 MAX_BODY_CHARS = 200_000
 MISSING_ROOT_MSG = (
@@ -44,6 +47,17 @@ def eml_path(layout: Layout, email: str, rel: str) -> Path:
     return safe_join(layout.mail_dir(email), rel)
 
 
+def _fsync_dir(folder: Path) -> None:
+    try:
+        fd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:  # not every system can sync a folder; the file itself is already flushed
+        log.debug("could not sync folder %s", folder, exc_info=True)
+
+
 def write_eml(layout: Layout, email: str, rel: str, raw: bytes) -> tuple[int, str]:
     """Write to a temporary name in the same folder, flush to disk, then rename, so a file
     exists only when complete. Folders are made only below mail/<email>/: when mail/ itself
@@ -63,6 +77,7 @@ def write_eml(layout: Layout, email: str, rel: str, raw: bytes) -> tuple[int, st
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, target)
+        _fsync_dir(target.parent)
     finally:
         tmp.unlink(missing_ok=True)  # only there when something failed before the rename
     return len(raw), hashlib.sha256(raw).hexdigest()
@@ -131,39 +146,37 @@ def _payload_size(part: Message) -> int:
         return 0
 
 
-class _Text(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.out: list[str] = []
-        self._skip = 0
-
-    def handle_starttag(self, tag, attrs):
-        if tag in ("script", "style"):
-            self._skip += 1
-
-    def handle_endtag(self, tag):
-        if tag in ("script", "style") and self._skip:
-            self._skip -= 1
-
-    def handle_data(self, data):
-        if not self._skip:
-            self.out.append(data)
+_TAG = re.compile(r"<[^<>]*>?")  # stops at the next "<", so unclosed tags can't make it slow
+_SKIPPED = re.compile(r"<(script|style)\b[^<>]*>", re.IGNORECASE)
 
 
 def html_to_text(html: str) -> str:
-    p = _Text()
-    try:
-        p.feed(html)
-        p.close()
-    except Exception:  # noqa: S110  odd HTML: keep what was read
-        pass
-    return " ".join(" ".join(p.out).split())
+    """Plain text for search. Bounded and linear in the size of the HTML, so a hostile body
+    can't hang the backup."""
+    html = html[: MAX_BODY_CHARS * 2]
+    lowered = html.lower()
+    parts: list[str] = []
+    pos = 0
+    while pos < len(html):
+        m = _SKIPPED.search(html, pos)
+        end = m.start() if m else len(html)
+        parts.append(_TAG.sub(" ", html[pos:end]))
+        if not m:
+            break
+        close = lowered.find(f"</{m.group(1).lower()}", m.end())
+        if close < 0:
+            break
+        gt = html.find(">", close)
+        pos = len(html) if gt < 0 else gt + 1
+    return " ".join(unescape(" ".join(parts)).split())
 
 
 def _body_text(msg: EmailMessage) -> str:
     try:
         part = msg.get_body(preferencelist=("plain", "html"))
-        content = part.get_content() if part is not None else ""
+        if part is None:
+            return ""
+        content = part.get_content()
     except Exception:
         return ""
     if not isinstance(content, str):
@@ -189,23 +202,26 @@ def parse_eml(raw: bytes) -> ParsedMail:
         msg = read_message(raw)
     except Exception:
         return ParsedMail()
-    atts = [
-        {
-            "name": part_filename(p) or "attachment",
-            "type": p.get_content_type(),
-            "size": _payload_size(p),
-        }
-        for p in attachment_parts(msg)
-    ]
-    return ParsedMail(
+    parsed = ParsedMail(
         message_id=_header(msg, "Message-ID") or None,
         from_addr=_header(msg, "From"),
         to_addrs=_header(msg, "To"),
         cc_addrs=_header(msg, "Cc"),
         subject=_header(msg, "Subject"),
-        attachments=atts,
-        body_text=_body_text(msg),
     )
+    try:
+        parsed.attachments = [
+            {
+                "name": part_filename(p) or "attachment",
+                "type": p.get_content_type(),
+                "size": _payload_size(p),
+            }
+            for p in attachment_parts(msg)
+        ]
+        parsed.body_text = _body_text(msg)
+    except Exception:  # keep what was read
+        log.debug("mail read stopped early", exc_info=True)
+    return parsed
 
 
 def sweep_temp_files(layout: Layout) -> int:

@@ -1,6 +1,7 @@
 import hashlib
 import shutil
 from datetime import UTC, datetime, timedelta
+from email.message import EmailMessage
 
 import pytest
 from sqlalchemy import text
@@ -132,3 +133,39 @@ def test_failures_back_off_and_show_after_three_tries(db, make_account):
     assert index.retry_after(20) == timedelta(days=1)  # at most once a day
     index.clear_failure(db, acc.id, "bad1")
     assert index.shown_failures(db, acc.id) == []
+
+
+def test_a_mail_with_only_an_attachment_parses():
+    msg = EmailMessage()
+    msg["Subject"], msg["From"], msg["To"] = "Scan", "a@example.com", "b@example.com"
+    msg.set_content(MINI_PDF, maintype="application", subtype="pdf", filename="a.pdf")
+    raw = msg.as_bytes()
+    p = parse_eml(raw)
+    assert p.body_text == "" and [a["name"] for a in p.attachments] == ["a.pdf"]
+
+
+def test_hostile_mail_parses_without_hanging():
+    import time
+
+    deep = (
+        b"Content-Type: multipart/mixed; boundary=b\r\n\r\n"
+        + b"--b\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n" * 200
+    )
+    many = (
+        b"Content-Type: multipart/mixed; boundary=b\r\n\r\n"
+        + (
+            b"--b\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=x.pdf\r\n\r\nabc\r\n"
+        )
+        * 2000
+        + b"--b--\r\n"
+    )
+    start = time.monotonic()
+    assert isinstance(parse_eml(deep).subject, str)
+    assert len(parse_eml(many).attachments) >= 1
+    for bad in ("<a " * 100000, "<!--" * 100000):
+        html_to_text(bad)
+        raw = b"Content-Type: text/html\r\n\r\n" + bad.encode()
+        parse_eml(raw)
+    big = b"Content-Type: text/plain\r\n\r\n" + b"word " * 2_000_000
+    assert len(parse_eml(big).body_text) <= 200_000
+    assert time.monotonic() - start < 5
