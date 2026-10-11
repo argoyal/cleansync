@@ -16,6 +16,26 @@ CleanSync needs its own Google OAuth client to read and write your Drive and, if
 5. Copy the client ID and secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` and restart CleanSync.
 6. For mail backup, also enable the Gmail API and add the `gmail.modify` scope: see [Setting up mail backup](mail-backup.md).
 
+## Branding page (needed to publish)
+
+Google won't publish the app until its Branding page is filled in. CleanSync serves the two
+pages Google asks for, with no login: `/privacy` and `/terms`. Set `CONTACT_EMAIL` so they show
+your address.
+
+| Field | Value |
+|---|---|
+| App name | CleanSync |
+| User support email | your email |
+| App logo | `frontend/public/favicon.svg` turned into a 120 × 120 px PNG (optional; Google only shows it after verification) |
+| Application home page | `https://<your address>/` |
+| Privacy policy link | `https://<your address>/privacy` |
+| Terms of service link | `https://<your address>/terms` |
+| Authorized domains | the domain your address is on (e.g. `example.com`) |
+| Developer contact email | your email |
+
+Google may ask you to prove you own the domain: verify it in Google Search Console with a
+DNS TXT record.
+
 ## No public HTTPS address?
 Google only redirects to `https://` addresses or `http://localhost`. Options:
 - Put CleanSync behind your reverse proxy with a certificate, or use Tailscale/Cloudflare Tunnel.

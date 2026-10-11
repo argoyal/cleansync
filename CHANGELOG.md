@@ -3,6 +3,7 @@
 ## 0.2.0 — not released yet
 
 - DriveSync is now called CleanSync. The data folder, `.drivesync-volume` and the environment variables keep their names, so an existing installation upgrades in place. The image is `ghcr.io/argoyal/cleansync`.
+- Public `/privacy` and `/terms` pages for Google's consent screen (Branding page). Their contact address comes from the new `CONTACT_EMAIL` setting.
 - Upgrading: the example compose service is renamed from `drivesync` to `cleansync`. Run `docker compose up -d --remove-orphans` once when you upgrade, so the old `drivesync` container goes away.
 - The + New button and uploads are hidden in 0.2.0 (one switch; the code stays and comes back later). "Sync a Drive folder…" moved to the Files panel.
 - New navigation: an icon rail (Files, Mail, Activity, Recovery, Settings) with a panel for each section; a bottom bar on phones.

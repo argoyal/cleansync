@@ -68,6 +68,7 @@ from app.services.sync.initial import InitialSync
 from app.services.sync.recovery import recover_interrupted
 from app.services.volume import open_volume
 from app.services.watcher import LocalWatcher, self_test
+from app.web import legal
 from app.web.security import SecurityHeaders
 from app.web.spa import mount_spa
 
@@ -383,6 +384,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         docs.router,
     ):
         app.include_router(router)
+    app.include_router(legal.router)
     app.add_middleware(SecurityHeaders)
     mount_spa(app, settings.frontend_dir)  # last: its catch-all route must not shadow the API
     return app
