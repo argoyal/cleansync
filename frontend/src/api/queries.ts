@@ -10,6 +10,7 @@ import type {
   Conflict,
   FileItem,
   FolderEntry,
+  GoogleUsage,
   Job,
   Me,
   Offload,
@@ -37,6 +38,8 @@ export const usePairs = () => useQuery({ queryKey: ["pairs"], queryFn: () => api
 export const usePair = (id: number) =>
   useQuery({ queryKey: ["pairs", id], queryFn: () => api<Pair>(`/api/sync-pairs/${id}`) });
 export const useStatus = () => useQuery({ queryKey: ["status"], queryFn: () => api<Status>("/api/status") });
+export const useGoogleUsage = () =>
+  useQuery({ queryKey: ["google-usage"], queryFn: () => api<GoogleUsage>("/api/google/usage") });
 export const useSetup = () => useQuery({ queryKey: ["setup"], queryFn: () => api<Setup>("/api/setup") });
 export const useSystem = () => useQuery({ queryKey: ["system"], queryFn: () => api<SystemInfo>("/api/system") });
 export const useAppSettings = () =>

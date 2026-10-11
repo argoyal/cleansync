@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -13,9 +14,11 @@ from app.services.drive_api.tokens import (
     DriveNotFoundError,
     TokenProvider,
     json_or_none,
-    post_or_none,
     request_or_none,
 )
+
+if TYPE_CHECKING:
+    from app.services.google.client import GoogleClient
 
 FILES_URL = "https://www.googleapis.com/drive/v3/files"
 NATIVE_MIME = {
@@ -84,9 +87,20 @@ class DriveApi:
         self,
         tokens: TokenProvider,
         http_factory: Callable[[], httpx.AsyncClient] = lambda: httpx.AsyncClient(timeout=30),
+        google: "GoogleClient | None" = None,
     ) -> None:
         self.tokens = tokens
         self.http_factory = http_factory
+        self.google = google
+
+    async def _send(self, remote_name: str, op: str, method: str, url: str, **kwargs):
+        if self.google is None:
+            return await request_or_none(self.http_factory, method, url, **kwargs)
+        # Counted against the day's budget (spec §7) but never refused or held back by it:
+        # Drive behaves as in 0.1.0.
+        return await self.google.request(
+            remote_name, op, method, url, enforce_budget=False, wait_out_rate_limits=False, **kwargs
+        )
 
     async def create_native(
         self, remote_name: str, kind: str, name: str, parent_id: str
@@ -100,8 +114,10 @@ class DriveApi:
         resp: httpx.Response | None = None
         for attempt in (1, 2):
             token = await self.tokens.access_token(remote_name)
-            resp = await post_or_none(
-                self.http_factory,
+            resp = await self._send(
+                remote_name,
+                "drive.files.create",
+                "POST",
                 FILES_URL,
                 params={"fields": "id,name,mimeType"},
                 json=body,
@@ -129,12 +145,15 @@ class DriveApi:
             raise DriveApiError("Google Drive gave an unexpected answer")
         return CreatedFile(id=file_id, name=str(data.get("name", name)), mime=NATIVE_MIME[kind])
 
-    async def _call(self, remote_name: str, method: str, url: str, **kwargs) -> httpx.Response:
+    async def _call(
+        self, remote_name: str, op: str, method: str, url: str, **kwargs
+    ) -> httpx.Response:
         resp: httpx.Response | None = None
         for attempt in (1, 2):
             token = await self.tokens.access_token(remote_name)
-            resp = await request_or_none(
-                self.http_factory,
+            resp = await self._send(
+                remote_name,
+                op,
                 method,
                 url,
                 headers={"Authorization": f"Bearer {token}"},
@@ -155,6 +174,7 @@ class DriveApi:
         file (deleted for good). Anything unexpected raises DriveApiError."""
         resp = await self._call(
             remote_name,
+            "drive.files.get",
             "GET",
             f"{FILES_URL}/{_file_id(file_id)}",
             params={"fields": "id,trashed,size,md5Checksum", "supportsAllDrives": "true"},
@@ -194,7 +214,11 @@ class DriveApi:
         if not state.trashed or not state.matches(size, md5):
             return False
         resp = await self._call(
-            remote_name, "DELETE", f"{FILES_URL}/{file_id}", params={"supportsAllDrives": "true"}
+            remote_name,
+            "drive.files.delete",
+            "DELETE",
+            f"{FILES_URL}/{file_id}",
+            params={"supportsAllDrives": "true"},
         )
         if resp.status_code in (200, 204, 404):
             return True

@@ -302,3 +302,4 @@ export type RecoveryEntry = {
 };
 export type RecoveryList = { total: number; entries: RecoveryEntry[] };
 export type RestoreResult = { id: string; restored_to: string | null; error: string | null };
+export type GoogleUsage = { day: string; used: number; budget: number; drive_estimate: number; reached: boolean };

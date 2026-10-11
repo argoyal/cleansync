@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.models.enums import (
 )
 from app.paths import Layout
 from app.services.events.bus import EventBus, record_event
+from app.services.google.quota import drive_run_estimate
 from app.services.rclone.commands import BisyncTarget, RcloneEnv, bisync_args, sync_args
 from app.services.rclone.errors import Failure, classify_failure
 from app.services.rclone.parse import (
@@ -80,6 +82,9 @@ class SyncEngine:
         self.runner = runner
         self.clock = clock
         self.initial = None  # set by InitialSync (Task 12)
+        self.on_api_estimate: Callable[[int], None] | None = (
+            None  # spec §7: rclone's Drive calls, estimated
+        )
 
     # ---- helpers reused by other services -------------------------------------------------
     def start_job(self, db: Session, pair: SyncPair, kind: str, trigger: str) -> SyncJob:
@@ -125,6 +130,17 @@ class SyncEngine:
         self.bus.publish(
             "job", {"pair_id": job.pair_id, "job_id": job.id, "kind": job.kind, "state": state}
         )
+        if self.on_api_estimate is not None and job.kind in (
+            JobKind.DRY_RUN,
+            JobKind.BISYNC,
+            JobKind.SYNC,
+            JobKind.RESYNC,
+            JobKind.PREVIEW,
+        ):
+            try:
+                self.on_api_estimate(drive_run_estimate(job.files_changed or 0))
+            except Exception:  # an estimate must never break a sync
+                log.exception("could not add the Drive estimate for job %s", job.id)
 
     def set_status(
         self, db: Session, pair: SyncPair, status: str, reason: str | None = None

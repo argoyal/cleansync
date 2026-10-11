@@ -15,6 +15,7 @@ from app.api import (
     events,
     fileops,
     files,
+    google,
     health,
     jobs,
     offloads,
@@ -45,6 +46,8 @@ from app.services.files.moves import DriveMover
 from app.services.files.status import StatusIndexes
 from app.services.files.thumbs import Thumbnails
 from app.services.files.upload import clear_uploads, sweep_upload_leftovers
+from app.services.google.client import GoogleClient
+from app.services.google.quota import ApiBudget, Pacer
 from app.services.offload.service import OffloadService
 from app.services.offload.store import recover_offloads, sweep_delete_lists
 from app.services.queue import DB_BROKEN_MSG, SyncQueue, make_handler
@@ -153,6 +156,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             await app.state.offloads.stop()
             await app.state.queue.stop()
             await app.state.catalog.stop()
+            app.state.budget.flush()
 
     app = FastAPI(
         lifespan=lifespan,
@@ -227,10 +231,18 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     )
     app.state.indexes.on_refreshed = lambda pair: app.state.file_changes.notify(pair.account_id)
     app.state.thumbs = Thumbnails(layout.thumbs_dir)
-    app.state.drive_api = DriveApi(
-        TokenProvider(settings=settings, rclone_env=app.state.rclone_env)
-    )
-    app.state.accounts.on_login_changed = app.state.drive_api.tokens.forget
+
+    def _budget_setting() -> int:
+        with session_factory() as db:
+            return int(get_setting(db, "google_daily_budget_units"))  # type: ignore[arg-type]
+
+    app.state.budget = ApiBudget(session_factory, budget=_budget_setting)
+    app.state.pacer = Pacer()
+    app.state.google = GoogleClient(budget=app.state.budget, pacer=app.state.pacer)
+    app.state.tokens = TokenProvider(settings=settings, rclone_env=app.state.rclone_env)
+    app.state.drive_api = DriveApi(app.state.tokens, google=app.state.google)
+    app.state.engine.on_api_estimate = app.state.budget.add_drive_estimate
+    app.state.accounts.on_login_changed = app.state.tokens.forget
     # Spec §3.2: the Drive calls made outside a sync run go through the Files adapter.
     app.state.files = FilesAdapters(
         {
@@ -303,6 +315,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         recovery.router,
         conflicts.router,
         system.router,
+        google.router,
         docs.router,
     ):
         app.include_router(router)
