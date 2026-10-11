@@ -3,19 +3,19 @@ import { type FormEvent, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api, friendlyError } from "../api/client";
-import { useAccounts, useAppSettings, useSystem } from "../api/queries";
+import { useAccounts, useAppSettings, useGoogleUsage, useSystem } from "../api/queries";
 import type { Account, AppSettings } from "../api/types";
 import { Avatar } from "../components/AccountSwitcher";
 import { ACCOUNT_DOT } from "../components/StatusBadge";
 import { ThemeSwitch } from "../components/ThemeSwitch";
 import { useToast } from "../components/Toasts";
-import { Button, Dialog, Field, inputClass, Notice } from "../components/ui";
+import { Bar, Button, Dialog, Field, inputClass, Notice } from "../components/ui";
 import { useConnectGoogle } from "../hooks/useConnect";
-import { formatBytes, formatRelative } from "../lib/format";
+import { formatBytes, formatRelative, percent } from "../lib/format";
 import { PasswordForm } from "./ChangePasswordPage";
 
 /** The Settings tabs; the section panel lists the same ones. */
-export const TABS = { general: "General", accounts: "Accounts", sync: "Sync defaults", security: "Security", system: "System" } as const;
+export const TABS = { general: "General", accounts: "Accounts", sync: "Sync defaults", mail: "Mail", google: "Google API", security: "Security", system: "System" } as const;
 type Tab = keyof typeof TABS;
 
 export function SettingsPage() {
@@ -41,6 +41,8 @@ export function SettingsPage() {
         {tab === "general" && <General />}
         {tab === "accounts" && <Accounts />}
         {tab === "sync" && <SyncDefaults />}
+        {tab === "mail" && <MailSettings />}
+        {tab === "google" && <GoogleApiSettings />}
         {tab === "security" && <Security />}
         {tab === "system" && <System />}
       </section>
@@ -277,6 +279,92 @@ function SyncDefaults() {
         max={8}
         onSave={(v) => save.mutate({ max_parallel_pairs: v })}
       />
+    </div>
+  );
+}
+
+const MAIL_INTERVALS: [number, string][] = [
+  [60, "Every minute"],
+  [300, "Every 5 minutes"],
+  [900, "Every 15 minutes"],
+  [1800, "Every 30 minutes"],
+  [3600, "Every hour"],
+];
+
+/** Spec §8: the Mail settings. */
+function MailSettings() {
+  const settings = useAppSettings().data;
+  const save = useSaveSettings();
+  if (!settings) return null;
+  return (
+    <div className="space-y-6">
+      <Field label="Check for new mail" hint="How often CleanSync asks Gmail what changed.">
+        <select className={`${inputClass} w-56`} value={settings.mail_check_interval_s} onChange={(e) => save.mutate({ mail_check_interval_s: Number(e.target.value) })}>
+          {MAIL_INTERVALS.map(([s, label]) => (
+            <option key={s} value={s}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <NumberSetting
+        label="Never offload mail newer than (days)"
+        hint="Recent mail always stays in Gmail. The default is 30 days."
+        value={settings.mail_min_age_days}
+        min={1}
+        max={3650}
+        onSave={(v) => save.mutate({ mail_min_age_days: v })}
+      />
+      <NumberSetting
+        label="Mails per offload batch"
+        value={settings.mail_batch_size}
+        min={1}
+        max={1000}
+        onSave={(v) => save.mutate({ mail_batch_size: v })}
+      />
+      <NumberSetting
+        label="Pause the backup when free space drops below (GB)"
+        value={settings.mail_disk_floor_gb}
+        min={1}
+        max={10000}
+        onSave={(v) => save.mutate({ mail_disk_floor_gb: v })}
+      />
+    </div>
+  );
+}
+
+/** Spec §7: units used today and the budget. */
+function GoogleApiSettings() {
+  const usage = useGoogleUsage().data;
+  const settings = useAppSettings().data;
+  const save = useSaveSettings();
+  return (
+    <div className="space-y-6">
+      {usage && (
+        <div className="space-y-1.5">
+          <Bar label="Google API units used today" value={percent(usage.used, usage.budget)} tone={usage.reached ? "err" : "accent"} />
+          <p className="text-table tabular">
+            {usage.used.toLocaleString()} of {usage.budget.toLocaleString()} units used today (UTC).
+            {usage.reached ? " Mail jobs are paused until midnight UTC." : ""}
+          </p>
+          <p className="text-table tabular text-ink-2">
+            Drive syncs, estimated: about {usage.drive_estimate.toLocaleString()} units today. They don't count against the budget.
+          </p>
+        </div>
+      )}
+      <p className="text-table text-ink-2">
+        Google plans to charge above 80,000,000 units a day per Google Cloud project. CleanSync keeps to its own daily budget, far below that, so it never costs
+        money.
+      </p>
+      {settings && (
+        <NumberSetting
+          label="Daily budget (units)"
+          value={settings.google_daily_budget_units}
+          min={1}
+          max={80_000_000}
+          onSave={(v) => save.mutate({ google_daily_budget_units: v })}
+        />
+      )}
     </div>
   );
 }

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { useActivity, useCatalog, useLogs, usePairs } from "../api/queries";
-import type { ActivityEvent, Pair } from "../api/types";
+import { useActivity, useActivityJobs, useCatalog, useLogs, useMailOverview, usePairs } from "../api/queries";
+import type { ActivityEvent, ActivityJob, Pair } from "../api/types";
+import { Icon } from "../components/Icon";
+import { MailBackupStatus } from "../components/MailBackupStatus";
 import { AttentionNotice, PairActions } from "../components/PairActions";
 import { PairStatusPill } from "../components/StatusBadge";
 import { Empty } from "../components/ui";
@@ -94,9 +96,48 @@ export function ActivityFeed({ events }: { events: ActivityEvent[] }) {
   );
 }
 
+const STATE_TEXT: Record<string, string> = {
+  SUCCESS: "Done",
+  FAILED: "Failed",
+  PAUSED: "Paused",
+  RUNNING: "Running",
+  BLOCKED: "Waiting for you",
+  INTERRUPTED: "Stopped",
+  CANCELLED: "Cancelled",
+  QUEUED: "Waiting",
+};
+
+/** Spec §3.4: Drive syncs and mail jobs in one list, each with its log. */
+export function RecentJobs({ jobs }: { jobs: ActivityJob[] }) {
+  if (jobs.length === 0) return null;
+  return (
+    <section>
+      <h2 className="mb-2 text-section font-semibold">Recent jobs</h2>
+      <ul aria-label="Recent jobs" className="divide-y divide-line">
+        {jobs.map((j) => (
+          <li key={`${j.source}-${j.id}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-table">
+            <Icon name={j.source === "mail" ? "mail" : "folder"} className="text-ink-2" />
+            <span className="font-medium">{j.title}</span>
+            <span className="text-ink-2">{STATE_TEXT[j.state] ?? j.state}</span>
+            {j.message && <span className="min-w-0 flex-1 truncate text-ink-2">{j.message}</span>}
+            <time className="ml-auto shrink-0 tabular text-ink-2" dateTime={j.started_at ?? undefined}>
+              {formatWhen(j.started_at)}
+            </time>
+            <a className="font-semibold text-accent" href={j.log_url} aria-label={`Log of ${j.title}`}>
+              Log
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function ActivityPage() {
   const { data: pairs = [], isPending } = usePairs();
   const activity = useActivity();
+  const mail = useMailOverview().data ?? [];
+  const jobs = useActivityJobs().data ?? [];
   const running = pairs.find((p) => p.status === "RUNNING");
   return (
     <div className="space-y-8 p-4 sm:p-6">
@@ -113,6 +154,15 @@ export function ActivityPage() {
           <PairCard key={p.id} pair={p} />
         ))}
       </div>
+      {mail.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-section font-semibold">Mail backup</h2>
+          {mail.map((m) => (
+            <MailBackupStatus key={m.account_id} account={{ id: m.account_id, email: m.email }} title={`Mail: ${m.email}`} />
+          ))}
+        </section>
+      )}
+      <RecentJobs jobs={jobs} />
       {running && (
         <section>
           <p className="mb-2 text-table text-ink-2">Live: {running.name}</p>

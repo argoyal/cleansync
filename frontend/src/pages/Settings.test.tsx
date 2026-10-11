@@ -269,3 +269,41 @@ describe("setup wizard skip", () => {
     expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/$/);
   });
 });
+
+const MAIL_SETTINGS = { ...SETTINGS, mail_check_interval_s: 300, mail_min_age_days: 30, mail_batch_size: 100, mail_disk_floor_gb: 2, google_daily_budget_units: 10_000_000 };
+
+describe("mail and Google API settings", () => {
+  it("changes how often mail is checked and the offload and disk limits", async () => {
+    const { calls } = mockApi({ "GET /api/settings": MAIL_SETTINGS, "PUT /api/settings": ({ body }: { body: object }) => ({ ...MAIL_SETTINGS, ...body }) });
+    renderApp(<SettingsPage />, { route: "/settings?tab=mail", path: "/settings" });
+    await userEvent.selectOptions(await screen.findByLabelText("Check for new mail"), "900");
+    await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ mail_check_interval_s: 900 }));
+    const age = screen.getByLabelText("Never offload mail newer than (days)");
+    await userEvent.clear(age);
+    await userEvent.type(age, "60{Enter}");
+    await waitFor(() => expect(calls.filter((c) => c.method === "PUT").at(-1)?.body).toEqual({ mail_min_age_days: 60 }));
+    expect(screen.getByLabelText("Mails per offload batch")).toHaveValue("100");
+    expect(screen.getByLabelText("Pause the backup when free space drops below (GB)")).toHaveValue("2");
+  });
+
+  it("shows Google API units used today, the Drive estimate, and the budget", async () => {
+    mockApi({
+      "GET /api/settings": MAIL_SETTINGS,
+      "GET /api/google/usage": { day: "2026-10-10", used: 1_250_000, budget: 10_000_000, drive_estimate: 4_300, reached: false },
+    });
+    renderApp(<SettingsPage />, { route: "/settings?tab=google", path: "/settings" });
+    expect(await screen.findByText("1,250,000 of 10,000,000 units used today (UTC).")).toBeInTheDocument();
+    expect(screen.getByText("Drive syncs, estimated: about 4,300 units today. They don't count against the budget.")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Google API units used today" })).toHaveAttribute("aria-valuenow", "13");
+    expect(screen.getByLabelText("Daily budget (units)")).toHaveValue("10000000");
+  });
+
+  it("says when mail waits for the next UTC day", async () => {
+    mockApi({
+      "GET /api/settings": MAIL_SETTINGS,
+      "GET /api/google/usage": { day: "2026-10-10", used: 10_000_000, budget: 10_000_000, drive_estimate: 0, reached: true },
+    });
+    renderApp(<SettingsPage />, { route: "/settings?tab=google", path: "/settings" });
+    expect(await screen.findByText("10,000,000 of 10,000,000 units used today (UTC). Mail jobs are paused until midnight UTC.")).toBeInTheDocument();
+  });
+});
