@@ -52,6 +52,31 @@ describe("message list", () => {
     expect(within(rows[2]).getByText("Deleted in Gmail")).toBeInTheDocument();
   });
 
+  it("puts the marks and date in a row's spoken name", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", unread: true, has_attachments: true, offloaded: true, deleted: true })], next_cursor: null, total: 1, total_bytes: 10 },
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail" });
+    const link = await screen.findByRole("link", { name: /Your invoice/ });
+    expect(link).toHaveAccessibleName(/unread.*has attachments.*offloaded.*deleted in Gmail/);
+    expect(link).toHaveAccessibleName(/Oct/);
+  });
+
+  it("keeps loaded rows when Show more fails", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/threads": ({ url }: { url: URL }) =>
+        url.searchParams.get("cursor") === "c2"
+          ? json(500, { detail: "Could not load more." })
+          : { threads: [thread({ thread_id: "t1", subject: "First" })], next_cursor: "c2", total: 2, total_bytes: 10 },
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail" });
+    await userEvent.click(await screen.findByRole("button", { name: "Show more" }));
+    expect(await screen.findByText("Could not load more.")).toBeInTheDocument();
+    expect(screen.getByText("First")).toBeInTheDocument();
+  });
+
   it("loads more a page at a time", async () => {
     const { calls } = mockApi({
       "GET /api/accounts": [ACTIVE],

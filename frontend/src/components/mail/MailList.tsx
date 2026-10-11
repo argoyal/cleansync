@@ -19,7 +19,14 @@ function Mark({ children }: { children: string }) {
 
 function Row({ t, href, open }: { t: ThreadRow; href: string; open: boolean }) {
   const name = sender(t.from_addr);
-  const label = `${name}, ${t.subject || "(no subject)"}${t.count > 1 ? `, ${t.count} mails` : ""}`;
+  const parts = [name, t.subject || "(no subject)"];
+  if (t.count > 1) parts.push(`${t.count} mails`);
+  if (t.unread) parts.push("unread");
+  if (t.has_attachments) parts.push("has attachments");
+  if (t.offloaded) parts.push("offloaded");
+  if (t.deleted) parts.push("deleted in Gmail");
+  parts.push(formatWhen(t.last_date));
+  const label = parts.join(", ");
   return (
     <li>
       <Link
@@ -49,8 +56,9 @@ function Row({ t, href, open }: { t: ThreadRow; href: string; open: boolean }) {
 
 export function MailList({ accountId, view, label, q, thread }: { accountId: number; view: string; label: string; q: string; thread: string }) {
   const list = useMailThreads(accountId, { view, label, q });
-  if (list.isError) return <div className="p-4"><Notice tone="err">{friendlyError(list.error)}</Notice></div>;
   const rows = list.data?.pages.flatMap((p) => p.threads) ?? [];
+  if (list.isError && rows.length === 0) return <div className="p-4"><Notice tone="err">{friendlyError(list.error)}</Notice></div>;
+  if (list.isPending) return <p className="p-6 text-ink-2">Loading…</p>;
   if (list.isSuccess && rows.length === 0) return <p className="p-6 text-ink-2">No mail here.</p>;
   return (
     <div>
@@ -59,6 +67,11 @@ export function MailList({ accountId, view, label, q, thread }: { accountId: num
           <Row key={t.thread_id} t={t} open={t.thread_id === thread} href={mailHref({ view, label, q, thread: t.thread_id })} />
         ))}
       </ul>
+      {list.isError && (
+        <div className="p-3">
+          <Notice tone="err">{friendlyError(list.error)}</Notice>
+        </div>
+      )}
       {list.hasNextPage && (
         <div className="p-3 text-center">
           <Button disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
