@@ -90,6 +90,7 @@ class MailService:
             "backup": self._backup
         }
         self.queue = MailQueue(self.handle, is_stopped=self.stopped, settle=self.settle)
+        self.tick_hooks: list[Callable[[], None]] = []  # Plan 4: waiting offloads
 
     # ---- small helpers -------------------------------------------------------------------
     async def stopped(self) -> bool:
@@ -220,6 +221,11 @@ class MailService:
     # ---- the schedule ------------------------------------------------------------------
     async def tick(self) -> None:
         """Once a minute: start a check for each account whose interval has passed."""
+        for hook in self.tick_hooks:
+            try:
+                hook()
+            except Exception:
+                log.exception("a mail tick hook failed")
         if self.budget.reached():
             return  # the day's budget is used up: wait for the next UTC day (spec §7)
         if await self.stopped():

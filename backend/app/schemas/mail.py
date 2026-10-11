@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic import BaseModel, Field
 
 from app.schemas.common import UtcDatetime
@@ -157,3 +159,41 @@ class OffloadPreviewOut(BaseModel):
     largest: list[MailBriefOut]
     oldest: list[MailBriefOut]
     excluded: list[ExcludedOut]
+
+
+class OffloadStartIn(MailPickIn):
+    confirm: int
+
+
+class OffloadStartedOut(BaseModel):
+    offload_id: int
+    queued: str = "queued"
+
+
+class MailOffloadOut(BaseModel):
+    id: int
+    account_id: int
+    filter_text: str
+    state: str
+    total: int
+    done: int
+    skipped: int
+    not_done: int
+    bytes: int
+    reason: str | None
+    created_at: UtcDatetime
+    finished_at: UtcDatetime | None
+    trash_until: date  # Gmail empties its trash by itself after 30 days
+    google_emptied: bool
+
+
+class SkippedOut(BaseModel):
+    message_id: int
+    subject: str
+    from_addr: str
+    date: UtcDatetime
+    reason: str
+
+
+class MailOffloadDetailOut(MailOffloadOut):
+    skipped_items: list[SkippedOut]
