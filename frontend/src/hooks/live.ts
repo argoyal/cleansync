@@ -41,6 +41,31 @@ function clearProgress(pairId: number) {
 const FILE_KEYS = ["browse", "recent", "starred", "search", "storage", "catalog"];
 /** Each Recovery refetch reads the whole backups folder: at most one every 5 seconds. */
 export const RECOVERY_REFRESH_MS = 5000;
+/** Mail events come in bursts (one per backup or offload batch): the reader's lists refresh
+ * at most once every 5 seconds. */
+export const MAIL_REFRESH_MS = 5000;
+const MAIL_KEYS = ["mail-status", "mail-overview", "mail-counts", "mail-threads", "mail-thread", "activity", "activity-jobs", "google-usage", "accounts"];
+
+/** Runs `fn` straight away, and at most once per `ms`: calls in between become one catch-up
+ * run at the end of that time, so the last state is always shown. */
+function throttle(fn: () => void, ms: number) {
+  let lastAt = -Infinity;
+  let timer: number | undefined;
+  const run = () => {
+    timer = undefined;
+    lastAt = Date.now();
+    fn();
+  };
+  return {
+    call() {
+      if (timer !== undefined) return;
+      const wait = lastAt + ms - Date.now();
+      if (wait <= 0) run();
+      else timer = window.setTimeout(run, wait);
+    },
+    stop: () => window.clearTimeout(timer),
+  };
+}
 
 /**
  * Keeps the UI live from /api/events (server-sent events). On a dropped connection it
@@ -58,19 +83,9 @@ export function useLiveEvents(): void {
     const invalidate = (keys: string[]) => keys.forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
     // Deletes, syncs and offloads put copies in Recovery. The first refresh is immediate; any
     // more within the next 5 s become one catch-up refresh at the end of that time.
-    let recoveryAt = -Infinity;
-    let recoveryTimer: number | undefined;
-    const refreshRecovery = () => {
-      if (recoveryTimer !== undefined) return;
-      const wait = recoveryAt + RECOVERY_REFRESH_MS - Date.now();
-      const run = () => {
-        recoveryTimer = undefined;
-        recoveryAt = Date.now();
-        invalidate(["recovery"]);
-      };
-      if (wait <= 0) run();
-      else recoveryTimer = window.setTimeout(run, wait);
-    };
+    const recovery = throttle(() => invalidate(["recovery"]), RECOVERY_REFRESH_MS);
+    const refreshRecovery = recovery.call;
+    const mail = throttle(() => invalidate(MAIL_KEYS), MAIL_REFRESH_MS);
     const data = (e: Event): unknown => {
       try {
         return JSON.parse((e as MessageEvent).data as string);
@@ -106,7 +121,7 @@ export function useLiveEvents(): void {
         refreshRecovery();
       });
       // Mail jobs (spec §4): progress, pauses and the end of each job.
-      source.addEventListener("mail", () => invalidate(["mail-status", "mail-overview", "mail-counts", "mail-threads", "mail-thread", "mail-message", "activity", "activity-jobs", "google-usage", "accounts"]));
+      source.addEventListener("mail", mail.call);
       source.addEventListener("pair", () => invalidate(["pairs", "status", "browse"]));
       source.addEventListener("progress", (e) => {
         const p = data(e) as Progress | null;
@@ -131,7 +146,8 @@ export function useLiveEvents(): void {
     return () => {
       stopped = true;
       window.clearTimeout(timer);
-      window.clearTimeout(recoveryTimer);
+      recovery.stop();
+      mail.stop();
       source?.close();
       liveStore.set("connecting");
       progressStore.set({});
