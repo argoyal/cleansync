@@ -8,8 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, load_only
 
 from app.core.clock import as_utc, utcnow
-from app.models import Account, MailMessage, MailOffload
-from app.models.enums import MailOffloadState, MailState
+from app.models import Account, MailJob, MailMessage, MailOffload
+from app.models.enums import JobState, MailJobKind, MailOffloadState, MailState
 from app.paths import Layout
 from app.services.mail.search import SearchError, mail_conditions
 from app.services.mail.store import eml_path
@@ -22,7 +22,9 @@ INTERRUPTED_OFFLOAD_MSG = (
 
 
 def recover_mail_offloads(db: Session) -> int:
-    """At startup: an offload a stop cut short ends as FAILED, with the reason.
+    """At startup: an offload a stop cut short ends as FAILED, with the reason, and so does
+    its mail job (runs before recover_mail_jobs, which would call it interrupted and going
+    on, so Activity and the offload's page agree).
 
     Only RUNNING ones. A WAITING offload (not started yet, or paused by the budget until
     the next UTC day) keeps waiting.
@@ -30,10 +32,20 @@ def recover_mail_offloads(db: Session) -> int:
     rows = list(
         db.scalars(select(MailOffload).where(MailOffload.state == MailOffloadState.RUNNING))
     )
+    now = utcnow()
     for off in rows:
         off.state = MailOffloadState.FAILED
         off.reason = INTERRUPTED_OFFLOAD_MSG
-        off.finished_at = utcnow()
+        off.finished_at = now
+        # One mail job runs at a time per account: its running offload job is this one's.
+        for job in db.scalars(
+            select(MailJob).where(
+                MailJob.account_id == off.account_id,
+                MailJob.kind == MailJobKind.OFFLOAD,
+                MailJob.state == JobState.RUNNING,
+            )
+        ):
+            job.state, job.message, job.completed_at = JobState.FAILED, INTERRUPTED_OFFLOAD_MSG, now
     db.commit()
     return len(rows)
 
