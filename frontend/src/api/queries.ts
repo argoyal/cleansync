@@ -1,8 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { api, ApiError, encodePath, query } from "./client";
 import type {
   Account,
+  ActivityJob,
   ActivityEvent,
   AppSettings,
   Browse,
@@ -10,7 +11,15 @@ import type {
   Conflict,
   FileItem,
   FolderEntry,
+  GoogleUsage,
   Job,
+  MailCounts,
+  MailMessageInfo,
+  MailOffload,
+  MailOffloadDetail,
+  MailRecoveryData,
+  MailSetupInfo,
+  MailStatus,
   Me,
   Offload,
   OffloadBatch,
@@ -22,6 +31,7 @@ import type {
   Status,
   Storage,
   SystemInfo,
+  ThreadPage,
 } from "./types";
 
 // Query keys start with a word the live-update hook (hooks/live.ts) can invalidate by.
@@ -37,6 +47,8 @@ export const usePairs = () => useQuery({ queryKey: ["pairs"], queryFn: () => api
 export const usePair = (id: number) =>
   useQuery({ queryKey: ["pairs", id], queryFn: () => api<Pair>(`/api/sync-pairs/${id}`) });
 export const useStatus = () => useQuery({ queryKey: ["status"], queryFn: () => api<Status>("/api/status") });
+export const useGoogleUsage = () =>
+  useQuery({ queryKey: ["google-usage"], queryFn: () => api<GoogleUsage>("/api/google/usage") });
 export const useSetup = () => useQuery({ queryKey: ["setup"], queryFn: () => api<Setup>("/api/setup") });
 export const useSystem = () => useQuery({ queryKey: ["system"], queryFn: () => api<SystemInfo>("/api/system") });
 export const useAppSettings = () =>
@@ -184,3 +196,86 @@ export const useRecovery = (accountId: number | null, f: RecoveryFilters) =>
 export const recoveryFileUrl = (accountId: number, id: string) => `/api/recovery/file${query({ account_id: accountId, id })}`;
 /** Where a ticket from POST /api/recovery/zip is downloaded (one use, a few minutes). */
 export const recoveryZipUrl = (token: string) => `/api/recovery/zip/${encodeURIComponent(token)}`;
+
+export const useMailStatus = (accountId: number | null, enabled = true) =>
+  useQuery({
+    queryKey: ["mail-status", accountId],
+    queryFn: () => api<MailStatus>(`/api/mail/status${query({ account_id: accountId })}`),
+    enabled: accountId !== null && enabled,
+    // Live events say when a job moves; this keeps the progress line fresh between them.
+    refetchInterval: (q) => (q.state.data?.running || q.state.data?.waiting ? 3000 : false),
+  });
+export const useMailCounts = (accountId: number | null, enabled = true) =>
+  useQuery({
+    queryKey: ["mail-counts", accountId],
+    queryFn: () => api<MailCounts>(`/api/mail/counts${query({ account_id: accountId })}`),
+    enabled: accountId !== null && enabled,
+  });
+export const useMailOverview = () => useQuery({ queryKey: ["mail-overview"], queryFn: () => api<MailStatus[]>("/api/mail/overview") });
+export const useMailSetupInfo = (accountId: number, enabled: boolean) =>
+  useQuery({
+    queryKey: ["mail-setup-info", accountId],
+    queryFn: () => api<MailSetupInfo>(`/api/mail/setup-info${query({ account_id: accountId })}`),
+    enabled,
+    retry: false,
+    staleTime: 60_000,
+  });
+export const useActivityJobs = () =>
+  useQuery({ queryKey: ["activity-jobs"], queryFn: () => api<ActivityJob[]>("/api/activity/jobs?limit=30") });
+
+export const useMailThreads = (accountId: number, p: { view: string; label: string; q: string }) =>
+  useInfiniteQuery({
+    queryKey: ["mail-threads", accountId, p.view, p.label, p.q],
+    queryFn: ({ pageParam }) =>
+      api<ThreadPage>(
+        `/api/mail/threads${query({ account_id: accountId, view: p.view, label: p.label || undefined, q: p.q || undefined, cursor: pageParam || undefined, limit: 50 })}`,
+      ),
+    initialPageParam: "",
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    retry: false,
+  });
+
+export const useMailThread = (accountId: number, threadId: string) =>
+  useQuery({
+    queryKey: ["mail-thread", accountId, threadId],
+    queryFn: () => api<MailMessageInfo[]>(`/api/mail/threads/${encodeURIComponent(threadId)}${query({ account_id: accountId })}`),
+    enabled: threadId !== "",
+  });
+/** One mail in full; the server reads its file to tell if it has remote images. */
+export const useMailMessage = (id: number, enabled = true) =>
+  useQuery({ queryKey: ["mail-message", id], queryFn: () => api<MailMessageInfo>(`/api/mail/messages/${id}`), enabled });
+export const mailBodyUrl = (id: number, images: boolean) => `/api/mail/messages/${id}/body${images ? "?images=1" : ""}`;
+export const mailAttachmentUrl = (id: number, index: number, download = false) =>
+  `/api/mail/messages/${id}/attachments/${index}${download ? "?download=1" : ""}`;
+export const mailEmlUrl = (id: number) => `/api/mail/messages/${id}/eml`;
+
+const OFFLOAD_BUSY = ["WAITING", "RUNNING"];
+export const useMailOffloads = (accountId: number | null) =>
+  useQuery({
+    queryKey: ["mail-offloads", accountId],
+    queryFn: () => api<MailOffload[]>(`/api/mail/offloads${query({ account_id: accountId })}`),
+    enabled: accountId !== null,
+  });
+/** One offload; asked again every 2 s while it waits or runs. Not asked for an id that
+ * isn't a whole number (null). */
+export const useMailOffload = (id: number | null) =>
+  useQuery({
+    queryKey: ["mail-offload", id],
+    queryFn: () => api<MailOffloadDetail>(`/api/mail/offloads/${id}`),
+    enabled: id !== null,
+    retry: false,
+    refetchInterval: (q) => (OFFLOAD_BUSY.includes(q.state.data?.state ?? "") ? 2000 : false),
+  });
+/** Mail in Recovery, a page of offloads at a time (the server takes at most 200 a page). */
+export const MAIL_RECOVERY_PAGE = 50;
+export const useMailRecovery = (accountId: number | null) =>
+  useInfiniteQuery({
+    queryKey: ["mail-recovery", accountId],
+    queryFn: ({ pageParam }) =>
+      api<MailRecoveryData>(`/api/recovery/mail${query({ account_id: accountId, limit: MAIL_RECOVERY_PAGE, offset: pageParam })}`),
+    initialPageParam: 0,
+    // The server sends no total: a short page is the last one.
+    getNextPageParam: (last, pages) => (last.offloads.length < MAIL_RECOVERY_PAGE ? undefined : pages.length * MAIL_RECOVERY_PAGE),
+    enabled: accountId !== null,
+    retry: false,
+  });

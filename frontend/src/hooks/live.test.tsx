@@ -59,6 +59,28 @@ describe("live updates", () => {
     expect(keys(spy)).not.toContain("recovery");
   });
 
+  it("refreshes the mail reader on a mail event at most once every 5 seconds, with a last catch-up", () => {
+    vi.useFakeTimers();
+    const { spy, source } = setup();
+    const count = (k: string) => keys(spy).filter((x) => x === k).length;
+    act(() => source.emit("mail", { account_id: 1 }));
+    expect(keys(spy)).toEqual(
+      expect.arrayContaining(["mail-status", "mail-counts", "mail-threads", "mail-thread", "activity-jobs", "mail-offloads", "mail-offload", "mail-recovery"]),
+    );
+    expect(keys(spy)).not.toContain("mail-message"); // whether a mail has remote images never changes
+    expect(count("mail-threads")).toBe(1);
+    for (let i = 0; i < 20; i++) act(() => source.emit("mail", { account_id: 1 }));
+    act(() => vi.advanceTimersByTime(4999));
+    expect(count("mail-threads")).toBe(1); // held back
+    act(() => vi.advanceTimersByTime(1));
+    expect(count("mail-threads")).toBe(2); // one catch-up for all twenty
+    expect(count("mail-offload")).toBe(2); // offloads ride the same throttled refresh
+    act(() => vi.advanceTimersByTime(20_000));
+    expect(count("mail-threads")).toBe(2);
+    act(() => source.emit("mail", { account_id: 1 }));
+    expect(count("mail-threads")).toBe(3); // quiet for 5 s: straight away again
+  });
+
   it("refreshes offloads and files on an offload event, also one without a pair", () => {
     const { spy, source } = setup();
     act(() => source.emit("offload", { account_id: 1, pair_id: null }));

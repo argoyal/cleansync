@@ -12,7 +12,7 @@
 - The first time you browse a folder right after a sync, an item can still show its status from before the sync for a moment. It corrects itself within about a minute.
 - Folders are listed in one piece, not page by page. A folder with a huge number of items (tens of thousands) can be slow to open.
 - On disks that ignore letter case (Windows, some network shares), two names that differ only by case are shown as two items, even though the disk treats them as the same file.
-- Renaming or moving an item in DriveSync is done on Drive too, as a real rename, so the Drive file keeps its ID and sharing.
+- Renaming or moving an item in CleanSync is done on Drive too, as a real rename, so the Drive file keeps its ID and sharing.
 - Changing only the letter case of a folder name (for example `photos` to `Photos`) can fail on case-insensitive storage. If it does, nothing changes and you see an error.
 - A development build that was made without the Office template generator cannot create blank Word, Excel or PowerPoint files (the container image always includes them).
 - Google Docs, Sheets and Slides are recognised in the Drive listing by their Google file type or their missing size; this is still to be confirmed against a real Drive.
@@ -32,3 +32,19 @@
 ## After an upgrade that changes the sync rules
 
 When a new version changes the list of files that never sync (for example, the version that started skipping `.drivesync-upload-*` upload copies), every two-way folder runs one automatic safe resync on its next sync. A safe resync merges both sides and never deletes. The catch: a file you deleted on one side, whose deletion had not synced yet, comes back on that side instead of being deleted on the other. Delete it again after the resync.
+
+## Mail
+
+- CleanSync backs up and offloads mail; it does not send mail, invitations or replies, and the reader is read-only (no marking as read, labelling or deleting).
+- Gmail only for now; Outlook comes later.
+- Spam, Trash, drafts and chats are not backed up.
+- Mail that cannot be downloaded from Gmail is never offloaded, and the offload preview does not count it among the mails it leaves out.
+- Offloaded mail goes to Gmail's trash and Gmail empties it after 30 days. CleanSync cannot empty it sooner: that needs Google's full mailbox permission, and CleanSync asks only for `gmail.modify`.
+- Offloads wait while the mail backup is checking the mailbox.
+- A mail with no usable Message-ID header (missing, or with characters a Gmail search can't take) that is restored again after Gmail's answer got lost could end up twice in Gmail (rare). Other mail is never imported twice.
+- A restore that is queued but has not started yet is lost if CleanSync stops or the storage disk is missing at that moment. The mails stay safe (still offloaded); ask for the restore again.
+- CleanSync waits at most 60 seconds on each step of sending a restored mail to Gmail. A very large mail on a slow upload connection may not make it; the restore then stops with "CleanSync couldn't reach Gmail" and the rest stays offloaded. Try again from a faster connection.
+- Restoring an old database copy: mail offloaded after that copy needs taking out of Gmail's trash within 30 days (see [backup and recovery](backup-recovery.md#mail)).
+- The size shown before the first backup is what Gmail and Google Photos use together; Google doesn't report Gmail alone.
+- Images inside a mail are shown up to 10 MB per mail; the mail frame has a fixed height and scrolls by itself.
+- If CleanSync stops right after moving a mail to Gmail's trash but before marking it offloaded, that mail shows as "Deleted in Gmail" after the next check; restore it from there.

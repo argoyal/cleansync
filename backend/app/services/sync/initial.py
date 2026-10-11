@@ -238,7 +238,7 @@ class InitialSync:
                 AttentionReason.FAILED,
             )
         with open(job.log_path, "a", encoding="utf-8") as fh:
-            fh.write(f"DriveSync: saved {copied} local files to backups before the {label}\n")
+            fh.write(f"CleanSync: saved {copied} local files to backups before the {label}\n")
         e.set_status(db, pair, PairStatus.RUNNING)
         local_dir = pair_local_dir(e.layout, account, pair)
         local_dir.mkdir(parents=True, exist_ok=True)

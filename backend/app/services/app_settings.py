@@ -11,10 +11,18 @@ DEFAULTS: dict[str, object] = {
     "max_parallel_pairs": 2,
     "session_idle_hours": 12,
     "log_retention_days": 30,
+    # Mail (spec §8)
+    "mail_check_interval_s": 300,
+    "mail_min_age_days": 30,
+    "mail_batch_size": 100,
+    "mail_disk_floor_gb": 2,
+    # Google API (spec §7): one eighth of Google's 80M free line
+    "google_daily_budget_units": 10_000_000,
 }
 
 INTERVAL_CHOICES = {60, 300, 900, 1800, 3600, None}
 RETENTION_CHOICES = {7, 30, 90, None}
+MAIL_INTERVAL_CHOICES = {60, 300, 900, 1800, 3600}
 
 
 MAX_VALUES = {
@@ -23,6 +31,10 @@ MAX_VALUES = {
     "max_parallel_pairs": 8,
     "default_max_deletions": 1_000_000,
     "log_retention_days": 3650,
+    "mail_min_age_days": 3650,
+    "mail_batch_size": 1000,
+    "mail_disk_floor_gb": 10_000,
+    "google_daily_budget_units": 40_000_000,  # half of Google's 80M paid line
 }
 
 
@@ -39,6 +51,10 @@ def _validate(key: str, value: object) -> None:
     if key == "default_backup_retention_days":
         if value not in RETENTION_CHOICES:
             raise ValueError("retention must be 7, 30, 90 or null")
+        return
+    if key == "mail_check_interval_s":
+        if type(value) is not int or value not in MAIL_INTERVAL_CHOICES:
+            raise ValueError("mail check interval must be one of 60, 300, 900, 1800 or 3600")
         return
     expected = type(DEFAULTS[key])
     if type(value) is not expected:

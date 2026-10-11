@@ -1,6 +1,6 @@
 # Contributing
 
-You do not need a Google account to work on DriveSync: tests use a fake rclone, and `make dev-seed` adds a pretend Google account whose "Drive" is a local folder (it needs rclone installed).
+You do not need a Google account to work on CleanSync: tests use a fake rclone, and `make dev-seed` adds a pretend Google account whose "Drive" is a local folder (it needs rclone installed).
 
     cd backend && uv sync && cd ../frontend && npm ci
     make test        # backend pytest + frontend vitest
@@ -18,4 +18,4 @@ Rules:
 - Never log tokens, passwords or client secrets.
 - No personal domains, emails or paths in code, tests or docs; use `example.com`.
 - Frontend dependencies are pinned to exact versions. Talk to the server only through `src/api/`.
-- Paths from the browser go through `normalize_rel` and `safe_join`. Never serve a user's file in a way that lets it run script on DriveSync's address (see `app/api/serve.py`).
+- Paths from the browser go through `normalize_rel` and `safe_join`. Never serve a user's file in a way that lets it run script on CleanSync's address (see `app/api/serve.py`).

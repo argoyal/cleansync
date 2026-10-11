@@ -26,6 +26,11 @@ export function formatWhen(iso: string | null | undefined, now = new Date()): st
   return d.toDateString() === now.toDateString() ? timeFmt.format(d) : dateFmt.format(d);
 }
 
+/** A plain calendar day ("2026-11-09") as "9 Nov 2026"; no time zone shift. */
+export function formatDay(iso: string): string {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
 export function formatRelative(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return "never";
   const s = Math.round((new Date(iso).getTime() - now) / 1000);
@@ -45,4 +50,14 @@ export function formatInterval(seconds: number | null): string {
 export function percent(part: number | null | undefined, whole: number | null | undefined): number {
   if (!part || !whole) return 0;
   return Math.min(100, Math.max(0, (part / whole) * 100));
+}
+
+/** Roughly how long is left: "less than a minute", "about 12 minutes", "about 3 hours". */
+export function formatDuration(seconds: number): string {
+  if (seconds < 60) return "less than a minute";
+  const m = Math.round(seconds / 60);
+  if (m < 60) return `about ${m} ${m === 1 ? "minute" : "minutes"}`;
+  const h = Math.round(seconds / 3600);
+  if (h < 48) return `about ${h} ${h === 1 ? "hour" : "hours"}`;
+  return `about ${Math.round(seconds / 86400)} days`;
 }

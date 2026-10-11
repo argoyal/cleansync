@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend dev-seed templates test lint format build fe-install fe-build e2e
+.PHONY: dev dev-backend dev-frontend dev-seed templates test lint format build fe-install fe-build e2e e2e-new
 
 # Keep this path short: rclone's bisync lock file name contains both folder paths.
 DEV_ROOT := $(CURDIR)/drivesync-data
@@ -15,7 +15,7 @@ dev-frontend:
 	cd frontend && npm run dev
 
 dev-seed:
-	cd backend && $(DEV_ENV) DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 uv run python -m app.devtools.seed_local_account alice@example.com --sample-files
+	cd backend && $(DEV_ENV) DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 uv run python -m app.devtools.seed_local_account alice@example.com --sample-files --sample-mail
 
 templates:
 	cd backend && uv run python scripts/make_office_templates.py app/resources/office
@@ -32,7 +32,7 @@ format:
 	cd backend && uv run ruff check --fix . && uv run ruff format .
 
 build:
-	docker build -t drivesync:dev .
+	docker build -t cleansync:dev .
 
 fe-install:
 	cd frontend && npm ci
@@ -40,5 +40,11 @@ fe-install:
 fe-build:
 	cd frontend && npm run build
 
+# Optional: E2E_CONTAINER=<name of the running container> lets the mail test check the fake Gmail's trash.
 e2e:
-	cd frontend && E2E_BASE_URL=http://localhost:8080 E2E_ADMIN_PASSWORD=dev-password-change-me npx playwright test
+	cd frontend && E2E_CONTAINER=$(E2E_CONTAINER) E2E_BASE_URL=http://localhost:8080 E2E_ADMIN_PASSWORD=dev-password-change-me npx playwright test
+
+# The New menu's browser tests: an image with New switched on (every release has it off).
+e2e-new:
+	docker build --build-arg VITE_SHOW_NEW=1 -t cleansync:new .
+	cd frontend && E2E_SHOW_NEW=1 E2E_CONTAINER=$(E2E_CONTAINER) E2E_BASE_URL=http://localhost:8080 E2E_ADMIN_PASSWORD=dev-password-change-me npx playwright test

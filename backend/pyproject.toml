@@ -1,6 +1,6 @@
 [project]
 name = "drivesync"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",
@@ -15,6 +15,7 @@ dependencies = [
   "httpx>=0.27",
   "sse-starlette>=2.1",
   "pillow>=11",
+  "nh3>=0.3.7",
 ]
 
 [dependency-groups]

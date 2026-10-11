@@ -2,7 +2,7 @@
 
 A PairIndex is built from one walk of the pair's folder compared with its Drive listing.
 It is cached per pair and rebuilt when the listing changes, after a job or file action,
-or after a minute (to notice edits made outside DriveSync). Open conflicts and the
+or after a minute (to notice edits made outside CleanSync). Open conflicts and the
 "running" state are laid over it at request time, so they are always current.
 """
 
@@ -87,7 +87,7 @@ def _walk(local_dir: Path) -> dict[str, LocalEntry]:
                 if is_hidden_name(e.name):
                     continue
                 try:
-                    if e.is_symlink():  # rclone skips links; so does DriveSync
+                    if e.is_symlink():  # rclone skips links; so does CleanSync
                         continue
                     st = e.stat(follow_symlinks=False)
                     is_dir = e.is_dir(follow_symlinks=False)

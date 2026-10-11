@@ -132,7 +132,7 @@ export function ConflictsPage() {
     <div className="space-y-6 p-4 sm:p-6">
       <h1 className="text-title font-semibold">Conflicts</h1>
       <p className="max-w-prose text-ink-2">
-        These files changed on both sides between two syncs. DriveSync kept both copies; pick which one stays.
+        These files changed on both sides between two syncs. CleanSync kept both copies; pick which one stays.
       </p>
       {lists.every((q) => q.isSuccess) && total === 0 && <Empty icon="check_circle" title="No conflicts" />}
       {mine.map((p) => (

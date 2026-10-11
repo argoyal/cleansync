@@ -1,12 +1,28 @@
 import contextlib
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
+from app.database.engine import make_engine
+from app.database.migrate import run_migrations
+from app.main import create_app
+from app.models import Account, SyncPair
+from app.models.enums import ServiceKind, ServiceState
 from app.paths import Layout
+from app.services.accounts.service import AccountService
+from app.services.accounts.services import ensure_services, set_service_state
+from app.services.catalog.service import CatalogService
+from app.services.events.bus import EventBus
+from app.services.rclone.commands import RcloneEnv
+from app.services.sync.engine import SyncEngine
 from tests.fake_rclone import FakeRclone
+from tests.mail_helpers import Box
+
+pytest_plugins = ["tests.offload_helpers"]  # the offload_box fixture
 
 _ENV_VARS = (
     "DRIVESYNC_ROOT",
@@ -72,16 +88,6 @@ def layout(settings: Settings) -> Layout:
     lay = Layout(settings.drivesync_root)
     lay.ensure()
     return lay
-
-
-from collections.abc import Callable, Iterator
-
-from sqlalchemy.orm import Session, sessionmaker
-
-from app.database.engine import make_engine
-from app.database.migrate import run_migrations
-from app.main import create_app
-from app.models import Account, SyncPair
 
 
 @pytest.fixture
@@ -162,12 +168,6 @@ def fake_rclone(tmp_path) -> FakeRclone:
     return FakeRclone(tmp_path / "fake-rclone")
 
 
-from app.services.accounts.service import AccountService
-from app.services.events.bus import EventBus
-from app.services.rclone.commands import RcloneEnv
-from app.services.sync.engine import SyncEngine
-
-
 @pytest.fixture
 def sync_engine(layout, session_factory, settings, fake_rclone) -> SyncEngine:
     bus = EventBus()
@@ -183,9 +183,6 @@ def sync_engine(layout, session_factory, settings, fake_rclone) -> SyncEngine:
     return SyncEngine(
         layout=layout, session_factory=session_factory, bus=bus, rclone_env=env, accounts=accounts
     )
-
-
-from app.services.catalog.service import CatalogService
 
 
 @pytest.fixture
@@ -251,3 +248,12 @@ def save_catalog(app):
         app.state.catalog.store.save(Catalog.build(pair_id, utcnow(), root_id, entries))
 
     return _save
+
+
+@pytest.fixture
+def box(session_factory, layout, make_account, db):
+    """One account with mail set up, a fake Gmail and a MailBackup (tests/mail_helpers.py)."""
+    acc = make_account()
+    ensure_services(db, acc)
+    set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.ACTIVE)
+    return Box(session_factory, layout, acc)

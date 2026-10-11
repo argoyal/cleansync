@@ -44,7 +44,7 @@ class _Sink:
 
 
 def _walk(folder: Path, arc_root: str) -> Iterator[tuple[Path, str]]:
-    """(path, name in the zip) for every file and empty folder; skips links and DriveSync files.
+    """(path, name in the zip) for every file and empty folder; skips links and CleanSync files.
     Raises OSError when a folder can't be read."""
     stack = [(folder, arc_root)]
     while stack:

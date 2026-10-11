@@ -2,17 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
-/* DriveSync's own palette: cool porcelain neutrals, one plum accent that never collides
-   with the status colours (green healthy, yellow attention, red error, blue running,
-   gray paused). Values are "R G B" so Tailwind can add opacity. */
+/* CleanSync's palette: cool porcelain neutrals, one plum accent that never collides with the
+   status colours, a deep indigo rail and one colour per section. Values are "R G B" so
+   Tailwind can add opacity. */
 :root {
   color-scheme: light;
-  --bg: 245 246 248;
+  --bg: 245 246 250;
   --surface: 255 255 255;
   --sunken: 236 238 242;
   --ink: 29 34 48;
   --ink-2: 90 97 114;
-  --line: 220 223 230;
+  --line: 228 230 238;
   --accent: 91 63 166;
   --accent-ink: 255 255 255;
   --accent-soft: 238 233 248;
@@ -25,9 +25,44 @@
   --run-soft: 228 238 252;
   --paused: 122 128 144;
   --shadow: 20 24 36;
+  /* The icon rail (deep indigo in both themes), the section panel, one colour per section:
+     a strong tile on the rail (-ink is its text) and a soft tint for the active view. */
+  --rail: 46 35 99;
+  --rail-ink: 207 200 243;
+  --rail-mark: 255 255 255;
+  /* The rail badge: one strong red in every theme, so its white number stays readable. */
+  --rail-badge: 194 54 47;
+  --panel: 255 255 255;
+  --sec-files: 112 210 198;
+  --sec-files-ink: 6 48 43;
+  --sec-files-soft: 221 245 242;
+  --sec-files-soft-ink: 11 79 71;
+  --sec-mail: 242 163 107;
+  --sec-mail-ink: 46 22 6;
+  --sec-mail-soft: 253 232 217;
+  --sec-mail-soft-ink: 124 42 8;
+  --sec-activity: 143 179 245;
+  --sec-activity-ink: 12 32 74;
+  --sec-activity-soft: 227 236 253;
+  --sec-activity-soft-ink: 23 62 140;
+  --sec-recovery: 199 166 242;
+  --sec-recovery-ink: 40 16 74;
+  --sec-recovery-soft: 241 232 253;
+  --sec-recovery-soft-ink: 75 35 128;
+  --sec-settings: 201 205 216;
+  --sec-settings-ink: 29 34 48;
+  --sec-settings-soft: 236 238 242;
+  --sec-settings-soft-ink: 63 69 85;
+  /* Mail label dots: picked by label id, so a label keeps its colour. */
+  --label-1: 37 99 201;
+  --label-2: 15 118 110;
+  --label-3: 156 100 0;
+  --label-4: 194 54 47;
+  --label-5: 91 63 166;
+  --label-6: 46 125 50;
 }
 
-/* Dark colours when the system asks for them, unless Light was picked in DriveSync... */
+/* Dark colours when the system asks for them, unless Light was picked in CleanSync... */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
@@ -49,6 +84,37 @@
     --run-soft: 27 42 70;
     --paused: 140 147 163;
     --shadow: 0 0 0;
+    --rail: 46 35 99;
+    --rail-ink: 207 200 243;
+    --rail-mark: 255 255 255;
+    --rail-badge: 194 54 47;
+    --panel: 27 30 38;
+    --sec-files: 112 210 198;
+    --sec-files-ink: 6 48 43;
+    --sec-files-soft: 20 56 52;
+    --sec-files-soft-ink: 160 232 222;
+    --sec-mail: 242 163 107;
+    --sec-mail-ink: 46 22 6;
+    --sec-mail-soft: 66 40 22;
+    --sec-mail-soft-ink: 253 200 160;
+    --sec-activity: 143 179 245;
+    --sec-activity-ink: 12 32 74;
+    --sec-activity-soft: 27 42 70;
+    --sec-activity-soft-ink: 170 198 250;
+    --sec-recovery: 199 166 242;
+    --sec-recovery-ink: 40 16 74;
+    --sec-recovery-soft: 48 34 74;
+    --sec-recovery-soft-ink: 214 192 250;
+    --sec-settings: 201 205 216;
+    --sec-settings-ink: 29 34 48;
+    --sec-settings-soft: 34 38 49;
+    --sec-settings-soft-ink: 200 205 216;
+    --label-1: 110 168 255;
+    --label-2: 76 195 180;
+    --label-3: 242 193 78;
+    --label-4: 255 107 97;
+    --label-5: 180 156 255;
+    --label-6: 102 200 120;
   }
 }
 
@@ -73,6 +139,38 @@
   --run-soft: 27 42 70;
   --paused: 140 147 163;
   --shadow: 0 0 0;
+  --rail: 46 35 99;
+  --rail-ink: 207 200 243;
+  --rail-mark: 255 255 255;
+  /* The rail badge: one strong red in every theme, so its white number stays readable. */
+  --rail-badge: 194 54 47;
+  --panel: 27 30 38;
+  --sec-files: 112 210 198;
+  --sec-files-ink: 6 48 43;
+  --sec-files-soft: 20 56 52;
+  --sec-files-soft-ink: 160 232 222;
+  --sec-mail: 242 163 107;
+  --sec-mail-ink: 46 22 6;
+  --sec-mail-soft: 66 40 22;
+  --sec-mail-soft-ink: 253 200 160;
+  --sec-activity: 143 179 245;
+  --sec-activity-ink: 12 32 74;
+  --sec-activity-soft: 27 42 70;
+  --sec-activity-soft-ink: 170 198 250;
+  --sec-recovery: 199 166 242;
+  --sec-recovery-ink: 40 16 74;
+  --sec-recovery-soft: 48 34 74;
+  --sec-recovery-soft-ink: 214 192 250;
+  --sec-settings: 201 205 216;
+  --sec-settings-ink: 29 34 48;
+  --sec-settings-soft: 34 38 49;
+  --sec-settings-soft-ink: 200 205 216;
+  --label-1: 110 168 255;
+  --label-2: 76 195 180;
+  --label-3: 242 193 78;
+  --label-4: 255 107 97;
+  --label-5: 180 156 255;
+  --label-6: 102 200 120;
 }
 
 html,

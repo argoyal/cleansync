@@ -1,12 +1,15 @@
+import asyncio
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.clock import as_utc, utcnow
 from app.models import Account, Conflict, PlannedChange, SyncJob, SyncPair
+from app.models.enums import AttentionReason, JobKind, JobState, PairStatus, Trigger
+from app.services.queue import SyncQueue, make_handler
 from app.services.sync import engine as engine_mod
-from app.services.sync.engine import backoff
+from app.services.sync.engine import SETTLED_MSG, backoff
 from tests.fake_rclone import jl
 
 ROOTS = jl('Synching Path1 "/l/" with Path2 "gd:/"')
@@ -933,3 +936,51 @@ async def test_override_after_the_brake_does_not_cover_a_bigger_plan(
     assert (jobs[-2].state, jobs[-2].planned_deletions) == ("BLOCKED", 7)
     db.refresh(pair)
     assert (pair.attention_reason, pair.override_next) == ("BLOCKED", False)
+
+
+def test_settle_closes_a_job_and_a_pair_a_crash_left_running(
+    sync_engine, db, make_account, make_pair
+):
+    pair = make_pair(make_account(), initialized=True)
+    job = sync_engine.start_job(db, pair, JobKind.BISYNC, Trigger.MANUAL)
+    sync_engine.set_status(db, pair, PairStatus.RUNNING)
+    assert sync_engine.settle_pair(pair.id) is True
+    db.expire_all()
+    job = db.get(SyncJob, job.id)
+    pair = db.get(SyncPair, pair.id)
+    assert job.state == JobState.FAILED and job.error_message == SETTLED_MSG
+    assert pair.status == PairStatus.ERROR
+    assert pair.attention_reason == AttentionReason.FAILED
+    assert pair.last_error == SETTLED_MSG
+    assert sync_engine.settle_pair(pair.id) is False  # nothing left open now
+
+
+def test_settle_leaves_a_finished_pair_alone(sync_engine, db, make_account, make_pair):
+    pair = make_pair(make_account(), initialized=True, status=PairStatus.HEALTHY)
+    assert sync_engine.settle_pair(pair.id) is False
+    assert sync_engine.settle_pair(9999) is False  # a pair deleted meanwhile
+    db.expire_all()
+    assert db.get(SyncPair, pair.id).status == PairStatus.HEALTHY
+
+
+async def test_a_sync_cut_off_mid_run_does_not_stay_running(
+    sync_engine, db, make_account, make_pair, monkeypatch
+):
+    pair = make_pair(make_account(), initialized=True)
+
+    async def cut_off(db_, pair_, account, trigger, *, bidirectional):
+        sync_engine.set_status(db_, pair_, PairStatus.RUNNING)
+        sync_engine.start_job(db_, pair_, JobKind.DRY_RUN, trigger)
+        raise asyncio.CancelledError  # a timeout around rclone, or a cancel
+
+    monkeypatch.setattr(sync_engine, "_cycle", cut_off)
+    q = SyncQueue(make_handler(sync_engine, None), settle=sync_engine.settle_pair)
+    assert q.request(pair.id, "MANUAL") == "queued"
+    await q.wait_idle()
+    assert not q.is_busy(pair.id)
+    db.expire_all()
+    assert db.get(SyncPair, pair.id).status == PairStatus.ERROR
+    running = db.scalar(
+        select(func.count()).select_from(SyncJob).where(SyncJob.state == JobState.RUNNING)
+    )
+    assert running == 0

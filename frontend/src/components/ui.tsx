@@ -12,13 +12,14 @@ import {
 import { useDismiss } from "../hooks/useDismiss";
 import { Icon, type IconName } from "./Icon";
 
-type Tone = "primary" | "plain" | "danger" | "quiet";
+type Tone = "primary" | "plain" | "danger" | "quiet" | "main";
 
 const TONES: Record<Tone, string> = {
   primary: "bg-accent text-accent-ink hover:bg-accent/90",
   plain: "border border-line bg-surface text-ink hover:bg-sunken",
   danger: "bg-err text-white hover:bg-err/90",
   quiet: "text-ink-2 hover:bg-sunken hover:text-ink",
+  main: "bg-rail font-semibold text-rail-mark hover:bg-rail/90",
 };
 
 export function Button({
@@ -59,6 +60,24 @@ export function IconButton({
   );
 }
 
+const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+
+/** A modal box: Tab past its last control comes back to its first, and Shift+Tab back. */
+export function keepTabInside(e: KeyboardEvent, box: HTMLElement) {
+  const items = Array.from(box.querySelectorAll<HTMLElement>(FOCUSABLE));
+  if (items.length === 0) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  const at = document.activeElement;
+  if (e.shiftKey && (at === first || at === box || !box.contains(at))) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (at === last || !box.contains(at))) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 export function Dialog({
   title,
   onClose,
@@ -82,7 +101,10 @@ export function Dialog({
     const back = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const first = box.current?.querySelector<HTMLElement>("input, select, textarea, button[data-autofocus]");
     first?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close.current();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close.current();
+      if (e.key === "Tab" && box.current) keepTabInside(e, box.current);
+    };
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);

@@ -83,7 +83,7 @@ export async function api<T>(
       signal: init.signal,
     });
   } catch (e) {
-    if (e instanceof TypeError) throw new ApiError(0, "Can't reach DriveSync. Check your connection and try again.");
+    if (e instanceof TypeError) throw new ApiError(0, "Can't reach CleanSync. Check your connection and try again.");
     throw e;
   }
   if (res.status === 204) return undefined as T;

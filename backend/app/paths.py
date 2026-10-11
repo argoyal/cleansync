@@ -91,6 +91,18 @@ class Layout:
         return self.root / "storage"
 
     @property
+    def mail_root(self) -> Path:
+        # Spec §3.3: next to storage/, so mail is never inside a Drive sync pair's folder
+        # (and never uploaded to Drive).
+        return self.root / "mail"
+
+    def mail_dir(self, email: str) -> Path:
+        return self.mail_root / email_dirname(email)
+
+    def mail_job_log(self, job_id: int) -> Path:
+        return self.jobs_log_dir / f"mail-{job_id}.log"
+
+    @property
     def volume_file(self) -> Path:
         # Spec §6.9: marks the right disk; checked at startup and before every job.
         return self.root / ".drivesync-volume"
@@ -110,6 +122,7 @@ class Layout:
             self.offloads_dir,
             self.jobs_log_dir,
             self.storage,
+            self.mail_root,
         ):
             d.mkdir(parents=True, exist_ok=True)
         self.secrets_dir.mkdir(parents=True, exist_ok=True, mode=0o700)

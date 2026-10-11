@@ -16,7 +16,7 @@ const SETUP = {
   pairs: 0,
   initialized_pairs: 0,
 };
-const HEALTH = { "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" } };
+const HEALTH = { "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" } };
 const PREVIEW = {
   job_id: 3,
   created_at: "2026-10-08T08:00:00Z",

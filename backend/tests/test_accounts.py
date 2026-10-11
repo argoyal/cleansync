@@ -256,3 +256,16 @@ def test_disconnect_and_needs_reauth_stop_scheduling(auth_client, app, make_acco
 
     auth_client.portal.call(expire)
     assert sched.aps.get_job(f"pair-{p2.id}") is None
+
+
+def test_needs_reauth_never_overwrites_a_disconnected_account(auth_client, app, make_account, db):
+    acc = make_account()
+    acc.status = "DISCONNECTED"
+    db.commit()
+
+    async def expire():
+        await app.state.accounts.mark_needs_reauth(acc.id, "expired")
+
+    auth_client.portal.call(expire)
+    db.expire_all()
+    assert db.get(type(acc), acc.id).status == "DISCONNECTED"

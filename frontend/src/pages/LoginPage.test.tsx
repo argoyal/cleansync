@@ -9,7 +9,7 @@ import { json, mockApi, renderApp } from "../test/utils";
 import { ChangePasswordPage } from "./ChangePasswordPage";
 import { LoginPage } from "./LoginPage";
 
-const HEALTH = { "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" } };
+const HEALTH = { "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" } };
 
 describe("login", () => {
   it("logs in and goes to the forced password change", async () => {
@@ -138,5 +138,14 @@ describe("RequireAuth", () => {
     mockApi({ "GET /api/auth/me": { username: "admin", must_change_password: false, csrf_token: "x" } });
     renderApp(tree, { route: "/drive" });
     expect(await screen.findByText("files")).toBeInTheDocument();
+  });
+});
+
+describe("name", () => {
+  it("says CleanSync before the server answers", async () => {
+    mockApi({ "GET /api/auth/me": () => json(401, { detail: "not_logged_in" }) });
+    renderApp(<LoginPage />, { route: "/login" });
+    expect(await screen.findByText("CleanSync")).toBeInTheDocument();
+    expect(document.title).toBe("CleanSync");
   });
 });

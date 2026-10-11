@@ -21,7 +21,7 @@ class FakeRclone:
         self.plan_file.write_text("{}")
         self.calls_file.write_text("")
         wrapper = workdir / "rclone"
-        # The wrapper carries its own settings, because DriveSync runs rclone with a minimal env.
+        # The wrapper carries its own settings, because CleanSync runs rclone with a minimal env.
         wrapper.write_text(
             "#!/bin/sh\n"
             f'export FAKE_RCLONE_PLAN="{self.plan_file}"\n'

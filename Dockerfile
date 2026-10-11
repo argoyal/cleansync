@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1.7
 FROM --platform=$BUILDPLATFORM node:22-slim AS web
+# 1 shows the New menu (only for the New browser tests); every release has it off.
+ARG VITE_SHOW_NEW=0
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
-RUN npm run build
+RUN VITE_SHOW_NEW=$VITE_SHOW_NEW npm run build
 
 FROM python:3.12-slim AS rclone
 ARG TARGETARCH
@@ -40,9 +42,9 @@ COPY backend/scripts/make_office_templates.py scripts/
 RUN .venv/bin/python scripts/make_office_templates.py /out/office
 
 FROM python:3.12-slim
-LABEL org.opencontainers.image.source="https://github.com/argoyal/drivesync" \
+LABEL org.opencontainers.image.source="https://github.com/argoyal/cleansync" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
-      org.opencontainers.image.description="Two-way Google Drive sync for your own server"
+      org.opencontainers.image.description="Google Drive and Gmail backup and clean-up for your own server"
 COPY --from=rclone /out/rclone /usr/local/bin/rclone
 # pdftoppm makes the PDF previews
 RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils \

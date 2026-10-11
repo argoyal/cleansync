@@ -31,7 +31,9 @@ class Settings(BaseSettings):
     rclone_config_pass: str = Field(default="", repr=False)
     rclone_binary: str = "rclone"
     rclone_password_command: str = ""
-    app_name: str = "DriveSync"
+    app_name: str = "CleanSync"
+    # Shown on the public /privacy and /terms pages Google's consent screen links to.
+    contact_email: str = ""
     # Development and CI only: lets the seed tool add a "pretend Google account" backed by a
     # local folder. Leave it off in production.
     drivesync_allow_local_accounts: bool = False

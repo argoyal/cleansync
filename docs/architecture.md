@@ -4,7 +4,7 @@ One container, one process.
 
 - **FastAPI** serves the REST API (`/api/*`, docs at `/api/docs` after login) and a Server-Sent Events stream (`/api/events`) for live status.
 - **SQLite** (`app/data/drivesync.db`) holds accounts, sync pairs, job history, conflicts and settings. There is no row per file.
-- **rclone** is the only thing that touches Google Drive file content. DriveSync runs it as a subprocess with a fixed list of arguments (`backend/app/services/rclone/commands.py`), never through a shell.
+- **rclone** is the only thing that touches Google Drive file content. CleanSync runs it as a subprocess with a fixed list of arguments (`backend/app/services/rclone/commands.py`), never through a shell.
 - **Queue**: at most one job per sync pair; extra requests while a pair is running collapse into one follow-up run. A small number of pairs (default 2) run at once.
 - **Scheduler** (APScheduler) asks the queue for a sync every N minutes per pair, refreshes Drive quota hourly, and runs daily maintenance (database copy, pruning old backups and logs).
 - **Watcher** (watchdog) asks the queue for a sync a few seconds after local files stop changing. If the folder does not deliver change events (common on Windows-mounted or network drives), the watcher reports "limited" and the schedule covers it.
@@ -19,10 +19,16 @@ One container, one process.
 4. Real `rclone bisync`. Progress is streamed live.
 5. Record counts, conflicts and errors.
 
+Accounts have a provider (Google today) and one row per service (Files, Mail) in account_services. Each service reaches its provider through an adapter (app/services/adapters/): Files covers the Drive calls made outside rclone's sync runs.
+
+## Mail
+Gmail is reached through a Gmail adapter (`app/services/mail/gmail.py`) on top of one shared Google client that paces every call and counts it against a daily budget (default 10 million units, at most 40 million; Drive calls are counted but never held back). Mail work goes through a mail queue, one job per account at a time: backup and re-check, offload, and restore are queue actions, so they never overlap. Each mail is kept once as its original `.eml` under `mail/<email>/<year>/<month>/`, and the database holds its labels, state and an SQLite FTS5 search index. An offload checks the stored file, moves the mail to Gmail's trash (the narrow `gmail.modify` scope, so Gmail empties the trash itself after 30 days) and checks it is there; restore takes it out of the trash, or imports the stored `.eml` when Gmail no longer has it.
+
 ## Folder layout
     /drivesync/
       app/data/   drivesync.db, db-backups/, rclone/ (encrypted rclone.conf, bisync state),
                   filters/, previews/, catalog/, thumbs/, uploads/, backups/, logs/, secrets/
       storage/<email>/   your files, one folder per Google account
+      mail/<email>/      your mail, one .eml per message
 
 Path1 is always the local folder; Path2 is always Google Drive.

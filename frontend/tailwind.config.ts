@@ -24,6 +24,20 @@ export default {
         run: token("run"),
         "run-soft": token("run-soft"),
         paused: token("paused"),
+        rail: token("rail"),
+        "rail-ink": token("rail-ink"),
+        "rail-mark": token("rail-mark"),
+        "rail-badge": token("rail-badge"),
+        panel: token("panel"),
+        ...Object.fromEntries([1, 2, 3, 4, 5, 6].map((i) => [`label-${i}`, token(`label-${i}`)])),
+        ...Object.fromEntries(
+          ["files", "mail", "activity", "recovery", "settings"].flatMap((s) => [
+            [`sec-${s}`, token(`sec-${s}`)],
+            [`sec-${s}-ink`, token(`sec-${s}-ink`)],
+            [`sec-${s}-soft`, token(`sec-${s}-soft`)],
+            [`sec-${s}-soft-ink`, token(`sec-${s}-soft-ink`)],
+          ]),
+        ),
       },
       fontFamily: {
         sans: ['"Public Sans Variable"', "system-ui", "sans-serif"],

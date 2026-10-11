@@ -19,7 +19,7 @@ const SETTINGS = {
   log_retention_days: 30,
 };
 const SYSTEM = {
-  app_name: "DriveSync",
+  app_name: "CleanSync",
   app_version: "0.1.0",
   python_version: "3.12.9",
   rclone_version: "rclone v1.75.1",
@@ -147,7 +147,7 @@ describe("storage page", () => {
 describe("routes", () => {
   it("sends a new installation from Home to the wizard", async () => {
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [],
       "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 0, pairs: 0, initialized_pairs: 0 },
     });
@@ -158,7 +158,7 @@ describe("routes", () => {
   it("still opens the wizard's folder step on an account after setup is done", async () => {
     const second = { ...ACCOUNT, id: 2, email: "bob@example.com" };
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT, second],
       "GET /api/sync-pairs": [PAIR],
       "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 2, pairs: 1, initialized_pairs: 1 },
@@ -172,7 +172,7 @@ describe("routes", () => {
   it("shows a sign-in error as plain text and clears the address", async () => {
     sessionStorage.setItem("drivesync.oauthReturn", "/settings?tab=accounts");
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT],
       "GET /api/sync-pairs": [PAIR],
       "GET /api/settings": SETTINGS,
@@ -188,7 +188,7 @@ describe("routes", () => {
   it.each([["//evil.example.com/x"], ["https://evil.example.com"]])("ignores an unsafe saved return path %s", async (saved) => {
     sessionStorage.setItem("drivesync.oauthReturn", saved);
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT],
       "GET /api/sync-pairs": [PAIR],
       "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 1, initialized_pairs: 1 },
@@ -198,9 +198,34 @@ describe("routes", () => {
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/$/));
   });
 
+  it("says the mail permission was added, and goes back to Mail", async () => {
+    sessionStorage.setItem("drivesync.oauthReturn", "/mail");
+    mockApi({
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 1, initialized_pairs: 1 },
+    });
+    renderApp(<AppRoutes />, { route: "/?connected=1&mail=ready" });
+    expect(await screen.findByText("Mail permission added. Next, start the mail backup.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/mail$/));
+  });
+
+  it("says plainly when Google gave no mail permission", async () => {
+    sessionStorage.setItem("drivesync.oauthReturn", "/mail");
+    mockApi({
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 1, initialized_pairs: 1 },
+    });
+    renderApp(<AppRoutes />, { route: "/?connected=1&mail=denied" });
+    expect(await screen.findByText(/Google didn't give permission to read mail/)).toBeInTheDocument();
+  });
+
   it("ignores a connected value that is not a positive whole number and caps long errors", async () => {
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT],
       "GET /api/sync-pairs": [PAIR],
       "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 1, initialized_pairs: 1 },
@@ -213,7 +238,7 @@ describe("routes", () => {
   it("returns from Google sign-in to where the person started", async () => {
     sessionStorage.setItem("drivesync.oauthReturn", "/settings?tab=accounts");
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT],
       "GET /api/sync-pairs": [PAIR],
       "GET /api/status": { accounts: 1, accounts_attention: 0, pairs: 1, new: 0, healthy: 1, attention: 0, running: 0, paused: 0, conflicts: 0 },
@@ -229,7 +254,7 @@ describe("routes", () => {
 describe("setup wizard skip", () => {
   it("Skip for now goes to My Drive and Home stops sending you back this session", async () => {
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT],
       "GET /api/sync-pairs": [],
       "GET /api/browse": { account_id: 1, path: "", pair: null, items: [] },
@@ -238,9 +263,62 @@ describe("setup wizard skip", () => {
     renderApp(<AppRoutes />, { route: "/setup" });
     await userEvent.click(await screen.findByRole("link", { name: "Skip for now" }));
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/drive$/));
-    await userEvent.click(screen.getAllByRole("link", { name: /^Home$/ })[0]);
+    await userEvent.click(screen.getByRole("link", { name: "CleanSync home" }));
     await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/$/));
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/$/);
+  });
+});
+
+const MAIL_SETTINGS = { ...SETTINGS, mail_check_interval_s: 300, mail_min_age_days: 30, mail_batch_size: 100, mail_disk_floor_gb: 2, google_daily_budget_units: 10_000_000 };
+
+describe("mail and Google API settings", () => {
+  it("changes how often mail is checked and the offload and disk limits", async () => {
+    const { calls } = mockApi({ "GET /api/settings": MAIL_SETTINGS, "PUT /api/settings": ({ body }: { body: object }) => ({ ...MAIL_SETTINGS, ...body }) });
+    renderApp(<SettingsPage />, { route: "/settings?tab=mail", path: "/settings" });
+    await userEvent.selectOptions(await screen.findByLabelText("Check for new mail"), "900");
+    await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ mail_check_interval_s: 900 }));
+    const age = screen.getByLabelText("Never offload mail newer than (days)");
+    await userEvent.clear(age);
+    await userEvent.type(age, "60{Enter}");
+    await waitFor(() => expect(calls.filter((c) => c.method === "PUT").at(-1)?.body).toEqual({ mail_min_age_days: 60 }));
+    expect(screen.getByLabelText("Mails per offload batch")).toHaveValue("100");
+    expect(screen.getByLabelText("Pause the backup when free space drops below (GB)")).toHaveValue("2");
+  });
+
+  it("shows Google API units used today, the Drive estimate, and the budget", async () => {
+    mockApi({
+      "GET /api/settings": MAIL_SETTINGS,
+      "GET /api/google/usage": { day: "2026-10-10", used: 1_250_000, budget: 10_000_000, drive_estimate: 4_300, reached: false },
+    });
+    renderApp(<SettingsPage />, { route: "/settings?tab=google", path: "/settings" });
+    expect(await screen.findByText("1,250,000 of 10,000,000 units used today (UTC).")).toBeInTheDocument();
+    expect(screen.getByText("Drive syncs, estimated: about 4,300 units today. They count toward the budget but are never held back.")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Google API units used today" })).toHaveAttribute("aria-valuenow", "13");
+    expect(screen.getByLabelText("Daily budget (units)")).toHaveValue("10000000");
+  });
+
+  it("caps the daily budget at half of Google's 80,000,000 paid line", async () => {
+    mockApi({
+      "GET /api/settings": MAIL_SETTINGS,
+      "GET /api/google/usage": { day: "2026-10-10", used: 0, budget: 10_000_000, drive_estimate: 0, reached: false },
+    });
+    renderApp(<SettingsPage />, { route: "/settings?tab=google", path: "/settings" });
+    const input = await screen.findByLabelText("Daily budget (units)");
+    await userEvent.clear(input);
+    await userEvent.type(input, "40000001");
+    expect(screen.getByText("Use a whole number from 1 to 40000000.")).toBeInTheDocument();
+    await userEvent.clear(input);
+    await userEvent.type(input, "40000000");
+    expect(screen.queryByText(/Use a whole number/)).not.toBeInTheDocument();
+  });
+
+  it("says when mail waits for the next UTC day", async () => {
+    mockApi({
+      "GET /api/settings": MAIL_SETTINGS,
+      "GET /api/google/usage": { day: "2026-10-10", used: 10_000_000, budget: 10_000_000, drive_estimate: 0, reached: true },
+    });
+    renderApp(<SettingsPage />, { route: "/settings?tab=google", path: "/settings" });
+    expect(await screen.findByText("10,000,000 of 10,000,000 units used today (UTC). Mail jobs are paused until midnight UTC.")).toBeInTheDocument();
   });
 });

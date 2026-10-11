@@ -5,7 +5,7 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { api, friendlyError, setCsrfToken } from "../api/client";
 import { useHealth, useMe } from "../api/queries";
 import type { Me } from "../api/types";
-import { Icon } from "../components/Icon";
+import { Mark } from "../components/Mark";
 import { Button, Field, inputClass, Notice } from "../components/ui";
 import { DEFAULT_APP_NAME } from "../config";
 
@@ -16,9 +16,7 @@ export function Brand({ big = false }: { big?: boolean }) {
   }, [name]);
   return (
     <span className={`flex items-center gap-2.5 font-semibold ${big ? "text-title" : "text-section"}`}>
-      <span className="grid h-8 w-8 place-items-center rounded-ctl bg-accent text-accent-ink">
-        <Icon name="cloud_done" className="text-[20px]" />
-      </span>
+      <Mark size={32} onRail={false} />
       {name}
     </span>
   );

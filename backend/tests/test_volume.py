@@ -90,7 +90,7 @@ async def test_disk_gone_while_running_refuses_the_next_job_and_runs_nothing(tmp
     assert q.request(3, "MANUAL") == "disabled"
     assert q.request(1, "INITIAL", action="preview") == "disabled"
     assert not vf.exists()  # never recreated
-    # The disk coming back does not restart syncing: the message says to restart DriveSync.
+    # The disk coming back does not restart syncing: the message says to restart CleanSync.
     vf.write_text(ID_A + "\n")
     assert q.request(3, "MANUAL") == "disabled"
     await q.wait_idle()
@@ -237,5 +237,5 @@ def test_resume_and_new_pairs_are_refused_while_syncing_is_stopped(
     assert r.status_code == 503 and r.json()["detail"] == MISSING_DISK_MSG
     pairs = auth_client.get("/api/sync-pairs").json()
     assert [(p["id"], p["paused"]) for p in pairs] == [(pair.id, True)]
-    # Turning a pair off is always allowed: it can only make DriveSync do less.
+    # Turning a pair off is always allowed: it can only make CleanSync do less.
     assert auth_client.post(f"/api/sync-pairs/{pair.id}/pause").status_code == 200

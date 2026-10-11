@@ -1,6 +1,7 @@
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from app.database.fts import include_name
 from app.models import Base
 
 config = context.config
@@ -11,7 +12,10 @@ def run_migrations_online() -> None:
     connectable = config.attributes.get("connection")
     if connectable is not None:
         context.configure(
-            connection=connectable, target_metadata=target_metadata, render_as_batch=True
+            connection=connectable,
+            target_metadata=target_metadata,
+            render_as_batch=True,
+            include_name=include_name,
         )
         with context.begin_transaction():
             context.run_migrations()
@@ -23,7 +27,10 @@ def run_migrations_online() -> None:
     )
     with engine.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata, render_as_batch=True
+            connection=connection,
+            target_metadata=target_metadata,
+            render_as_batch=True,
+            include_name=include_name,
         )
         with context.begin_transaction():
             context.run_migrations()

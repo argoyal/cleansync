@@ -78,7 +78,7 @@ async def test_real_bisync_conflict_is_detected_and_keeps_both(tmp_path):
     assert counters.conflict_paths == ["both.txt"], (tmp_path / "log.txt").read_text()
     names = sorted(p.name for p in p1.iterdir())
     assert "both.conflict1.txt" in names and "both.conflict2.txt" in names, names
-    # DriveSync's conflict screen relies on conflict1 = local (Path1), conflict2 = Drive (Path2).
+    # CleanSync's conflict screen relies on conflict1 = local (Path1), conflict2 = Drive (Path2).
     assert (p1 / "both.conflict1.txt").read_text() == "local edit, longer"
     assert (p1 / "both.conflict2.txt").read_text() == "remote edit"
 
@@ -131,7 +131,7 @@ async def test_real_bisync_safety_brake_is_classified(tmp_path):
     await _run(env, t, tmp_path, dry_run=False, resync=True)
     for i in range(6):
         (p1 / f"f{i}.txt").unlink()
-    # The engine's dry run lifts the brake (100%) so DriveSync can count and store the plan.
+    # The engine's dry run lifts the brake (100%) so CleanSync can count and store the plan.
     res, counters = await _run(env, t, tmp_path, dry_run=True, max_delete_percent=100)
     assert res.exit_code == 0, res.error_tail
     assert counters.bisync_successful and counters.deleted_remote == 6
@@ -611,7 +611,7 @@ async def test_real_config_dump_reads_an_encrypted_config(tmp_path):
 
 @pytest.mark.parametrize("others", [6, 0])  # 0: the renamed folder is most of the pair
 async def test_real_rename_on_both_sides_leaves_the_next_sync_nothing_to_do(tmp_path, others):
-    """A folder renamed through DriveSync moves on Drive and on disk; bisync then sees the same
+    """A folder renamed through CleanSync moves on Drive and on disk; bisync then sees the same
     change on both sides: nothing to copy, nothing to delete, no conflicts. Even when the folder
     holds more than half the pair's files (bisync's 50% brake counts the old paths)."""
     from sqlalchemy import select

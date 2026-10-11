@@ -1,15 +1,20 @@
 export type Me = { username: string; must_change_password: boolean; csrf_token: string };
 
 export type AccountStatus = "CONNECTED" | "NEEDS_REAUTH" | "DISCONNECTED";
+export type ServiceState = "not_set_up" | "setting_up" | "active" | "needs_reconnect" | "paused";
 export type Account = {
   id: number;
   email: string;
   status: AccountStatus;
+  provider: string;
   quota_total: number | null;
   quota_used: number | null;
   quota_trash: number | null;
   connected_at: string;
   last_checked_at: string | null;
+  services: { files: ServiceState; mail: ServiceState };
+  /** Google gave CleanSync permission to read and manage mail at the last sign-in. */
+  mail_permission: boolean;
 };
 
 export type PairStatus = "NEW" | "HEALTHY" | "RUNNING" | "ATTENTION" | "ERROR" | "PAUSED";
@@ -139,6 +144,11 @@ export type AppSettings = {
   max_parallel_pairs: number;
   session_idle_hours: number;
   log_retention_days: number;
+  mail_check_interval_s: number;
+  mail_min_age_days: number;
+  mail_batch_size: number;
+  mail_disk_floor_gb: number;
+  google_daily_budget_units: number;
 };
 
 export type Job = {
@@ -297,3 +307,112 @@ export type RecoveryEntry = {
 };
 export type RecoveryList = { total: number; entries: RecoveryEntry[] };
 export type RestoreResult = { id: string; restored_to: string | null; error: string | null };
+export type GoogleUsage = { day: string; used: number; budget: number; drive_estimate: number; reached: boolean };
+
+export type MailPhase = "initial" | "incremental" | "recheck";
+export type MailFailure = { provider_id: string; attempts: number; last_error: string };
+export type MailJobBrief = { id: number; kind: string; state: string; started_at: string; completed_at: string | null; done: number; message: string | null };
+export type MailStatus = {
+  account_id: number;
+  email: string;
+  service: ServiceState;
+  phase: MailPhase | null;
+  stored: number;
+  stored_bytes: number;
+  total: number | null;
+  running: boolean;
+  waiting: boolean;
+  time_left_s: number | null;
+  last_run_at: string | null;
+  last_error: string | null;
+  job: MailJobBrief | null;
+  failed: MailFailure[];
+  budget_reached: boolean;
+};
+export type MailSetupInfo = { total: number; size_bytes: number | null };
+export type ActivityJob = {
+  source: "files" | "mail";
+  id: number;
+  account_id: number;
+  title: string;
+  kind: string;
+  state: string;
+  started_at: string | null;
+  completed_at: string | null;
+  message: string | null;
+  log_url: string;
+};
+
+export type MailCounts = { views: Record<string, number>; labels: { id: string; name: string; count: number }[] };
+export type ThreadRow = {
+  thread_id: string;
+  count: number;
+  last_date: string;
+  message_id: number;
+  from_addr: string;
+  subject: string;
+  snippet: string;
+  has_attachments: boolean;
+  unread: boolean;
+  offloaded: boolean;
+  deleted: boolean;
+};
+export type ThreadPage = { threads: ThreadRow[]; next_cursor: string | null; total: number | null; total_bytes: number | null };
+export type MailAttachment = { index: number; name: string; type: string; size: number; preview: boolean };
+export type MailMessageInfo = {
+  id: number;
+  account_id: number;
+  provider_id: string;
+  thread_id: string;
+  from_addr: string;
+  to_addrs: string;
+  cc_addrs: string;
+  subject: string;
+  date: string;
+  size: number;
+  file_size: number;
+  labels: { id: string; name: string }[];
+  state: "in_mail" | "offloaded" | "deleted_in_provider";
+  offload_id: number | null;
+  attachments: MailAttachment[];
+  /** Known for one opened mail (`useMailMessage`); null in a thread list. */
+  has_remote_images: boolean | null;
+  gmail_url: string | null;
+  file_missing: boolean;
+};
+
+/** Mail offload and restore (spec §5). Named Mail… to stay apart from the Drive offload types. */
+export type MailBrief = { id: number; subject: string; from_addr: string; date: string; size: number };
+export type MailOffloadPreview = {
+  filter_text: string;
+  count: number;
+  bytes: number;
+  largest: MailBrief[];
+  oldest: MailBrief[];
+  /** Mail left out, each with how many and why, already written for people. */
+  excluded: { reason: string; count: number; text: string }[];
+};
+/** What an offload or restore starts from: a search, picked mails, or picked threads. */
+export type OffloadStart = { q: string } | { message_ids: number[] } | { thread_ids: string[] };
+export type MailOffloadState = "WAITING" | "RUNNING" | "DONE" | "DONE_WITH_SKIPS" | "FAILED";
+export type MailOffload = {
+  id: number;
+  account_id: number;
+  filter_text: string;
+  state: MailOffloadState;
+  total: number;
+  done: number;
+  skipped: number;
+  not_done: number;
+  bytes: number;
+  reason: string | null;
+  created_at: string;
+  finished_at: string | null;
+  /** The day Gmail empties these from its trash by itself (30 days after the offload). */
+  trash_until: string; // YYYY-MM-DD
+  google_emptied: boolean;
+};
+export type MailOffloadDetail = MailOffload & {
+  skipped_items: { message_id: number; subject: string; from_addr: string; date: string; reason: string }[];
+};
+export type MailRecoveryData = { offloads: MailOffload[]; deleted_count: number };

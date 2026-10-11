@@ -177,3 +177,33 @@ def test_seed_cli_says_to_restart_the_app(seed_env, monkeypatch, tmp_path, capsy
     monkeypatch.setenv("DRIVESYNC_ALLOW_LOCAL_ACCOUNTS", "1")
     main(["alice@example.com", "--folder", str(tmp_path / "d")])
     assert "restart the app" in capsys.readouterr().out
+
+
+def test_seed_can_give_the_pretend_account_a_fake_mailbox(seed_env, monkeypatch, settings):
+    from app.devtools.fake_gmail import SAMPLE_TOTAL, FakeGmail
+    from app.paths import Layout
+
+    monkeypatch.setenv("DRIVESYNC_ALLOW_LOCAL_ACCOUNTS", "1")
+    assert main(["mail@example.com", "--sample-mail"]) == 0
+    path = Layout(settings.drivesync_root).data / "fake-gmail" / "mail@example.com.json"
+    fake = FakeGmail.load(path, email="mail@example.com")
+    assert len(fake.messages) == SAMPLE_TOTAL
+    assert sorted(fake.user_labels.values()) == ["Receipts", "Travel", "Work"]
+
+
+async def test_a_pretend_account_backs_up_its_fake_mailbox(app, settings, db):
+    from app.devtools.fake_gmail import SAMPLE_KEPT
+    from app.devtools.seed_local_account import write_sample_mail
+    from app.models.enums import ServiceKind, ServiceState
+    from app.services.accounts.services import set_service_state
+    from app.services.mail.index import count_messages
+
+    settings.allow_local_accounts = True
+    app.state.mail.adapters.allow_pretend = True
+    acc = await app.state.accounts.add_local_account(
+        "bob@example.com", app.state.layout.root / "bob"
+    )
+    write_sample_mail(app.state.layout, "bob@example.com")
+    set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.ACTIVE)
+    await app.state.mail.handle(acc.id, "backup", {}, "MANUAL")
+    assert count_messages(db, acc.id) == SAMPLE_KEPT

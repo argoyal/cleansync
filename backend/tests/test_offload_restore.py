@@ -424,7 +424,7 @@ async def test_a_recorded_id_missing_from_the_saved_list_is_not_counted_as_empti
     db.expire_all()
     off = db.get(Offload, s.off.id)
     assert sorted(s.drive.deleted) == ["F1", "F2"] and off.trash_emptied is False
-    assert "2 of 3" in off.note and "1 file isn't in DriveSync's saved list" in off.note
+    assert "2 of 3" in off.note and "1 file isn't in CleanSync's saved list" in off.note
 
 
 async def test_a_server_copy_changed_during_the_empty_keeps_that_file(s, db):

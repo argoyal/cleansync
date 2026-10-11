@@ -28,7 +28,7 @@ const emptiable = (o: Offload) => o.state === "ACTIVE" && o.trash_verified && !o
 const nameOf = (path: string) => path.split("/").pop() || path;
 const files = (n: number) => `${n} ${n === 1 ? "file" : "files"}`;
 const items = (n: number) => `${n} ${n === 1 ? "item" : "items"}`;
-const NATIVE_NOTE = "Stays on Drive — not a file DriveSync can keep a copy of yet.";
+const NATIVE_NOTE = "Stays on Drive — not a file CleanSync can keep a copy of yet.";
 
 /**
  * A checkbox that can also be partly checked ("mixed"), for a folder with only some of its
@@ -326,7 +326,7 @@ function EmptyTrashDialog({ offload, onClose }: { offload: Offload; onClose: () 
     >
       <p>
         The {files(offload.file_count)} offloaded from <strong className="break-all">{offload.path}</strong> are deleted from
-        Google Drive's trash for good, which frees their space now. DriveSync first checks that the copy on this server is still
+        Google Drive's trash for good, which frees their space now. CleanSync first checks that the copy on this server is still
         complete. Nothing else in the trash is touched.
       </p>
       <p className="font-medium">This can't be undone on Google Drive. The copy on this server stays.</p>

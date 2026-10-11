@@ -24,7 +24,7 @@ from app.services.files.status import has_pending_changes
 from app.services.offload import store
 from app.services.sync.engine import WAITING_FOR_USER
 
-NATIVE_MSG = "Stays on Drive — not a file DriveSync can keep a copy of yet."
+NATIVE_MSG = "Stays on Drive — not a file CleanSync can keep a copy of yet."
 NOT_SYNCED_MSG = "This isn't in a synced folder, so it isn't on Google Drive."
 DRIVE_ONLY_MSG = "This is only on Google Drive so far; there is no copy on this server to keep."
 NOT_FOUND_MSG = "This is no longer here."
@@ -63,7 +63,7 @@ class PlanItem:
 
 
 def local_files(path: Path) -> tuple[int, int]:
-    """(files, bytes) the way rclone sees them: no links, none of DriveSync's own files."""
+    """(files, bytes) the way rclone sees them: no links, none of CleanSync's own files."""
     if path.is_file():
         return 1, path.stat().st_size
     count = size = 0

@@ -5,7 +5,7 @@ from pydantic import AfterValidator
 
 
 def _to_utc(value: datetime) -> datetime:
-    # SQLite hands back naive datetimes; DriveSync only ever stores UTC.
+    # SQLite hands back naive datetimes; CleanSync only ever stores UTC.
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)

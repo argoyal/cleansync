@@ -30,6 +30,7 @@ class JobState(StrEnum):
     BLOCKED = "BLOCKED"
     CANCELLED = "CANCELLED"
     INTERRUPTED = "INTERRUPTED"
+    PAUSED = "PAUSED"  # waits for something outside CleanSync (budget, disk space)
 
 
 class JobKind(StrEnum):
@@ -77,3 +78,56 @@ class OffloadState(StrEnum):
     ATTENTION = "ATTENTION"  # something to look at; still out of sync
     RESTORING = "RESTORING"  # back in sync; waiting for the safe resync that uploads it
     RESTORED = "RESTORED"  # back on Drive
+
+
+class Provider(StrEnum):
+    GOOGLE = "google"
+    MICROSOFT = "microsoft"  # later: OneDrive and Outlook
+
+
+class ServiceKind(StrEnum):
+    FILES = "files"
+    MAIL = "mail"
+
+
+class ServiceState(StrEnum):
+    NOT_SET_UP = "not_set_up"  # shows a "Set up" card
+    SETTING_UP = "setting_up"  # permission given; waiting for the owner to start
+    ACTIVE = "active"
+    NEEDS_RECONNECT = "needs_reconnect"  # the login or the permission went away
+    PAUSED = "paused"  # in the model for a later "pause mail" switch; nothing sets it yet
+
+
+class MailState(StrEnum):
+    IN_MAIL = "in_mail"  # in Gmail, and kept here
+    OFFLOADED = "offloaded"  # CleanSync moved it out of Gmail; kept here
+    DELETED = "deleted_in_provider"  # deleted in Gmail by someone else; kept here
+
+
+class MailPhase(StrEnum):
+    INITIAL = "initial"  # the first backup: listing every mail
+    INCREMENTAL = "incremental"  # keeping up from Gmail's history
+    RECHECK = "recheck"  # history too old: listing every mail again
+
+
+class MailJobKind(StrEnum):
+    BACKUP = "BACKUP"  # part of the first backup
+    CHECK = "CHECK"  # keeping up
+    RECHECK = "RECHECK"
+    OFFLOAD = "OFFLOAD"
+    RESTORE = "RESTORE"
+
+
+class MailOffloadState(StrEnum):
+    WAITING = "WAITING"  # before it starts, or paused by the budget; goes on by itself
+    RUNNING = "RUNNING"
+    DONE = "DONE"
+    DONE_WITH_SKIPS = "DONE_WITH_SKIPS"
+    FAILED = "FAILED"  # with a reason; what was not reached stayed in Gmail
+
+
+class MailItemResult(StrEnum):
+    PENDING = "pending"
+    OFFLOADED = "offloaded"
+    SKIPPED = "skipped"  # stayed in Gmail; the reason says why
+    RESTORED = "restored"  # put back in Gmail later

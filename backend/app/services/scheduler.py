@@ -28,6 +28,7 @@ class Scheduler:
         accounts,
         layout: Layout,
         catalog=None,
+        mail=None,
         clock=utcnow,
     ) -> None:
         self.session_factory = session_factory
@@ -35,6 +36,7 @@ class Scheduler:
         self.accounts = accounts
         self.layout = layout
         self.catalog = catalog
+        self.mail = mail
         self.clock = clock
         self.aps = AsyncIOScheduler(timezone="UTC")
 
@@ -69,6 +71,18 @@ class Scheduler:
                 coalesce=True,
                 max_instances=1,
                 misfire_grace_time=600,
+            )
+        if self.mail is not None:
+            # Spec §4.4: each account is checked when its interval has passed.
+            self.aps.add_job(
+                self.mail.tick,
+                "interval",
+                seconds=60,
+                id="mail",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=60,
             )
         self.reload()
 

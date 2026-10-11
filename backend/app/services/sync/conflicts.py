@@ -175,7 +175,7 @@ def resolve_conflict(
 
 def _resolve_files(local_dir: Path, backup_root: Path, conflict: Conflict, action: str) -> None:
     if not conflict.local_variant or not conflict.remote_variant:
-        raise ConflictError("DriveSync could not find both versions; run a sync first")
+        raise ConflictError("CleanSync could not find both versions; run a sync first")
     local_v = safe_join(local_dir, conflict.local_variant)
     remote_v = safe_join(local_dir, conflict.remote_variant)
     if not local_v.is_file() or not remote_v.is_file():

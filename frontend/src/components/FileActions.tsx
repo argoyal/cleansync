@@ -144,7 +144,7 @@ export function useFileActions(accountId: number | null) {
     items.push({ separator: true });
     items.push({ label: "Delete", icon: "delete", danger: true, onSelect: () => setDialog({ kind: "delete", items: [item] }), disabled: !changeable });
     items.push({ separator: true });
-    // Copies DriveSync kept of it (or of anything inside it).
+    // Copies CleanSync kept of it (or of anything inside it).
     items.push({ label: "Show in Recovery", icon: "history", onSelect: () => navigate(`/recovery?path=${encodeURIComponent(item.path)}`) });
     return items;
   };
@@ -353,7 +353,7 @@ function DeleteDialog({ accountId, items, onClose }: { accountId: number; items:
     >
       {synced && (
         <p>
-          DriveSync moves it into Recovery on this server first, so you can get it back. At the next sync it is removed
+          CleanSync moves it into Recovery on this server first, so you can get it back. At the next sync it is removed
           from Google Drive too, into Drive's trash.
         </p>
       )}
@@ -432,7 +432,7 @@ function StartSyncDialog({ accountId, item, onClose }: { accountId: number; item
       }
     >
       <p>
-        DriveSync will keep this folder in step with the Google Drive folder <strong>{item.path}</strong>. If Google Drive has no
+        CleanSync will keep this folder in step with the Google Drive folder <strong>{item.path}</strong>. If Google Drive has no
         folder there yet, the first sync makes it.
       </p>
       <p className="text-ink-2">Nothing moves yet: next you see what is on each side and type a confirmation.</p>

@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable, Iterator
 log = logging.getLogger(__name__)
 Handler = Callable[[int, str, str], Awaitable[object]]
 MISSING_DISK_MSG = (
-    "Storage disk is missing — syncing stopped. Reconnect the disk and restart DriveSync."
+    "Storage disk is missing — syncing stopped. Reconnect the disk and restart CleanSync."
 )
 DB_BROKEN_MSG = "database integrity check failed; restore a backup (see docs/backup-recovery.md)"
 
@@ -41,15 +41,21 @@ class SyncQueue:
         *,
         guard: Callable[[], str | None] | None = None,
         on_stop: Callable[[str], None] | None = None,
+        settle: Callable[[int], None] | None = None,
     ) -> None:
         self._handler = handler
         self._sem = asyncio.Semaphore(max_parallel)
         self._pending: dict[int, tuple[str, str]] = {}
+        # Which task owns each waiting entry, so a task that ends only clears its own.
+        self._pending_task: dict[int, asyncio.Task] = {}
         self._running: set[int] = set()
         self._dirty: dict[int, str] = {}
         self._finished: dict[int, float] = {}
         self._tasks: set[asyncio.Task] = set()
         self._finish_listeners: list[Callable[[int], None]] = []
+        # Set first thing in stop(): no new work starts, and a job cut off by the stop is
+        # left as it is for recover_interrupted to close at the next start.
+        self._stopping = False
         # Set when syncing must stop entirely (e.g. the database failed its integrity check).
         self.disabled_reason: str | None = None
         # Asked before every job starts and before every file action; a reason stops all
@@ -57,6 +63,9 @@ class SyncQueue:
         # not freeze the app.
         self._guard = guard
         self._on_stop = on_stop
+        # Called after every job that ran, however it ended: closes what a crash left open
+        # (a job row still RUNNING, a pair still RUNNING), so nothing shows as syncing forever.
+        self._settle = settle
 
     async def check(self) -> bool:
         """True when syncing is off. Once the guard objects, it stays off until a restart."""
@@ -80,7 +89,7 @@ class SyncQueue:
     def request(self, pair_id: int, trigger: str, action: str = "sync") -> str:
         # Only the remembered stop here: reading the disk would block the event loop. Every
         # job checks the disk again before it starts (see _run), and routes call check().
-        if self.disabled_reason is not None:
+        if self.disabled_reason is not None or self._stopping:
             return "disabled"
         if pair_id in self._running:
             if action != "sync":
@@ -94,9 +103,18 @@ class SyncQueue:
             return "already_queued"
         self._pending[pair_id] = (action, trigger)
         task = asyncio.get_running_loop().create_task(self._run(pair_id))
+        self._pending_task[pair_id] = task
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(lambda t: self._task_done(t, pair_id))
         return "queued"
+
+    def _task_done(self, task: asyncio.Task, pair_id: int) -> None:
+        self._tasks.discard(task)
+        # A task cancelled before its first step never runs its own tidy-up: drop its
+        # waiting entry here, but only if a newer task has not taken that place since.
+        if self._pending_task.get(pair_id) is task:
+            del self._pending_task[pair_id]
+            self._pending.pop(pair_id, None)
 
     def add_finish_listener(self, listener: Callable[[int], None]) -> None:
         """Call listener(pair_id) on the event loop whenever a job for a pair ends."""
@@ -130,41 +148,66 @@ class SyncQueue:
         return self._finished.get(pair_id)
 
     async def _run(self, pair_id: int) -> None:
-        async with self._sem:
-            action, trigger = self._pending.pop(pair_id)
-            self._running.add(pair_id)  # busy while the disk is checked: no second job slips in
-            try:
-                stopped = await self.check()
-            except BaseException:
-                self._running.discard(pair_id)
-                raise
-            if stopped:
-                # The disk went away while this job waited: run nothing, re-run nothing.
-                self._running.discard(pair_id)
-                self._dirty.pop(pair_id, None)
-                return
-            try:
-                await self._handler(pair_id, action, trigger)
-            except Exception:
-                # The engine already marked the job FAILED and the pair ERROR; keep going.
-                log.exception("job for pair %s (%s) failed unexpectedly", pair_id, action)
-            finally:
+        holding = False  # this job marked the pair busy
+        ran = False  # the handler was called
+        try:
+            async with self._sem:
+                action, trigger = self._pending.pop(pair_id)
+                self._pending_task.pop(pair_id, None)
+                self._running.add(pair_id)  # busy while the disk is checked: no second job slips in
+                holding = True
+                if await self.check():
+                    # The disk went away while this job waited: run nothing, re-run nothing.
+                    self._dirty.pop(pair_id, None)
+                    return
+                ran = True
+                try:
+                    await self._handler(pair_id, action, trigger)
+                except Exception:
+                    # The engine already marked the job FAILED and the pair ERROR; keep going.
+                    log.exception("job for pair %s (%s) failed unexpectedly", pair_id, action)
+        finally:
+            # However the job ended (an error, a cancel, a stop), the pair is never left busy.
+            if self._pending_task.get(pair_id) is asyncio.current_task():
+                # cancelled while it waited for a free slot
+                del self._pending_task[pair_id]
+                self._pending.pop(pair_id, None)
+            if ran and self._stopping:
+                # The app is shutting down: this is not a failure. Leave the job and pair rows
+                # as they are; the next start closes them as interrupted and syncs again.
                 self._finished[pair_id] = time.monotonic()
                 self._running.discard(pair_id)
-                for listener in self._finish_listeners:
-                    try:
-                        listener(pair_id)
-                    except Exception:
-                        log.exception("finish listener failed for pair %s", pair_id)
-                again = self._dirty.pop(pair_id, None)
-                if again is not None:
-                    self.request(pair_id, again)
+            elif ran:
+                self._job_ended(pair_id)
+            elif holding:
+                self._running.discard(pair_id)
+
+    def _job_ended(self, pair_id: int) -> None:
+        self._finished[pair_id] = time.monotonic()
+        if self._settle is not None:
+            try:
+                self._settle(pair_id)
+            except Exception:
+                log.exception("could not close what the job for pair %s left open", pair_id)
+        self._running.discard(pair_id)
+        for listener in self._finish_listeners:
+            try:
+                listener(pair_id)
+            except Exception:
+                log.exception("finish listener failed for pair %s", pair_id)
+        again = self._dirty.pop(pair_id, None)
+        if again is not None:
+            try:
+                self.request(pair_id, again)
+            except RuntimeError:  # no event loop any more: the app is shutting down
+                log.info("not re-running pair %s: shutting down", pair_id)
 
     async def wait_idle(self) -> None:
         while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
     async def stop(self) -> None:
+        self._stopping = True  # first: nothing below may start new work
         self._dirty.clear()
         for t in list(self._tasks):
             t.cancel()

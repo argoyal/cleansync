@@ -185,7 +185,7 @@ def test_a_file_newer_than_the_cached_statuses_is_not_called_synced(
     pair = make_pair(acc, initialized=True)
     save_catalog(pair.id, [])
     _browse(auth_client, acc)  # builds and caches the statuses
-    _write(root, "dropped-in-from-windows.txt")  # no DriveSync action, so no invalidation
+    _write(root, "dropped-in-from-windows.txt")  # no CleanSync action, so no invalidation
     items, _ = _browse(auth_client, acc)
     assert items["dropped-in-from-windows.txt"]["status"] == "upload"
 

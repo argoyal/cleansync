@@ -123,7 +123,7 @@ describe("sync activity", () => {
   });
 
   it("shows every switch as stopped while the storage disk is missing, and sends nothing", async () => {
-    const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart DriveSync.";
+    const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart CleanSync.";
     const { calls } = mockApi({
       "GET /api/sync-pairs": [PAIR, { ...PAIR, id: 8, name: "Photos", paused: true, status: "PAUSED" }],
       "GET /api/sync-pairs/7/catalog": CATALOG,
@@ -296,7 +296,7 @@ describe("every attention reason is explained", () => {
     ["BLOCKED", {}, /would delete more files than your limit/, /Review blocked sync, My Drive/],
     ["CONFLICTS", {}, /changed on both sides/, /Resolve conflicts, My Drive/],
     ["NEEDS_RESYNC", {}, /safe resync copies both ways/, /Run safe resync, My Drive/],
-    ["AUTH", {}, /no longer lets DriveSync in/, /Reconnect account, My Drive/],
+    ["AUTH", {}, /no longer lets CleanSync in/, /Reconnect account, My Drive/],
     ["ACCESS_CHECK", {}, /storage folder or its marker file can't be found/, /Sync now, My Drive/],
     ["PLAN_UNREADABLE", {}, /couldn't read rclone's plan, so nothing was changed/, /Sync now, My Drive/],
     ["FAILED", { next_sync_at: "2999-01-01T00:00:00Z" }, /The last sync failed. Retrying/, /Sync now, My Drive/],
@@ -431,5 +431,49 @@ describe("conflict load errors", () => {
     renderApp(<ConflictsPage />, { withAccount: true });
     expect(await screen.findByText(/Could not load the conflicts of My Drive/)).toBeInTheDocument();
     expect(screen.queryByText("No conflicts")).toBeNull();
+  });
+});
+
+const MAIL_STATUS = {
+  account_id: 1,
+  email: "alice@example.com",
+  service: "active",
+  phase: "incremental",
+  stored: 24,
+  stored_bytes: 8 * 1024 ** 2,
+  total: 26,
+  running: false,
+  waiting: false,
+  time_left_s: null,
+  last_run_at: "2026-10-10T09:58:00Z",
+  last_error: "Paused: CleanSync used its Google API budget for today (10,000,000 units). It goes on after midnight UTC.",
+  job: { id: 3, kind: "CHECK", state: "PAUSED", started_at: "2026-10-10T09:58:00Z", completed_at: "2026-10-10T09:58:01Z", done: 0, message: "x" },
+  failed: [],
+  budget_reached: true,
+};
+
+describe("mail on sync activity", () => {
+  it("shows a mail card per account and one list of Drive and mail jobs with logs", async () => {
+    mockApi({
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/sync-pairs/7/catalog": CATALOG,
+      "GET /api/activity": [],
+      "GET /api/mail/overview": [MAIL_STATUS],
+      "GET /api/mail/status": MAIL_STATUS,
+      "GET /api/activity/jobs": [
+        { source: "mail", id: 3, account_id: 1, title: "Mail: alice@example.com", kind: "CHECK", state: "PAUSED", started_at: "2026-10-10T09:58:00Z", completed_at: "2026-10-10T09:58:01Z", message: "Paused: budget", log_url: "/api/mail/jobs/3/log" },
+        { source: "files", id: 41, account_id: 1, title: "My Drive", kind: "BISYNC", state: "SUCCESS", started_at: "2026-10-10T09:55:00Z", completed_at: "2026-10-10T09:55:20Z", message: null, log_url: "/api/sync-pairs/7/logs/41/download" },
+      ],
+    });
+    renderApp(<ActivityPage />);
+    const card = await screen.findByRole("region", { name: "Mail: alice@example.com" });
+    expect(await within(card).findByText(/It goes on after midnight UTC/)).toBeInTheDocument();
+    const jobs = await screen.findByRole("list", { name: "Recent jobs" });
+    const rows = within(jobs).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("Mail: alice@example.com");
+    expect(rows[0]).toHaveTextContent("Paused");
+    expect(within(rows[0]).getByRole("link", { name: "Log of Mail: alice@example.com" })).toHaveAttribute("href", "/api/mail/jobs/3/log");
+    expect(rows[1]).toHaveTextContent("My Drive");
+    expect(within(rows[1]).getByRole("link", { name: "Log of My Drive" })).toHaveAttribute("href", "/api/sync-pairs/7/logs/41/download");
   });
 });

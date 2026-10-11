@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.models.enums import (
 )
 from app.paths import Layout
 from app.services.events.bus import EventBus, record_event
+from app.services.google.quota import drive_run_estimate
 from app.services.rclone.commands import BisyncTarget, RcloneEnv, bisync_args, sync_args
 from app.services.rclone.errors import Failure, classify_failure
 from app.services.rclone.parse import (
@@ -35,6 +37,7 @@ from app.services.sync.pairs import pair_local_dir, pair_remote
 log = logging.getLogger(__name__)
 _MAX_PLANNED_ROWS = 10_000
 PLAN_UNREADABLE_MSG = "Couldn't read rclone's plan; nothing was changed"
+SETTLED_MSG = "The sync stopped before it finished. It runs again at the next sync."
 # Pairs waiting on the user are not retried by timers or file changes, only by explicit actions.
 # The pair stopped for the owner to look first; only a manual sync (or a Resolve) goes on.
 WAITING_FOR_USER = {
@@ -79,6 +82,9 @@ class SyncEngine:
         self.runner = runner
         self.clock = clock
         self.initial = None  # set by InitialSync (Task 12)
+        self.on_api_estimate: Callable[[int], None] | None = (
+            None  # spec §7: rclone's Drive calls, estimated
+        )
 
     # ---- helpers reused by other services -------------------------------------------------
     def start_job(self, db: Session, pair: SyncPair, kind: str, trigger: str) -> SyncJob:
@@ -124,6 +130,17 @@ class SyncEngine:
         self.bus.publish(
             "job", {"pair_id": job.pair_id, "job_id": job.id, "kind": job.kind, "state": state}
         )
+        if self.on_api_estimate is not None and job.kind in (
+            JobKind.DRY_RUN,
+            JobKind.BISYNC,
+            JobKind.SYNC,
+            JobKind.RESYNC,
+            JobKind.PREVIEW,
+        ):
+            try:
+                self.on_api_estimate(drive_run_estimate(job.files_changed or 0))
+            except Exception:  # an estimate must never break a sync
+                log.exception("could not add the Drive estimate for job %s", job.id)
 
     def set_status(
         self, db: Session, pair: SyncPair, status: str, reason: str | None = None
@@ -138,6 +155,34 @@ class SyncEngine:
             pair.override_next = False
         db.commit()
         self.bus.publish("pair", {"pair_id": pair.id, "status": status, "reason": reason})
+
+    def settle_pair(self, pair_id: int) -> bool:
+        """After every queue job: close a job row a crash left RUNNING and take the pair out
+        of RUNNING, so it never shows as syncing forever. True when something was left open.
+
+        The queue calls this while the pair still counts as busy, so no other job (and no
+        offload or file action, which hold the pair) can be running for it."""
+        with self.session_factory() as db:
+            pair = db.get(SyncPair, pair_id)
+            if pair is None:
+                return False
+            jobs = list(
+                db.scalars(
+                    select(SyncJob).where(
+                        SyncJob.pair_id == pair_id, SyncJob.state == JobState.RUNNING
+                    )
+                )
+            )
+            if not jobs and pair.status != PairStatus.RUNNING:
+                return False
+            log.warning("pair %s: a job ended without closing; marking it failed", pair_id)
+            for job in jobs:
+                self.finish_job(db, job, JobState.FAILED, error=SETTLED_MSG)
+            if pair.status == PairStatus.RUNNING:
+                pair.last_error = SETTLED_MSG
+                pair.last_error_at = self.clock()
+                self.set_status(db, pair, PairStatus.ERROR, AttentionReason.FAILED)
+            return True
 
     @staticmethod
     def _paused_now(db: Session, pair: SyncPair) -> bool:
@@ -403,7 +448,7 @@ class SyncEngine:
             if not bidirectional and count_dry_run_deletes(line):
                 one_way_deletes.append(line.path_obj or "")
 
-        # The dry run lifts bisync's own 50% brake: DriveSync's count gate below decides, and
+        # The dry run lifts bisync's own 50% brake: CleanSync's count gate below decides, and
         # a blocked plan is stored for review. The real run keeps the brake (see below).
         res = await self.run(
             self._args(

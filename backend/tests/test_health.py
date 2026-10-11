@@ -9,7 +9,7 @@ def test_health_reports_ok_and_version(settings):
     assert resp.status_code == 200
     assert resp.json() == {
         "status": "ok",
-        "version": "0.1.0",
-        "app_name": "DriveSync",
+        "version": "0.2.0",
+        "app_name": "CleanSync",
         "syncing": "on",
     }

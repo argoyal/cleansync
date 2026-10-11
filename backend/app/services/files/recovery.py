@@ -1,7 +1,7 @@
-"""The Recovery view (spec §8): everything DriveSync kept that can be put back.
+"""The Recovery view (spec §8): everything CleanSync kept that can be put back.
 
 Entries are files under app/data/backups/<email>/<pair id or "unsynced">/<YYYY-MM-DD>/, plus
-offloads whose files DriveSync sent to Google Drive's trash. An entry's id is its path under
+offloads whose files CleanSync sent to Google Drive's trash. An entry's id is its path under
 backups/<email>/ (or "offload:<id>"). Restoring copies a file back; it never overwrites.
 
 Offload lists (delete-<job>.txt) and offload manifests live in app/data/offloads/, not under
@@ -40,7 +40,7 @@ KINDS = ("sync_backup", "deleted", "first_sync", "resync", "conflict", "offload"
 OFFLOAD_PREFIX = "offload:"
 GOOGLE_TRASH_DAYS = 30  # Google empties its trash after 30 days
 PAIR_GONE_MSG = (
-    "The sync folder this came from was removed, so DriveSync doesn't know where it goes. "
+    "The sync folder this came from was removed, so CleanSync doesn't know where it goes. "
     "Download it instead."
 )
 OFFLOAD_MSG = (
@@ -114,7 +114,7 @@ def _classify(unsynced: bool, parts: list[str]) -> tuple[str, list[str]] | None:
     if _DELETED.fullmatch(first):
         kind, inner = "deleted", parts[1:]
     elif unsynced:
-        return None  # nothing else in "unsynced" is DriveSync's
+        return None  # nothing else in "unsynced" is CleanSync's
     elif _INITIAL.fullmatch(first):
         kind, inner = "first_sync", parts[1:]
     elif _RESYNC.fullmatch(first):

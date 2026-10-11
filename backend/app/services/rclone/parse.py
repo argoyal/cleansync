@@ -16,7 +16,7 @@ _PREFIX = re.compile(r"^\{path[12]/\}")
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _RENAME = re.compile(r"^-\s+(Path1|Path2)\s+Renaming (?:Path1|Path2) copy\s+-\s+(.+)$")
 # After "New or changed in both paths", rclone may find both sides equal (or a folder) and leave
-# them alone: then it is not a conflict (e.g. a folder DriveSync renamed on both sides).
+# them alone: then it is not a conflict (e.g. a folder CleanSync renamed on both sides).
 _SETTLED = re.compile(
     r"^(?:Files are equal! Skipping|This is a directory, not a file\. Skipping equality check "
     r"and will not rename): (.+)$"
