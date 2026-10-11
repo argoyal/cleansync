@@ -358,3 +358,25 @@ export type ThreadRow = {
   deleted: boolean;
 };
 export type ThreadPage = { threads: ThreadRow[]; next_cursor: string | null; total: number | null; total_bytes: number | null };
+export type MailAttachment = { index: number; name: string; type: string; size: number; preview: boolean };
+export type MailMessageInfo = {
+  id: number;
+  account_id: number;
+  provider_id: string;
+  thread_id: string;
+  from_addr: string;
+  to_addrs: string;
+  cc_addrs: string;
+  subject: string;
+  date: string;
+  size: number;
+  file_size: number;
+  labels: { id: string; name: string }[];
+  state: "in_mail" | "offloaded" | "deleted_in_provider";
+  offload_id: number | null;
+  attachments: MailAttachment[];
+  /** Known for one opened mail (`useMailMessage`); null in a thread list. */
+  has_remote_images: boolean | null;
+  gmail_url: string | null;
+  file_missing: boolean;
+};

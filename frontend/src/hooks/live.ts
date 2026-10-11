@@ -106,7 +106,7 @@ export function useLiveEvents(): void {
         refreshRecovery();
       });
       // Mail jobs (spec §4): progress, pauses and the end of each job.
-      source.addEventListener("mail", () => invalidate(["mail-status", "mail-overview", "mail-counts", "mail-threads", "mail-thread", "activity", "activity-jobs", "google-usage", "accounts"]));
+      source.addEventListener("mail", () => invalidate(["mail-status", "mail-overview", "mail-counts", "mail-threads", "mail-thread", "mail-message", "activity", "activity-jobs", "google-usage", "accounts"]));
       source.addEventListener("pair", () => invalidate(["pairs", "status", "browse"]));
       source.addEventListener("progress", (e) => {
         const p = data(e) as Progress | null;

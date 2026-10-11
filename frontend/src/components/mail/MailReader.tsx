@@ -6,6 +6,7 @@ import type { Account } from "../../api/types";
 import { formatBytes } from "../../lib/format";
 import { viewTitle } from "../../lib/mail";
 import { MailList } from "./MailList";
+import { MailThread } from "./MailThread";
 
 /** Spec §6.1: the list beside the open mail; on phones one column at a time. */
 export function MailReader({ account, actions }: { account: Account; actions?: ReactNode }) {
@@ -34,7 +35,7 @@ export function MailReader({ account, actions }: { account: Account; actions?: R
           <MailList accountId={account.id} view={view} label={label} q={q} thread={thread} />
         </section>
         <section aria-label="Open mail" className={`min-w-0 flex-1 overflow-y-auto ${thread ? "" : "hidden xl:block"}`}>
-          {thread ? <p className="p-6 text-ink-2">Opening…</p> : <p className="p-6 text-ink-2">Pick a mail to read it.</p>}
+          {thread ? <MailThread account={account} threadId={thread} /> : <p className="p-6 text-ink-2">Pick a mail to read it.</p>}
         </section>
       </div>
     </div>

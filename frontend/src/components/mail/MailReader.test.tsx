@@ -138,3 +138,123 @@ describe("message list", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "Deleted in Gmail" })).toBeInTheDocument());
   });
 });
+
+function msg(over: Record<string, unknown> & { id: number }) {
+  return {
+    account_id: 1,
+    provider_id: `p${over.id}`,
+    thread_id: "t1",
+    from_addr: "Shop <shop@example.com>",
+    to_addrs: "alice@example.com",
+    cc_addrs: "",
+    subject: "Your order has shipped",
+    date: "2026-10-05T10:00:00Z",
+    size: 2000,
+    file_size: 2100,
+    labels: [],
+    state: "in_mail",
+    offload_id: null,
+    attachments: [],
+    has_remote_images: false,
+    gmail_url: "https://mail.google.com/mail/u/alice%40example.com/#all/p1",
+    file_missing: false,
+    ...over,
+  };
+}
+
+describe("reading a mail", () => {
+  const open = (messages: unknown[], route = "/mail?thread=t1", more: Record<string, unknown> = {}) => {
+    const mocked = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: 1, total_bytes: 1 },
+      "GET /api/mail/threads/t1": messages,
+      ...more,
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route });
+    return mocked;
+  };
+
+  it("shows the mail in a sandboxed frame with no scripts, and images only when asked", async () => {
+    open([msg({ id: 1, has_remote_images: true, labels: [{ id: "Label_2", name: "Receipts" }] })]);
+    const frame = await screen.findByTitle("Mail: Your order has shipped");
+    expect(frame.tagName).toBe("IFRAME");
+    expect(frame).toHaveAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
+    expect(frame).toHaveAttribute("src", "/api/mail/messages/1/body");
+    expect(frame.getAttribute("sandbox")).not.toMatch(/allow-scripts|allow-same-origin/);
+    expect(screen.getByText("Images from the internet are hidden, so the sender can't tell you opened this mail.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Show images" }));
+    expect(screen.getByTitle("Mail: Your order has shipped")).toHaveAttribute("src", "/api/mail/messages/1/body?images=1");
+    expect(screen.getByText("Receipts")).toBeInTheDocument();
+  });
+
+  it("frames the mail with no referrer and never puts the mail's HTML in the page", async () => {
+    open([msg({ id: 1 })]);
+    const frame = await screen.findByTitle("Mail: Your order has shipped");
+    expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(frame).not.toHaveAttribute("srcdoc");
+    expect(screen.queryByRole("button", { name: "Show images" })).not.toBeInTheDocument();
+  });
+
+  it("asks the server about remote images when the thread list doesn't know", async () => {
+    // The real thread route leaves has_remote_images null; only the one-mail route reads the file.
+    const { calls } = open([msg({ id: 1, has_remote_images: null })], "/mail?thread=t1", {
+      "GET /api/mail/messages/1": msg({ id: 1, has_remote_images: true }),
+    });
+    expect(await screen.findByRole("button", { name: "Show images" })).toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/api/mail/messages/1")).toBe(true);
+  });
+
+  it("shows images only for the mail where they were asked for", async () => {
+    open([
+      msg({ id: 1, subject: "Plan", date: "2026-10-01T10:00:00Z", has_remote_images: true }),
+      msg({ id: 2, subject: "Re: Plan", has_remote_images: true }),
+    ]);
+    await screen.findByTitle("Mail: Re: Plan");
+    await userEvent.click(screen.getByRole("button", { name: "Show images" }));
+    expect(screen.getByTitle("Mail: Re: Plan")).toHaveAttribute("src", "/api/mail/messages/2/body?images=1");
+    await userEvent.click(screen.getByRole("button", { name: /^Plan, from Shop/ }));
+    expect(screen.getByTitle("Mail: Plan")).toHaveAttribute("src", "/api/mail/messages/1/body");
+  });
+
+  it("offers attachments to preview or download, the .eml, and Open in Gmail", async () => {
+    open([
+      msg({
+        id: 1,
+        attachments: [
+          { index: 0, name: "invoice.pdf", type: "application/pdf", size: 1234, preview: true },
+          { index: 1, name: "data.bin", type: "application/octet-stream", size: 2, preview: false },
+        ],
+      }),
+    ]);
+    const files = await screen.findByRole("list", { name: "Attachments" });
+    expect(within(files).getByRole("link", { name: "Preview invoice.pdf" })).toHaveAttribute("href", "/api/mail/messages/1/attachments/0");
+    expect(within(files).getByRole("link", { name: "Preview invoice.pdf" })).toHaveAttribute("target", "_blank");
+    expect(within(files).getByRole("link", { name: "Download invoice.pdf" })).toHaveAttribute("href", "/api/mail/messages/1/attachments/0?download=1");
+    expect(within(files).queryByRole("link", { name: "Preview data.bin" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download .eml" })).toHaveAttribute("href", "/api/mail/messages/1/eml");
+    expect(screen.getByRole("link", { name: "Open in Gmail" })).toHaveAttribute("href", "https://mail.google.com/mail/u/alice%40example.com/#all/p1");
+  });
+
+  it("opens the newest mail of a thread and folds the older ones", async () => {
+    open([msg({ id: 1, subject: "Plan", date: "2026-10-01T10:00:00Z" }), msg({ id: 2, subject: "Re: Plan", state: "offloaded", gmail_url: null })]);
+    expect(await screen.findByTitle("Mail: Re: Plan")).toBeInTheDocument();
+    expect(screen.queryByTitle("Mail: Plan")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open in Gmail" })).not.toBeInTheDocument(); // not in Gmail now
+    expect(screen.getByText("Offloaded")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^Plan, from Shop/ }));
+    expect(screen.getByTitle("Mail: Plan")).toBeInTheDocument();
+  });
+
+  it("says when a mail's file is missing", async () => {
+    open([msg({ id: 1, file_missing: true })]);
+    expect(await screen.findByText("This mail's file is missing on the storage disk.")).toBeInTheDocument();
+    expect(screen.queryByTitle(/^Mail:/)).not.toBeInTheDocument();
+  });
+
+  it("on a phone the open mail replaces the list and Back returns to it", async () => {
+    open([msg({ id: 1 })], "/mail?view=inbox&thread=t1");
+    expect(screen.getByRole("region", { name: "Mail list" })).toHaveClass("hidden", "xl:block");
+    await userEvent.click(await screen.findByRole("link", { name: "Back to the list" }));
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/mail\?view=inbox$/);
+  });
+});

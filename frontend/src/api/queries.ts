@@ -14,6 +14,7 @@ import type {
   GoogleUsage,
   Job,
   MailCounts,
+  MailMessageInfo,
   MailSetupInfo,
   MailStatus,
   Me,
@@ -230,3 +231,17 @@ export const useMailThreads = (accountId: number, p: { view: string; label: stri
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     retry: false,
   });
+
+export const useMailThread = (accountId: number, threadId: string) =>
+  useQuery({
+    queryKey: ["mail-thread", accountId, threadId],
+    queryFn: () => api<MailMessageInfo[]>(`/api/mail/threads/${encodeURIComponent(threadId)}${query({ account_id: accountId })}`),
+    enabled: threadId !== "",
+  });
+/** One mail in full; the server reads its file to tell if it has remote images. */
+export const useMailMessage = (id: number, enabled = true) =>
+  useQuery({ queryKey: ["mail-message", id], queryFn: () => api<MailMessageInfo>(`/api/mail/messages/${id}`), enabled });
+export const mailBodyUrl = (id: number, images: boolean) => `/api/mail/messages/${id}/body${images ? "?images=1" : ""}`;
+export const mailAttachmentUrl = (id: number, index: number, download = false) =>
+  `/api/mail/messages/${id}/attachments/${index}${download ? "?download=1" : ""}`;
+export const mailEmlUrl = (id: number) => `/api/mail/messages/${id}/eml`;
