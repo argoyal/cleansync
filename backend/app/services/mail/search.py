@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import Text, cast, column, false, func, or_, select, text
+from sqlalchemy import Text, cast, column, false, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models import MailLabel, MailMessage
@@ -183,16 +183,20 @@ def has_label(label_id: str):
 
 
 def label_ids(db: Session, account_id: int, name: str) -> list[str]:
-    low = name.lower()
-    ids = [SYSTEM_LABELS[low]] if low in SYSTEM_LABELS else []
-    ids += list(
-        db.scalars(
-            select(MailLabel.provider_label_id).where(
-                MailLabel.account_id == account_id,
-                or_(func.lower(MailLabel.name) == low, MailLabel.provider_label_id == name),
-            )
+    """Names are matched in Python with casefold(): SQLite's lower() only knows A–Z, so
+    "Équipe" would never match "équipe" there."""
+    folded = name.casefold()
+    ids = [SYSTEM_LABELS[folded]] if folded in SYSTEM_LABELS else []
+    labels = db.execute(
+        select(MailLabel.provider_label_id, MailLabel.name).where(
+            MailLabel.account_id == account_id
         )
-    )
+    ).all()
+    ids += [
+        lid
+        for lid, lname in labels
+        if lid not in ids and (lname.casefold() == folded or lid == name)
+    ]
     return ids
 
 

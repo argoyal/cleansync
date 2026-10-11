@@ -191,3 +191,25 @@ def test_huge_sizes_are_capped_and_searchable(db, make_account):
 def test_only_plain_digits_count(text):
     with pytest.raises(SearchError):
         parse_query(text, now=NOW)
+
+
+def test_label_names_match_whatever_their_case_outside_plain_ascii(db, make_account):
+    acc = make_account()
+    db.add_all(
+        [
+            MailLabel(
+                account_id=acc.id, provider_label_id="Label_7", name="Équipe Paris", type="user"
+            ),
+            MailLabel(account_id=acc.id, provider_label_id="Label_8", name="Straße", type="user"),
+        ]
+    )
+    db.commit()
+    _add(db, acc, "m1", "Réunion", labels=("INBOX", "Label_7"))
+    _add(db, acc, "m2", "Brief", labels=("INBOX", "Label_8"))
+    _add(db, acc, "m3", "Other", labels=("INBOX",))
+    assert _found(db, acc, q='label:"Équipe Paris"') == ["m1"]
+    assert _found(db, acc, q='label:"équipe paris"') == ["m1"]
+    assert _found(db, acc, q='label:"ÉQUIPE PARIS"') == ["m1"]
+    assert _found(db, acc, q="label:STRASSE") == ["m2"]  # casefold, not just lower
+    assert _found(db, acc, q="label:Label_7") == ["m1"]
+    assert _found(db, acc, q="label:INBOX") == ["m1", "m2", "m3"]
