@@ -172,23 +172,35 @@ class MailService:
             phase = sync_state(db, account_id).phase
             floor = int(get_setting(db, "mail_disk_floor_gb")) * GB  # type: ignore[arg-type]
             job = start_mail_job(db, self.layout, self.bus, account_id, JOB_KIND[phase], trigger)
-        r = BackupRun(
-            account_id=account_id,
-            email=acc.email,
-            adapter=self.adapter_for(acc),
-            job_id=job.id,
-            floor_bytes=floor,
-            is_stopped=self.stopped,
-            log_path=job.log_path,
-        )
+        r: BackupRun | None = None
         try:
+            r = BackupRun(
+                account_id=account_id,
+                email=acc.email,
+                adapter=self.adapter_for(acc),
+                job_id=job.id,
+                floor_bytes=floor,
+                is_stopped=self.stopped,
+                log_path=job.log_path,
+            )
             state, message = await self.backup.run(r)
         except Exception as e:
             log.exception("mail backup for account %s failed", account_id)
             state, message = JobState.FAILED, f"Something went wrong: {e}"
+            # Counts as a run: the next try waits for the interval, not the next minute.
+            try:
+                with self.sf() as db:
+                    st = sync_state(db, account_id)
+                    st.last_run_at = self.clock()
+                    st.last_error = message
+                    db.commit()
+            except Exception:
+                log.exception("could not note the failed mail run of account %s", account_id)
+        done = r.downloaded if r else 0
+        size = r.bytes if r else 0
         with self.sf() as db:
-            finish_mail_job(db, self.bus, job.id, state, message, done=r.downloaded, bytes_=r.bytes)
-            if state != JobState.SUCCESS or r.downloaded or r.failed:
+            finish_mail_job(db, self.bus, job.id, state, message, done=done, bytes_=size)
+            if state != JobState.SUCCESS or done or (r is not None and r.failed):
                 level = {JobState.SUCCESS: "info", JobState.PAUSED: "warning"}.get(state, "error")
                 record_event(
                     db,
@@ -199,7 +211,7 @@ class MailService:
                     account_id=account_id,
                     data={"mail_job_id": job.id},
                 )
-        if r.login_lost:
+        if r is not None and r.login_lost:
             await self.accounts.mark_needs_reauth(account_id, message)
         self.budget.flush()
 
@@ -208,6 +220,8 @@ class MailService:
         """Once a minute: start a check for each account whose interval has passed."""
         if self.budget.reached():
             return  # the day's budget is used up: wait for the next UTC day (spec §7)
+        if await self.stopped():
+            return  # the disk is missing: the queue would only drop the requests
         now = self.clock()
         with self.sf() as db:
             interval = timedelta(seconds=int(get_setting(db, "mail_check_interval_s")))  # type: ignore[arg-type]

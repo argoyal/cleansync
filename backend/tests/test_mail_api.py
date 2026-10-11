@@ -234,3 +234,48 @@ def test_with_the_disk_missing_a_mail_job_left_running_is_closed_but_not_queued(
         db.expire_all()
         assert db.get(MailJob, job.id).state == JobState.INTERRUPTED
         assert app.state.mail.queue.requests == []
+
+
+async def test_a_backup_that_crashes_waits_for_the_interval_before_running_again(mail_app, db):
+    app, acc, _ = mail_app
+    mail = app.state.mail
+    set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.ACTIVE)
+
+    async def boom(_run):
+        raise RuntimeError("the mail folder is read-only")
+
+    mail.backup.run = boom
+    await mail.handle(acc.id, "backup", {}, "MANUAL")
+    db.expire_all()
+    job = db.query(MailJob).one()
+    assert job.state == JobState.FAILED and "read-only" in job.message
+    from app.services.mail.index import sync_state
+
+    st = sync_state(db, acc.id)
+    assert st.last_run_at is not None and "read-only" in st.last_error
+    await mail.tick()
+    assert mail.queue.requests == []  # not again every minute
+
+
+async def test_a_crash_while_picking_the_adapter_is_recorded_too(mail_app, db):
+    app, acc, _ = mail_app
+    set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.ACTIVE)
+
+    class Broken:
+        def for_account(self, account):
+            raise LookupError("No mail for this account")
+
+    app.state.mail.adapters = Broken()
+    await app.state.mail.handle(acc.id, "backup", {}, "MANUAL")
+    db.expire_all()
+    assert db.query(MailJob).one().state == JobState.FAILED
+    await app.state.mail.tick()
+    assert app.state.mail.queue.requests == []
+
+
+async def test_the_tick_queues_nothing_while_the_disk_is_missing(mail_app, db):
+    app, acc, _ = mail_app
+    set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.ACTIVE)
+    app.state.queue.disabled_reason = MISSING_DISK_MSG
+    await app.state.mail.tick()
+    assert app.state.mail.queue.requests == []
