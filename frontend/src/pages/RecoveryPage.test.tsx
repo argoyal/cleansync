@@ -209,7 +209,48 @@ describe("mail in Recovery", () => {
     expect(within(mail).getByText("2 mails were deleted in Gmail and are kept here.")).toBeInTheDocument();
     expect(within(mail).getByRole("link", { name: "Show them" })).toHaveAttribute("href", "/mail?view=deleted");
     await userEvent.click(within(mail).getByRole("button", { name: "Restore all to Gmail" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Put back" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, q: "is:deleted" }));
     expect(calls.some((c) => c.path === "/api/recovery")).toBe(false); // the Files list is not loaded under Mail
+  });
+
+  it("asks before putting back mail deleted in Gmail, with the count", async () => {
+    const { calls } = mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/recovery/mail": MAIL, "POST /api/mail/restore": { queued: "queued", count: 2 } });
+    renderApp(<RecoveryPage />, { withAccount: true, route: "/recovery?source=mail", path: "/recovery" });
+    const mail = await screen.findByRole("region", { name: "Mail in Recovery" });
+    await userEvent.click(within(mail).getByRole("button", { name: "Restore all to Gmail" }));
+    const ask = screen.getByRole("dialog", { name: "Put back 2 mails you deleted in Gmail?" });
+    await userEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(calls.some((c) => c.path === "/api/mail/restore")).toBe(false);
+    await userEvent.click(within(mail).getByRole("button", { name: "Restore all to Gmail" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Put back" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, q: "is:deleted" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("pages offloads 50 at a time with an offset, and stops at a short page", async () => {
+    const off = (id: number) => ({ ...MAIL.offloads[0], id, filter_text: `offload ${id}` });
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/recovery/mail": ({ url }: { url: URL }) => {
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        const n = offset === 0 ? 50 : 10;
+        return { offloads: Array.from({ length: n }, (_, i) => off(1000 - offset - i)), deleted_count: 0 };
+      },
+    });
+    renderApp(<RecoveryPage />, { withAccount: true, route: "/recovery?source=mail", path: "/recovery" });
+    const mail = await screen.findByRole("region", { name: "Mail in Recovery" });
+    await within(mail).findByRole("link", { name: "offload 1000" });
+    await userEvent.click(within(mail).getByRole("button", { name: "Show more" }));
+    expect(await within(mail).findByRole("link", { name: "offload 941" })).toBeInTheDocument();
+    expect(within(mail).getByRole("link", { name: "offload 1000" })).toBeInTheDocument(); // the first page stays
+    expect(within(mail).getAllByRole("link", { name: /^offload / })).toHaveLength(60);
+    expect(within(mail).queryByRole("button", { name: "Show more" })).toBeNull();
+    const asked = calls.filter((c) => c.path === "/api/recovery/mail").map((c) => [c.url.searchParams.get("limit"), c.url.searchParams.get("offset")]);
+    expect(asked).toEqual([
+      ["50", "0"],
+      ["50", "50"],
+    ]);
   });
 });

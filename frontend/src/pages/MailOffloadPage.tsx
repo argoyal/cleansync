@@ -1,6 +1,6 @@
 import { Link, useParams } from "react-router-dom";
 
-import { friendlyError } from "../api/client";
+import { ApiError, friendlyError } from "../api/client";
 import { useMailOffload, useMailOffloads } from "../api/queries";
 import { Bar, Button, Empty, Notice } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
@@ -10,22 +10,26 @@ import { OFFLOAD_STATE_TEXT, trashLine } from "../lib/mail";
 
 export { OFFLOAD_STATE_TEXT };
 
+const NO_SUCH_OFFLOAD = "That offload doesn't exist.";
+
 export const TRASH_NOTE = "Offloaded mail sits in Gmail's trash. Gmail empties its trash on its own after 30 days; that's when the space comes back.";
 
 /** Spec §5.3–5.5: one offload — its state, what was skipped and why, when Gmail frees the space, restore. */
 export function MailOffloadPage() {
   const { id } = useParams();
   const { accountId } = useCurrentAccount();
-  const off = useMailOffload(Number(id));
+  const offId = /^[1-9][0-9]{0,15}$/.test(id ?? "") ? Number(id) : null;
+  const off = useMailOffload(offId);
   const restore = useRestoreMail();
-  if (off.isError)
+  const missing = offId === null || (off.error instanceof ApiError && off.error.status === 404);
+  if (missing || off.isError)
     return (
       <div className="p-4 sm:p-6">
-        <Notice tone="err">{friendlyError(off.error)}</Notice>
+        <Notice tone="err">{missing ? NO_SUCH_OFFLOAD : friendlyError(off.error)}</Notice>
       </div>
     );
   const o = off.data;
-  if (!o) return null;
+  if (!o) return <p className="p-4 text-ink-2 sm:p-6">Loading…</p>;
   const busy = o.state === "WAITING" || o.state === "RUNNING";
   return (
     <div className="space-y-4 p-4 sm:p-6">

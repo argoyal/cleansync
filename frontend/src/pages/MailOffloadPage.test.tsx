@@ -70,6 +70,23 @@ describe("an offload's page", () => {
   it("says plainly when the offload is gone", async () => {
     mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/mail/offloads/9": () => json(404, { detail: "offload not found" }) });
     open(9);
-    expect(await screen.findByText("offload not found")).toBeInTheDocument();
+    expect(await screen.findByText("That offload doesn't exist.")).toBeInTheDocument();
+  });
+
+  it("says so for an id that isn't a number, without asking the server", async () => {
+    const { calls } = mockApi({ "GET /api/accounts": [ACCOUNT] });
+    renderApp(<MailOffloadPage />, { withAccount: true, route: "/mail/offloads/abc", path: "/mail/offloads/:id" });
+    expect(await screen.findByText("That offload doesn't exist.")).toBeInTheDocument();
+    expect(calls.some((c) => c.path.startsWith("/api/mail/offloads"))).toBe(false);
+  });
+
+  it("shows Loading… while the offload loads", async () => {
+    let answer: (v: Response) => void = () => {};
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/mail/offloads/7": () => new Promise<Response>((r) => (answer = r)) });
+    open();
+    expect(await screen.findByText("Loading…")).toBeInTheDocument();
+    answer(json(200, OFF));
+    expect(await screen.findByRole("heading", { name: "Mail offload" })).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { api, ApiError, encodePath, query } from "./client";
 import type {
@@ -256,18 +256,26 @@ export const useMailOffloads = (accountId: number | null) =>
     queryFn: () => api<MailOffload[]>(`/api/mail/offloads${query({ account_id: accountId })}`),
     enabled: accountId !== null,
   });
-/** One offload; asked again every 2 s while it waits or runs. */
-export const useMailOffload = (id: number) =>
+/** One offload; asked again every 2 s while it waits or runs. Not asked for an id that
+ * isn't a whole number (null). */
+export const useMailOffload = (id: number | null) =>
   useQuery({
     queryKey: ["mail-offload", id],
     queryFn: () => api<MailOffloadDetail>(`/api/mail/offloads/${id}`),
+    enabled: id !== null,
+    retry: false,
     refetchInterval: (q) => (OFFLOAD_BUSY.includes(q.state.data?.state ?? "") ? 2000 : false),
   });
-export const useMailRecovery = (accountId: number | null, limit = 50) =>
-  useQuery({
-    queryKey: ["mail-recovery", accountId, limit],
-    queryFn: () => api<MailRecoveryData>(`/api/recovery/mail${query({ account_id: accountId, limit })}`),
-    placeholderData: keepPreviousData,
+/** Mail in Recovery, a page of offloads at a time (the server takes at most 200 a page). */
+export const MAIL_RECOVERY_PAGE = 50;
+export const useMailRecovery = (accountId: number | null) =>
+  useInfiniteQuery({
+    queryKey: ["mail-recovery", accountId],
+    queryFn: ({ pageParam }) =>
+      api<MailRecoveryData>(`/api/recovery/mail${query({ account_id: accountId, limit: MAIL_RECOVERY_PAGE, offset: pageParam })}`),
+    initialPageParam: 0,
+    // The server sends no total: a short page is the last one.
+    getNextPageParam: (last, pages) => (last.offloads.length < MAIL_RECOVERY_PAGE ? undefined : pages.length * MAIL_RECOVERY_PAGE),
     enabled: accountId !== null,
     retry: false,
   });
