@@ -53,6 +53,7 @@ from app.services.google.client import GoogleClient
 from app.services.google.quota import ApiBudget, Pacer
 from app.services.mail.adapters import MailAdapters
 from app.services.mail.jobs import recover_mail_jobs
+from app.services.mail.offload_plan import recover_mail_offloads
 from app.services.mail.service import MailService
 from app.services.mail.store import sweep_temp_files
 from app.services.offload.service import OffloadService
@@ -125,6 +126,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             try:
                 with session_factory() as db:
                     recover_mail_jobs(db)
+                    recover_mail_offloads(db)
             except Exception:
                 logger.exception("could not close mail jobs left running")
             try:
@@ -140,6 +142,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 for pair_id in recover_interrupted(db):
                     app.state.queue.request(pair_id, "RECOVERY")
                 # A mail job a stop cut short goes on where it left off.
+                recover_mail_offloads(db)
                 for account_id in recover_mail_jobs(db):
                     app.state.mail.queue.request(account_id, "backup", trigger="RECOVERY")
             try:

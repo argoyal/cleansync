@@ -7,6 +7,8 @@ from app.models.mail import (
     MailJob,
     MailLabel,
     MailMessage,
+    MailOffload,
+    MailOffloadItem,
     MailRecheckSeen,
     MailSyncState,
 )
@@ -24,6 +26,8 @@ __all__ = [
     "MailJob",
     "MailLabel",
     "MailMessage",
+    "MailOffload",
+    "MailOffloadItem",
     "MailRecheckSeen",
     "MailSyncState",
     "Offload",

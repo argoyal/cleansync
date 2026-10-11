@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.clock import utcnow
 from app.models.base import Base
-from app.models.enums import JobState, MailPhase, MailState
+from app.models.enums import JobState, MailItemResult, MailOffloadState, MailPhase, MailState
 
 
 class MailMessage(Base):
@@ -127,3 +127,34 @@ class MailRecheckSeen(Base):
         ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True
     )
     provider_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class MailOffload(Base):
+    """One offload (spec 5.3): a filter or a picked list, run in batches."""
+
+    __tablename__ = "mail_offloads"
+    __table_args__ = {"sqlite_autoincrement": True}
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), index=True
+    )
+    filter_text: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(20), default=MailOffloadState.WAITING)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    done: Mapped[int] = mapped_column(Integer, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, default=0)
+    bytes: Mapped[int] = mapped_column(BigInteger, default=0)  # Gmail's sizes of what left
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MailOffloadItem(Base):
+    __tablename__ = "mail_offload_items"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    offload_id: Mapped[int] = mapped_column(
+        ForeignKey("mail_offloads.id", ondelete="CASCADE"), index=True
+    )
+    message_id: Mapped[int] = mapped_column(ForeignKey("mail_messages.id", ondelete="CASCADE"))
+    result: Mapped[str] = mapped_column(String(16), default=MailItemResult.PENDING)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)

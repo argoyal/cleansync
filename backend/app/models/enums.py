@@ -117,3 +117,18 @@ class MailJobKind(StrEnum):
     OFFLOAD = "OFFLOAD"
     EMPTY_TRASH = "EMPTY_TRASH"
     RESTORE = "RESTORE"
+
+
+class MailOffloadState(StrEnum):
+    WAITING = "WAITING"  # before it starts, or paused by the budget; goes on by itself
+    RUNNING = "RUNNING"
+    DONE = "DONE"
+    DONE_WITH_SKIPS = "DONE_WITH_SKIPS"
+    FAILED = "FAILED"  # with a reason; what was not reached stayed in Gmail
+
+
+class MailItemResult(StrEnum):
+    PENDING = "pending"
+    OFFLOADED = "offloaded"
+    SKIPPED = "skipped"  # stayed in Gmail; the reason says why
+    RESTORED = "restored"  # put back in Gmail later
