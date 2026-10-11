@@ -359,6 +359,49 @@ describe("rail and panel", () => {
     expect(fold).toHaveAttribute("aria-expanded", "false");
     expect(within(views).queryByRole("list", { name: "Labels" })).not.toBeInTheDocument();
   });
+
+  const labelsApi = () => {
+    const active = { ...ACCOUNT, services: { files: "active" as const, mail: "active" as const } };
+    mockApi({
+      "GET /api/accounts": [active],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/status": STATUS,
+      "GET /api/mail/counts": {
+        views: { all: 1, inbox: 1, sent: 0, starred: 0, important: 0, offloaded: 0, deleted: 0 },
+        labels: [{ id: "Label_2", name: "Receipts", count: 1 }],
+      },
+    });
+  };
+
+  it("remembers the Labels fold in this browser", async () => {
+    labelsApi();
+    renderApp(<AppShell />, { withAccount: true, route: "/mail" });
+    const views = await screen.findByRole("navigation", { name: "Mail views" });
+    await userEvent.click(await within(views).findByRole("button", { name: "Labels" }));
+    cleanup();
+    labelsApi();
+    renderApp(<AppShell />, { withAccount: true, route: "/mail" });
+    const again = await screen.findByRole("navigation", { name: "Mail views" });
+    const fold = await within(again).findByRole("button", { name: "Labels" });
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    expect(within(again).queryByRole("list", { name: "Labels" })).not.toBeInTheDocument();
+    await userEvent.click(fold);
+    expect(within(again).getByRole("list", { name: "Labels" })).toBeInTheDocument();
+  });
+
+  it("still folds the Labels when the browser blocks storage", async () => {
+    const fail = () => {
+      throw new DOMException("The operation is insecure.", "SecurityError");
+    };
+    vi.stubGlobal("localStorage", { getItem: fail, setItem: fail, removeItem: fail, clear: fail, key: fail, length: 0 });
+    labelsApi();
+    renderApp(<AppShell />, { withAccount: true, route: "/mail" });
+    const views = await screen.findByRole("navigation", { name: "Mail views" });
+    const fold = await within(views).findByRole("button", { name: "Labels" });
+    expect(fold).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(fold);
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+  });
 });
 
 describe("content bar", () => {

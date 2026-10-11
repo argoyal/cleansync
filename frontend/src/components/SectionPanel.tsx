@@ -104,11 +104,29 @@ function FilesViews() {
   );
 }
 
+const LABELS_OPEN_KEY = "drivesync.mailLabelsOpen";
+
+function labelsOpen(): boolean {
+  try {
+    return localStorage.getItem(LABELS_OPEN_KEY) !== "0";
+  } catch {
+    return true; // storage blocked: start unfolded
+  }
+}
+
 /** The Mail views (spec §6.1, §9) with their counts, then the user labels. */
 export function MailViews() {
   const { account } = useCurrentAccount();
   const counts = useMailCounts(account?.id ?? null).data;
-  const [open, setOpen] = useState(true);
+  const [open, setOpenState] = useState(labelsOpen);
+  const setOpen = (next: boolean) => {
+    setOpenState(next);
+    try {
+      localStorage.setItem(LABELS_OPEN_KEY, next ? "1" : "0");
+    } catch {
+      // storage blocked: the fold lasts for this visit only
+    }
+  };
   return (
     <>
       {MAIL_VIEWS.map((v) => (

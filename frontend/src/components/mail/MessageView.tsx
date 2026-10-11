@@ -57,7 +57,7 @@ export function MessageView({ message, open, onToggle, actions }: { message: Mai
   return (
     <article className="rounded-card border border-line bg-surface">
       <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-left">
-        <span className="sr-only">{`${message.subject || "(no subject)"}, from ${message.from_addr}`}</span>
+        <span className="sr-only">{`${message.subject || "(no subject)"}, from ${message.from_addr}, ${formatWhen(message.date)}`}</span>
         <span aria-hidden="true" className="min-w-0 flex-1 truncate font-semibold">
           {message.from_addr}
         </span>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { friendlyError } from "../../api/client";
@@ -9,21 +9,32 @@ import { Icon } from "../Icon";
 import { Notice } from "../ui";
 import { MessageView } from "./MessageView";
 
-export function MailThread({ account, threadId }: { account: Account; threadId: string }) {
+/** Wide screens show the list beside the open mail (the xl breakpoint); phones one at a time. */
+export const isNarrow = () => !(window.matchMedia?.("(min-width: 1280px)").matches ?? false);
+
+export function MailThread({ account, threadId, onBack }: { account: Account; threadId: string; onBack?: () => void }) {
   const [params] = useSearchParams();
   const thread = useMailThread(account.id, threadId);
   const messages = thread.data ?? [];
   const [open, setOpen] = useState<Set<number>>(new Set());
   const newest = messages.at(-1)?.id;
   useEffect(() => setOpen(new Set(newest !== undefined ? [newest] : [])), [threadId, newest]);
+  const heading = useRef<HTMLHeadingElement>(null);
+  // On a phone the list goes away when a mail opens: take focus to what took its place.
+  useEffect(() => {
+    if (isNarrow()) heading.current?.focus();
+  }, [threadId]);
+  const title = thread.isPending ? "Opening…" : messages.at(-1)?.subject || (thread.isError && messages.length === 0 ? "This mail couldn't be opened" : "(no subject)");
   const back = mailHref({ view: params.get("view") ?? "", label: params.get("label") ?? "", q: params.get("q") ?? "" });
   return (
     <div className="p-4 sm:p-6">
-      <Link to={back} className="mb-3 inline-flex items-center gap-1 text-table font-semibold text-accent xl:hidden">
+      <Link to={back} onClick={onBack} className="mb-3 inline-flex items-center gap-1 text-table font-semibold text-accent xl:hidden">
         <Icon name="arrow_back" /> Back to the list
       </Link>
       {thread.isError && <Notice tone="err">{friendlyError(thread.error)}</Notice>}
-      <h2 className="mb-4 text-title font-semibold">{messages.at(-1)?.subject || (thread.isSuccess ? "(no subject)" : "")}</h2>
+      <h2 ref={heading} tabIndex={-1} className="mb-4 text-title font-semibold focus:outline-none">
+        {title}
+      </h2>
       <div className="space-y-3">
         {messages.map((m) => (
           <MessageView

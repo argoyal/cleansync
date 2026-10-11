@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
 import { MailReader } from "./MailReader";
@@ -251,10 +251,58 @@ describe("reading a mail", () => {
     expect(screen.queryByTitle(/^Mail:/)).not.toBeInTheDocument();
   });
 
+  it("says the date of each mail in its spoken header", async () => {
+    open([msg({ id: 1, subject: "Plan", date: "2026-10-01T10:00:00Z" }), msg({ id: 2, subject: "Re: Plan" })]);
+    expect(await screen.findByRole("button", { name: /^Plan, from Shop <shop@example\.com>, .*Oct/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Re: Plan, from Shop <shop@example\.com>, .*Oct/ })).toBeInTheDocument();
+  });
+
   it("on a phone the open mail replaces the list and Back returns to it", async () => {
     open([msg({ id: 1 })], "/mail?view=inbox&thread=t1");
     expect(screen.getByRole("region", { name: "Mail list" })).toHaveClass("hidden", "xl:block");
     await userEvent.click(await screen.findByRole("link", { name: "Back to the list" }));
     expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/mail\?view=inbox$/);
+  });
+
+  describe("on a phone", () => {
+    const narrow = (wide = false) =>
+      vi.stubGlobal("matchMedia", (query: string) => ({ matches: wide, media: query, addEventListener: () => undefined, removeEventListener: () => undefined }));
+
+    it("says Opening… while the thread loads, then moves focus to its heading", async () => {
+      narrow();
+      let release = () => undefined as void;
+      const ready = new Promise<void>((r) => (release = r));
+      open([], "/mail?thread=t1", {
+        "GET /api/mail/threads/t1": async () => {
+          await ready;
+          return [msg({ id: 1 })];
+        },
+      });
+      expect(await screen.findByRole("heading", { name: "Opening…" })).toBeInTheDocument();
+      release();
+      const heading = await screen.findByRole("heading", { name: "Your order has shipped" });
+      await waitFor(() => expect(heading).toHaveFocus());
+    });
+
+    it("Back to the list puts focus back on the row the mail was opened from", async () => {
+      narrow();
+      mockApi({
+        "GET /api/accounts": [ACTIVE],
+        "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", subject: "First" }), thread({ thread_id: "t2", subject: "Second" })], next_cursor: null, total: 2, total_bytes: 2 },
+        "GET /api/mail/threads/t2": [msg({ id: 2, subject: "Second" })],
+      });
+      renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=inbox" });
+      await userEvent.click(await screen.findByRole("link", { name: /Second/ }));
+      await waitFor(() => expect(screen.getByRole("heading", { name: "Second" })).toHaveFocus());
+      await userEvent.click(screen.getByRole("link", { name: "Back to the list" }));
+      await waitFor(() => expect(screen.getByRole("link", { name: /Second/ })).toHaveFocus());
+    });
+
+    it("leaves focus alone on a wide screen, where the list stays in view", async () => {
+      narrow(true);
+      open([msg({ id: 1 })]);
+      await screen.findByRole("heading", { name: "Your order has shipped" });
+      expect(screen.getByRole("heading", { name: "Your order has shipped" })).not.toHaveFocus();
+    });
   });
 });

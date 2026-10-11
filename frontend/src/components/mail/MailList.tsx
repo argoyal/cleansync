@@ -31,6 +31,7 @@ function Row({ t, href, open }: { t: ThreadRow; href: string; open: boolean }) {
     <li>
       <Link
         to={href}
+        data-thread={t.thread_id}
         aria-label={label}
         aria-current={open ? "true" : undefined}
         className={`grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 border-b border-line px-4 py-3 hover:bg-sunken sm:grid-cols-[180px_minmax(0,1fr)_auto] ${open ? "bg-sec-mail-soft/60" : ""} ${t.unread ? "font-semibold" : ""} ${t.offloaded || t.deleted ? "text-ink-2" : ""}`}
