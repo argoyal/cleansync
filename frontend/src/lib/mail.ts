@@ -1,4 +1,5 @@
 import type { IconName } from "../components/Icon";
+import { formatDay } from "./format";
 
 export const MAIL_VIEWS: { id: string; label: string; icon: IconName }[] = [
   { id: "all", label: "All mail", icon: "mail" },
@@ -32,4 +33,18 @@ export function mailHref(p: { view?: string; label?: string; q?: string; thread?
   if (p.thread) params.set("thread", p.thread);
   const s = params.toString();
   return s ? `/mail?${s}` : "/mail";
+}
+
+export const OFFLOAD_STATE_TEXT: Record<string, string> = {
+  WAITING: "Waiting",
+  RUNNING: "Offloading",
+  DONE: "Done",
+  DONE_WITH_SKIPS: "Done, some skipped",
+  FAILED: "Stopped",
+};
+
+/** Where the space of an offload comes back: Gmail empties its own trash after 30 days. */
+export function trashLine(o: { trash_until: string; google_emptied: boolean }): string {
+  if (o.google_emptied) return "Gmail has emptied its trash.";
+  return `In Gmail's trash until about ${formatDay(o.trash_until)}.`;
 }

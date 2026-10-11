@@ -5,10 +5,11 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError, friendlyError } from "../api/client";
 import { recoveryFileUrl, recoveryZipUrl, usePairs, useRecovery, useStatus } from "../api/queries";
 import type { RecoveryEntry, RecoveryKind, RestoreResult } from "../api/types";
+import { MailRecovery } from "../components/mail/MailRecovery";
 import { FILE_QUERY_KEYS, startDownload } from "../components/FileActions";
 import { Button, Empty, Notice, inputClass } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
-import { formatBytes } from "../lib/format";
+import { formatBytes, formatDay } from "../lib/format";
 
 const KIND: Record<RecoveryKind, string> = {
   sync_backup: "Replaced or deleted by a sync",
@@ -20,15 +21,11 @@ const KIND: Record<RecoveryKind, string> = {
 };
 const PAGE = 200;
 
-function day(iso: string): string {
-  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-}
-
 function cleanup(e: RecoveryEntry): string {
   if (e.kind === "offload" && e.google_emptied) return "Google has emptied this from its trash";
-  if (e.kind === "offload") return e.expires_on ? `Google empties its trash around ${day(e.expires_on)}` : "";
+  if (e.kind === "offload") return e.expires_on ? `Google empties its trash around ${formatDay(e.expires_on)}` : "";
   // expires_on is the first day the clean-up may remove it.
-  return e.expires_on ? `Cleaned up on or after ${day(e.expires_on)}` : "No clean-up date (automatic clean-up is off)";
+  return e.expires_on ? `Cleaned up on or after ${formatDay(e.expires_on)}` : "No clean-up date (automatic clean-up is off)";
 }
 
 /** Only these can be picked: offloads go back from the Offloaded page; orphans are downloaded from their row. */
@@ -41,8 +38,9 @@ export function RecoveryPage() {
   const pair = params.get("pair") ?? "";
   const kind = params.get("kind") ?? "";
   const path = params.get("path") ?? "";
+  const source = params.get("source") ?? "";
   const [limit, setLimit] = useState(PAGE);
-  const list = useRecovery(accountId, { pair, kind, path, limit });
+  const list = useRecovery(source === "mail" ? null : accountId, { pair, kind, path, limit });
   const pairs = (usePairs().data ?? []).filter((p) => p.account_id === accountId);
   const stopped = useStatus().data?.sync_stopped ?? null;
   const [checked, setChecked] = useState<string[]>([]);
@@ -109,6 +107,15 @@ export function RecoveryPage() {
   const restorable = picked.filter((id) => byId.get(id)?.restorable);
   const nameOf = (id: string) => byId.get(id)?.name ?? id;
   const busy = restore.isPending || !!stopped;
+
+  if (source === "mail") {
+    return (
+      <div className="p-4 sm:p-6">
+        <h1 className="mb-2 text-title font-semibold">Recovery</h1>
+        <MailRecovery accountId={accountId} />
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 sm:p-6">
@@ -225,7 +232,7 @@ export function RecoveryPage() {
                   <p className="break-all font-medium">{e.original_path ?? e.name}</p>
                   {e.original_path === null && <p className="text-meta text-ink-2">Its sync folder was removed; download it instead.</p>}
                   <p className="text-meta text-ink-2">
-                    <span>{e.google_emptied ? "Offloaded" : KIND[e.kind]}</span> · <span>{day(e.day)}</span>
+                    <span>{e.google_emptied ? "Offloaded" : KIND[e.kind]}</span> · <span>{formatDay(e.day)}</span>
                     {e.pair_name && <span className="max-sm:hidden"> · {e.pair_name}</span>}
                   </p>
                   <p className="text-meta text-ink-2">{cleanup(e)}</p>
@@ -265,6 +272,7 @@ export function RecoveryPage() {
           Show more ({list.data.total - entries.length} more)
         </Button>
       )}
+      {source !== "files" && <MailRecovery accountId={accountId} />}
     </div>
   );
 }

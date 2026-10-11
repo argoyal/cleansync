@@ -26,6 +26,11 @@ export function formatWhen(iso: string | null | undefined, now = new Date()): st
   return d.toDateString() === now.toDateString() ? timeFmt.format(d) : dateFmt.format(d);
 }
 
+/** A plain calendar day ("2026-11-09") as "9 Nov 2026"; no time zone shift. */
+export function formatDay(iso: string): string {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
 export function formatRelative(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return "never";
   const s = Math.round((new Date(iso).getTime() - now) / 1000);

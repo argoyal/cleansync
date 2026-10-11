@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { api, ApiError, encodePath, query } from "./client";
 import type {
@@ -263,10 +263,11 @@ export const useMailOffload = (id: number) =>
     queryFn: () => api<MailOffloadDetail>(`/api/mail/offloads/${id}`),
     refetchInterval: (q) => (OFFLOAD_BUSY.includes(q.state.data?.state ?? "") ? 2000 : false),
   });
-export const useMailRecovery = (accountId: number | null) =>
+export const useMailRecovery = (accountId: number | null, limit = 50) =>
   useQuery({
-    queryKey: ["mail-recovery", accountId],
-    queryFn: () => api<MailRecoveryData>(`/api/recovery/mail${query({ account_id: accountId })}`),
+    queryKey: ["mail-recovery", accountId, limit],
+    queryFn: () => api<MailRecoveryData>(`/api/recovery/mail${query({ account_id: accountId, limit })}`),
+    placeholderData: keepPreviousData,
     enabled: accountId !== null,
     retry: false,
   });

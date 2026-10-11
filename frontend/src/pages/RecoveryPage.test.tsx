@@ -193,3 +193,23 @@ describe("Recovery", () => {
     expect(await screen.findByText("Nothing in Recovery")).toBeInTheDocument();
   });
 });
+
+describe("mail in Recovery", () => {
+  const MAIL = {
+    offloads: [{ id: 7, account_id: 1, filter_text: "older_than:1y", state: "DONE", total: 13, done: 13, skipped: 0, not_done: 0, bytes: 8 * 1024 ** 2, reason: null, created_at: "2026-10-10T09:00:00Z", finished_at: "2026-10-10T09:01:00Z", trash_until: "2026-11-09", google_emptied: false }],
+    deleted_count: 2,
+  };
+
+  it("shows mail offloads and mail deleted in Gmail under Mail", async () => {
+    const { calls } = mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/recovery/mail": MAIL, "POST /api/mail/restore": { queued: "queued", count: 2 } });
+    renderApp(<RecoveryPage />, { withAccount: true, route: "/recovery?source=mail", path: "/recovery" });
+    const mail = await screen.findByRole("region", { name: "Mail in Recovery" });
+    expect(within(mail).getByRole("link", { name: "older_than:1y" })).toHaveAttribute("href", "/mail/offloads/7");
+    expect(within(mail).getByText(/In Gmail's trash until about/)).toBeInTheDocument();
+    expect(within(mail).getByText("2 mails were deleted in Gmail and are kept here.")).toBeInTheDocument();
+    expect(within(mail).getByRole("link", { name: "Show them" })).toHaveAttribute("href", "/mail?view=deleted");
+    await userEvent.click(within(mail).getByRole("button", { name: "Restore all to Gmail" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, q: "is:deleted" }));
+    expect(calls.some((c) => c.path === "/api/recovery")).toBe(false); // the Files list is not loaded under Mail
+  });
+});
