@@ -10,8 +10,15 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.clock import as_utc
-from app.models import Account, MailLabel, MailMessage, MailOffload, MailOffloadItem
+from app.core.clock import as_utc, utcnow
+from app.models import (
+    Account,
+    MailJob,
+    MailLabel,
+    MailMessage,
+    MailOffload,
+    MailOffloadItem,
+)
 from app.models.enums import (
     AccountStatus,
     JobState,
@@ -40,13 +47,13 @@ from app.services.mail.adapter import (
     ProviderState,
 )
 from app.services.mail.backup import Paused
+from app.services.mail.gmail import search_message_id
 from app.services.mail.index import sync_state
 from app.services.mail.jobs import finish_mail_job, job_log, start_mail_job, update_mail_job
 from app.services.mail.offload_plan import GMAIL_TRASH_DAYS, OffloadPreview, Pick, plan_offload
-from app.services.mail.reader import MailFileMissing, read_eml_of
 from app.services.mail.search import SearchError, mail_conditions
 from app.services.mail.service import MailError, MailService
-from app.services.mail.store import check_eml, eml_path
+from app.services.mail.store import check_eml, check_eml_bytes, eml_path
 from app.services.queue import MISSING_DISK_MSG
 
 log = logging.getLogger(__name__)
@@ -228,9 +235,10 @@ class MailOffloads:
         mail.actions["offload"] = self._run
         mail.actions["restore"] = self._restore
         mail.tick_hooks.append(self.resume_waiting)
-        # Restores paused by the budget or a rate limit: account -> the mails still to do.
-        # Kept in memory: after a restart the mails are still offloaded and can be asked again.
-        self._restores_waiting: dict[int, list[int]] = {}
+        # Restores paused by the budget or a rate limit: account -> the mails still to do and
+        # the paused jobs they came from. Kept in memory: at startup recover_mail_restores
+        # closes those jobs, and the mails, still offloaded, can be restored again.
+        self._restores_waiting: dict[int, dict[str, list[int]]] = {}
 
     def _min_age(self, db) -> int:
         return int(get_setting(db, "mail_min_age_days"))  # type: ignore[arg-type]
@@ -313,8 +321,9 @@ class MailOffloads:
         for off_id, account_id in rows:
             self.mail.queue.request(account_id, "offload", {"offload_id": off_id})
         waiting, self._restores_waiting = self._restores_waiting, {}
-        for account_id, ids in waiting.items():
-            self.mail.queue.request(account_id, "restore", {"message_ids": ids})
+        for account_id, w in waiting.items():
+            args = {"message_ids": w["ids"], "after_jobs": w["jobs"]}
+            self.mail.queue.request(account_id, "restore", args)
 
     # ---- one mail ------------------------------------------------------------------------
     def _skip(self, off_id: int, item_id: int, reason: str, log_path: str | None) -> None:
@@ -587,37 +596,78 @@ class MailOffloads:
         )
         return queued, len(ids)
 
-    async def _import_copy(self, acc: Account, adapter, row: dict, log_path) -> str | None:
-        """Gmail no longer has the mail: send the copy here, once it checks out. Returns the
-        new Gmail id, or None when the copy can't be used."""
-        path = eml_path(self.layout, acc.email, row["file_path"])
-        problem = await self._copy_problem(path, row["size"], row["sha"])  # a lost disk stops
+    async def _read_copy(self, acc: Account, info: dict, log_path) -> bytes | None:
+        """The copy here, read once and checked (size, SHA-256, reads as a mail): exactly
+        these bytes are sent. None when it can't be used; a lost disk stops the run."""
+        path = eml_path(self.layout, acc.email, info["file_path"])
+        try:
+            raw = await asyncio.to_thread(path.read_bytes)
+            problem = check_eml_bytes(raw, info["size"], info["sha"])
+        except FileNotFoundError:
+            raw, problem = b"", "the file is missing"
+        except OSError:
+            raw, problem = b"", "the file can't be read"
         if problem:
-            job_log(log_path, f"{row['pid']}: the copy here didn't check out ({problem})")
+            if await self.mail.stopped() or not await asyncio.to_thread(
+                self.layout.mail_root.is_dir
+            ):
+                raise Paused(self.mail.stop_message() or MISSING_DISK_MSG)
+            job_log(log_path, f"{info['pid']}: the copy here didn't check out ({problem})")
+            return None
+        return raw
+
+    async def _import_copy(self, acc: Account, adapter, info: dict, log_path) -> str | None:
+        """Gmail no longer has the mail: send the copy here. Returns the new Gmail id, or None
+        when the copy can't be used."""
+        raw = await self._read_copy(acc, info, log_path)
+        if raw is None:
             return None
         try:
-            raw = await asyncio.to_thread(
-                read_eml_of, self.layout, acc.email, MailMessage(file_path=row["file_path"])
-            )
-        except MailFileMissing:
-            job_log(log_path, f"{row['pid']}: the copy here is missing")
-            return None
-        try:
-            return await adapter.import_raw(raw, row["labels"], row["date"])
+            return await adapter.import_raw(raw, info["labels"], info["date"])
         except (MailAuthError, MailSetupProblem, MailUnreachable, MailNotFound):
             raise
         except MailApiError as e:
             if e.status != 400:
                 raise
             # Gmail refused the labels (say, one it won't take): go again with the basic ones.
-            job_log(log_path, f"{row['pid']}: Gmail refused the labels ({e}); trying without")
-            basic = [x for x in row["labels"] if x in BASIC_LABELS]
-            return await adapter.import_raw(raw, basic, row["date"])
+            job_log(log_path, f"{info['pid']}: Gmail refused the labels ({e}); trying without")
+            basic = [x for x in info["labels"] if x in BASIC_LABELS]
+            return await adapter.import_raw(raw, basic, info["date"])
+
+    async def _copy_in_gmail(self, acc: Account, adapter, msg_id: int, info: dict) -> str | None:
+        """Before any import: is this mail in Gmail under another id? An earlier import whose
+        answer was lost (or the owner's own upload) is found by its Message-ID and adopted, so
+        a restore asked again never imports it twice. Ids other mails here already have are
+        those mails, not this one."""
+        if search_message_id(info["message_id"]) is None:
+            return None  # no Message-ID to look for: imported as it is
+        ids = await adapter.find_by_message_id(info["message_id"])
+        if not ids:
+            return None
+        with self.sf() as db:
+            taken = set(
+                db.scalars(
+                    select(MailMessage.provider_id).where(
+                        MailMessage.account_id == acc.id,
+                        MailMessage.provider_id.in_(ids),
+                        MailMessage.id != msg_id,
+                    )
+                )
+            )
+        return next((x for x in ids if x not in taken), None)
+
+    async def _untrash(self, adapter, pid: str) -> ProviderState:
+        try:
+            await adapter.untrash(pid)
+            return await adapter.state(pid)
+        except MailNotFound:
+            return ProviderState(GONE, (), None)  # Gmail emptied it from its trash just now
 
     async def _restore_one(self, acc: Account, adapter, msg_id: int, log_path) -> str:
-        """Spec 5.5. In Gmail's trash: untrash (its labels come back). Gone from Gmail:
-        import the copy here and keep Gmail's new id. In Gmail already: nothing to do.
-        Never both, so a restore never makes a second copy."""
+        """Spec 5.5. In Gmail's trash: untrash (its labels come back). Gone from Gmail: look
+        for it by its Message-ID first, and import the copy here only when Gmail has none;
+        keep Gmail's new id. In Gmail already: nothing to do. A restore never makes a second
+        copy, also when it is asked again after an answer from Gmail got lost."""
         with self.sf() as db:
             row = db.get(MailMessage, msg_id)
             if row is None or row.account_id != acc.id:
@@ -626,55 +676,66 @@ class MailOffloads:
                 return ALREADY
             info = {
                 "pid": row.provider_id,
+                "message_id": row.message_id,
                 "labels": restorable_labels(db, acc.id, list(row.labels or [])),
                 "date": row.date,
                 "file_path": row.file_path,
                 "size": row.file_size,
                 "sha": row.sha256,
             }
-        pid = info["pid"]
-        new_id = None
+        pid, new_id, outcome = info["pid"], None, None
         st = await adapter.state(pid)
-        untrashed = False
-        if st.where == IN_TRASH:
-            try:
-                await adapter.untrash(pid)
-                st = await adapter.state(pid)
-            except MailNotFound:
-                st = ProviderState(GONE, (), None)  # Gmail emptied it from its trash just now
+        for _ in range(2):  # at most: the mail itself, then a copy found by its Message-ID
             if st.where == IN_TRASH:
-                job_log(log_path, f"{pid}: Gmail didn't take it out of its trash")
-                return FAILED
-            untrashed = st.where != GONE
-        if st.where == GONE:
-            # Only when Gmail no longer has it: an import never makes a second copy.
-            new_id = await self._import_copy(acc, adapter, info, log_path)
-            if new_id is None:
-                return FAILED
-            outcome = IMPORTED
-        elif untrashed:
-            outcome = UNTRASHED
-        elif "SPAM" in st.labels:
-            job_log(log_path, f"{pid}: it is in Gmail's Spam, so it was left there")
-            return IN_SPAM  # stays Deleted in Gmail (spec 5.5)
-        else:
-            outcome = ALREADY  # the owner put it back in Gmail
+                st = await self._untrash(adapter, pid)
+                if st.where == IN_TRASH:
+                    job_log(log_path, f"{pid}: Gmail didn't take it out of its trash")
+                    return FAILED
+                if st.where != GONE:
+                    outcome = UNTRASHED
+                    break
+            if st.where != GONE:
+                break
+            found = await self._copy_in_gmail(acc, adapter, msg_id, info)
+            if found is None:
+                break
+            job_log(log_path, f"{info['pid']}: found in Gmail as {found}; no import needed")
+            pid = new_id = found
+            st = await adapter.state(pid)
+        if outcome is None and st.where == GONE and new_id is not None:
+            # Gmail lists a copy but won't hand it over: never import beside it.
+            job_log(log_path, f"{info['pid']}: Gmail gave mixed answers about {new_id}")
+            return FAILED
+        if outcome is None:
+            if st.where == GONE:
+                # Gmail has no copy at all: only now is the copy here sent.
+                new_id = await self._import_copy(acc, adapter, info, log_path)
+                if new_id is None:
+                    return FAILED
+                outcome = IMPORTED
+            elif "SPAM" in st.labels:
+                job_log(log_path, f"{pid}: it is in Gmail's Spam, so it was left there")
+                outcome = IN_SPAM  # stays Deleted in Gmail (spec 5.5)
+            else:
+                outcome = ALREADY  # the owner put it back in Gmail (or an earlier restore did)
         with self.sf() as db:
             row = db.get(MailMessage, msg_id)
             if new_id is not None:
                 row.provider_id = new_id  # the file stays where it is (row.file_path)
-            if row.offload_id is not None:
-                item = db.scalar(
-                    select(MailOffloadItem).where(
-                        MailOffloadItem.offload_id == row.offload_id,
-                        MailOffloadItem.message_id == row.id,
+            if outcome != IN_SPAM:
+                if row.offload_id is not None:
+                    item = db.scalar(
+                        select(MailOffloadItem).where(
+                            MailOffloadItem.offload_id == row.offload_id,
+                            MailOffloadItem.message_id == row.id,
+                        )
                     )
-                )
-                if item is not None:
-                    item.result = MailItemResult.RESTORED
-            row.state, row.offload_id = MailState.IN_MAIL, None
+                    if item is not None:
+                        item.result = MailItemResult.RESTORED
+                row.state, row.offload_id = MailState.IN_MAIL, None
             db.commit()
-        job_log(log_path, f"{pid}: {outcome}" + (f" as {new_id}" if new_id else ""))
+        if outcome != IN_SPAM:
+            job_log(log_path, f"{pid}: {outcome}" + (f" as {new_id}" if new_id else ""))
         return outcome
 
     def _restore_refusal(self, account_id: int) -> str | None:
@@ -700,6 +761,7 @@ class MailOffloads:
             job = start_mail_job(
                 db, self.layout, self.bus, account_id, MailJobKind.RESTORE, trigger, len(ids)
             )
+        self._close_paused(args.get("after_jobs") or [], job.id)
         counts: Counter[str] = Counter()
         state, problem = JobState.SUCCESS, self._restore_refusal(account_id)
         if problem:
@@ -728,7 +790,7 @@ class MailOffloads:
         if state == JobState.PAUSED:
             done = set(self._restore_done(account_id, ids))
             if rest := [i for i in ids if i not in done]:
-                self._restores_waiting[account_id] = rest  # asked again by the minute tick
+                self._wait_for_restore(account_id, rest, job.id)
         text = restore_summary(counts)
         message = f"{text}. {problem}" if problem else text
         with self.sf() as db:
@@ -747,6 +809,31 @@ class MailOffloads:
             )
         self._changed(account_id)
         self.mail.budget.flush()
+
+    def _wait_for_restore(self, account_id: int, ids: list[int], job_id: int) -> None:
+        """Asked again by the minute tick. A second paused restore of the account joins the
+        first one's list: neither is dropped, and no mail is in it twice."""
+        w = self._restores_waiting.setdefault(account_id, {"ids": [], "jobs": []})
+        have = set(w["ids"])
+        w["ids"] += [i for i in ids if i not in have]
+        w["jobs"].append(job_id)
+
+    def _close_paused(self, job_ids: list[int], now_job: int) -> None:
+        """The paused jobs a resumed restore goes on from: Activity no longer shows them as
+        waiting."""
+        if not job_ids:
+            return
+        with self.sf() as db:
+            for jid in job_ids:
+                old = db.get(MailJob, int(jid))
+                if old is not None and old.state == JobState.PAUSED:
+                    finish_mail_job(
+                        db,
+                        self.bus,
+                        old.id,
+                        JobState.INTERRUPTED,
+                        f"{old.message} It went on as restore job {now_job}.",
+                    )
 
     def _restore_done(self, account_id: int, ids: list[int]) -> list[int]:
         """Of these, the mails no restore has to touch any more (back in Gmail, or gone)."""
@@ -788,3 +875,28 @@ class MailOffloads:
                     counts[outcome] += 1
                     raise _Refusing(RESTORE_REFUSED_MSG.format(n=len(refused), error=e)) from e
             counts[outcome] += 1
+
+
+RESTARTED_RESTORE_MSG = "CleanSync restarted before this restore finished. Restore it again."
+
+
+def recover_mail_restores(db: Session) -> int:
+    """At startup: a restore that was paused (its list of mails left lives only in memory)
+    or cut short can't go on by itself. It ends as FAILED; its mails are safe and still
+    show as offloaded, to be restored again."""
+    jobs = list(
+        db.scalars(
+            select(MailJob).where(
+                MailJob.kind == MailJobKind.RESTORE,
+                MailJob.state.in_([JobState.PAUSED, JobState.RUNNING]),
+            )
+        )
+    )
+    for job in jobs:
+        job.state = JobState.FAILED
+        job.message = (
+            f"{job.message} {RESTARTED_RESTORE_MSG}" if job.message else RESTARTED_RESTORE_MSG
+        )
+        job.completed_at = utcnow()
+    db.commit()
+    return len(jobs)

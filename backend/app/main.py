@@ -54,7 +54,7 @@ from app.services.google.client import GoogleClient
 from app.services.google.quota import ApiBudget, Pacer
 from app.services.mail.adapters import MailAdapters
 from app.services.mail.jobs import recover_mail_jobs
-from app.services.mail.offload import MailOffloads
+from app.services.mail.offload import MailOffloads, recover_mail_restores
 from app.services.mail.offload_plan import recover_mail_offloads
 from app.services.mail.service import MailService
 from app.services.mail.store import sweep_temp_files
@@ -127,6 +127,11 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 logger.exception("could not mark offloads a stop cut short")
             try:
                 with session_factory() as db:
+                    recover_mail_restores(db)
+            except Exception:
+                logger.exception("could not close mail restores a restart cut short")
+            try:
+                with session_factory() as db:
                     recover_mail_jobs(db)
                     recover_mail_offloads(db)
             except Exception:
@@ -148,6 +153,11 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 except Exception:
                     db.rollback()
                     logger.exception("could not mark mail offloads a stop cut short")
+                try:
+                    recover_mail_restores(db)
+                except Exception:
+                    db.rollback()
+                    logger.exception("could not close mail restores a restart cut short")
                 # A mail job a stop cut short goes on where it left off.
                 for account_id in recover_mail_jobs(db):
                     app.state.mail.queue.request(account_id, "backup", trigger="RECOVERY")

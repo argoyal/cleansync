@@ -103,6 +103,11 @@ def check_eml(path: Path, size: int, sha256: str) -> str | None:
         return "the file is missing"
     except OSError:
         return "the file can't be read"
+    return check_eml_bytes(raw, size, sha256)
+
+
+def check_eml_bytes(raw: bytes, size: int, sha256: str) -> str | None:
+    """check_eml on bytes already read: a caller that sends them checks exactly these."""
     if len(raw) != size:
         return "the file's size changed"
     if hashlib.sha256(raw).hexdigest() != sha256:

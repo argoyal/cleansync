@@ -1,11 +1,13 @@
 from datetime import UTC, datetime, timedelta
 
+import httpx
+
 from app.devtools.fake_gmail import make_mail
 from app.models import MailJob, MailOffloadItem
 from app.models.enums import MailItemResult, MailPhase, MailState
 from app.services.google.quota import ApiBudget
 from app.services.mail.index import sync_state
-from app.services.mail.offload import RESTORE_SLOW_MSG
+from app.services.mail.offload import RESTARTED_RESTORE_MSG, RESTORE_SLOW_MSG
 from app.services.mail.store import eml_path
 from app.services.queue import MISSING_DISK_MSG
 from tests.mail_helpers import fake_adapter
@@ -287,3 +289,120 @@ async def test_a_restore_that_finds_the_backup_checking_when_it_runs_changes_not
     )
     assert {box.row(s).state for s in OLD} == {MailState.OFFLOADED}
     assert not any(c[1].endswith("/untrash") for c in box.fake.calls)
+
+
+def _lose_first_import_answer(box):
+    """Gmail stores the import, then its answer is lost on the way back."""
+    real = box.fake.handle
+    lost = {"n": 0}
+
+    def lossy(request):
+        resp = real(request)
+        if request.url.path.endswith("/messages/import") and lost["n"] == 0:
+            lost["n"] += 1
+            return httpx.Response(503)
+        return resp
+
+    box.fake.handle = lossy
+
+
+async def test_a_lost_import_answer_then_restore_again_never_makes_a_second_copy(
+    auth_client, offload_box
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    box.fake.remove(row.provider_id)
+    _lose_first_import_answer(box)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    job = _last_job(auth_client)
+    assert job["state"] == "FAILED" and "restore it again" in job["message"]
+    assert box.row("Old photos").state == MailState.OFFLOADED
+    r = _restore(auth_client, box, message_ids=[row.id])  # as the message says
+    assert r.status_code == 202
+    await box.run_queued()
+    copies = [m for m in box.fake.messages.values() if b"Subject: Old photos" in m.raw]
+    assert len(copies) == 1  # found by its Message-ID, never imported twice
+    assert len(_imports(box)) == 1
+    restored = box.row("Old photos")
+    assert restored.state == MailState.IN_MAIL and restored.provider_id == copies[0].id
+    assert _last_job(auth_client)["message"] == "Put 0 mails back in Gmail; 1 was already there"
+    await box.backup()
+    assert len(box.rows_all()) == 6
+
+
+async def test_a_copy_found_in_gmails_trash_is_taken_out_of_it_not_imported(
+    auth_client, offload_box
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    box.fake.remove(row.provider_id)
+    _lose_first_import_answer(box)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    (copy,) = [m for m in box.fake.messages.values() if b"Subject: Old photos" in m.raw]
+    box.fake.set_labels(copy.id, ("TRASH",))
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    assert len(_imports(box)) == 1
+    assert "TRASH" not in box.fake.messages[copy.id].labels
+    assert box.row("Old photos").provider_id == copy.id
+    assert _last_job(auth_client)["message"] == (
+        "Put 1 mail back in Gmail (1 out of Gmail's trash)"
+    )
+
+
+async def test_two_paused_restores_of_one_account_both_go_on(auth_client, offload_box, db):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    a, b, c = (box.row(s).id for s in OLD)
+    box.fake.fail("GET", r"/messages/", 429, times=8)  # every try Google's client makes
+    _restore(auth_client, box, message_ids=[a, b])
+    await box.run_queued()
+    first = _last_job(auth_client)
+    box.fake.fail("GET", r"/messages/", 429, times=8)
+    _restore(auth_client, box, message_ids=[b, c])
+    await box.run_queued()
+    second = _last_job(auth_client)
+    assert first["state"] == second["state"] == "PAUSED"
+    await box.mail.tick()
+    restores = [r for r in box.queue.requests if r[1] == "restore"]
+    assert len(restores) == 1
+    assert sorted(restores[0][2]["message_ids"]) == sorted([a, b, c])  # merged, b once
+    await box.run_queued()
+    assert {box.row(s).state for s in OLD} == {MailState.IN_MAIL}
+    jobs = {j["id"]: j for j in auth_client.get("/api/activity/jobs").json()}
+    for old in (first, second):  # Activity no longer shows them as waiting
+        assert jobs[old["id"]]["state"] == "INTERRUPTED"
+        assert "It went on as restore job" in jobs[old["id"]]["message"]
+    assert _last_job(auth_client)["state"] == "SUCCESS"
+
+
+def test_a_paused_restore_ends_failed_at_startup(settings, make_account, db):
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+    from app.models.enums import JobState, MailJobKind
+    from app.services.mail.jobs import finish_mail_job, start_mail_job
+    from tests.test_mail_api import StubMailQueue
+
+    first = create_app(settings, start_background=False)
+    acc = make_account()
+    paused = start_mail_job(
+        db, first.state.layout, first.state.bus, acc.id, MailJobKind.RESTORE, "MANUAL", 3
+    )
+    finish_mail_job(db, first.state.bus, paused.id, JobState.PAUSED, "Put 1 mail back in Gmail.")
+    running = start_mail_job(
+        db, first.state.layout, first.state.bus, acc.id, MailJobKind.RESTORE, "MANUAL", 3
+    )
+    app = create_app(settings)  # background services on, as in production
+    app.state.mail.queue = StubMailQueue()
+    with TestClient(app):
+        db.expire_all()
+        for job_id in (paused.id, running.id):
+            row = db.get(MailJob, job_id)
+            assert row.state == JobState.FAILED
+            assert row.message.endswith(RESTARTED_RESTORE_MSG)
+        assert app.state.mail.queue.requests == []  # a restore is not run again by itself

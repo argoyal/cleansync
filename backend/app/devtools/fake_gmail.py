@@ -260,6 +260,16 @@ class FakeGmail:
         q = p.get("q", "")
         skip_left_out = "-in:spam" in q and "-in:trash" in q
         msgs = self._ordered(include_left_out=not skip_left_out)
+        if q.startswith("rfc822msgid:"):
+            # Gmail leaves Spam and Trash out unless includeSpamTrash=true.
+            wanted = q.removeprefix("rfc822msgid:").strip("<>")
+            spam_trash = p.get("includeSpamTrash") == "true"
+            msgs = [
+                m
+                for m in msgs
+                if _message_id(m.raw) == wanted
+                and (spam_trash or not {"SPAM", "TRASH"} & set(m.labels))
+            ]
         size = int(p.get("maxResults", "100"))
         start = int(p.get("pageToken") or 0)
         page = msgs[start : start + size]
@@ -335,6 +345,11 @@ class FakeGmail:
         return httpx.Response(
             200, json={"id": mid, "threadId": mid, "labelIds": self.messages[mid].labels}
         )
+
+
+def _message_id(raw: bytes) -> str | None:
+    found = re.search(rb"^Message-ID:\s*<?([^>\r\n]+)>?", raw, re.M | re.I)
+    return found.group(1).decode("utf-8", "replace").strip() if found else None
 
 
 # ---- sample mail --------------------------------------------------------------------------

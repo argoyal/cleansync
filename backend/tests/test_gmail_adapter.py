@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 
 import httpx
@@ -266,3 +267,17 @@ async def test_no_network_or_no_token_is_trouble_reaching_gmail():
     )
     with pytest.raises(MailUnreachable):
         await GmailAdapter(google, BrokenTokens("t"), "gd_alice").labels()
+
+
+async def test_a_mail_is_found_by_its_message_id_in_trash_and_spam_too():
+    fake, ids = _fake()
+    gmail = fake_adapter(fake)
+    raw = make_mail("Find me", when=WHEN)
+    mid = re.search(rb"^Message-ID: <([^>]+)>", raw, re.M).group(1).decode()
+    found = fake.add(raw, labels=("TRASH",))
+    assert await gmail.find_by_message_id(f"<{mid}>") == [found]
+    assert fake.calls[-1][2]["q"] == f"rfc822msgid:{mid}"
+    assert fake.calls[-1][2]["includeSpamTrash"] == "true"
+    assert await gmail.find_by_message_id("<nobody@example.com>") == []
+    with pytest.raises(ValueError):
+        await gmail.find_by_message_id("<a b@example.com> OR in:anywhere")

@@ -61,6 +61,16 @@ def api_turned_off(resp: httpx.Response) -> bool:
     return bool(reasons & API_OFF_REASONS)
 
 
+# A Message-ID safe to put in a Gmail search: no spaces, quotes or brackets inside.
+_MSGID = re.compile(r"[^\s<>\"()]{1,900}")
+
+
+def search_message_id(value: str | None) -> str | None:
+    """The Message-ID header without its <>, or None when it can't be searched for safely."""
+    mid = (value or "").strip().removeprefix("<").removesuffix(">")
+    return mid if _MSGID.fullmatch(mid) else None
+
+
 # The one place the shape of a Gmail message id is written (the store uses valid_mail_id).
 _ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
 
@@ -287,6 +297,19 @@ class GmailAdapter:
     async def delete_forever(self, id: str) -> None:
         await self._call("gmail.messages.delete", "DELETE", f"/messages/{_mail_id(id)}")
 
+    async def find_by_message_id(self, message_id: str) -> list[str]:
+        """Gmail's ids of every mail with this Message-ID header, Spam and Trash included."""
+        mid = search_message_id(message_id)
+        if mid is None:
+            raise ValueError("not a Message-ID that can be searched for")
+        params = {"q": f"rfc822msgid:{mid}", "includeSpamTrash": "true", "maxResults": "10"}
+        data = _json(await self._call("gmail.messages.list", "GET", "/messages", params=params))
+        return [
+            mid
+            for m in data.get("messages") or []
+            if isinstance(m, dict) and (mid := valid_mail_id(m.get("id")))
+        ]
+
     async def import_raw(self, raw: bytes, labels: list[str], internal_date: datetime) -> str:
         """Put a kept mail back into Gmail (Plan 4's restore). Gmail takes the date from the
         mail's Date header (internalDateSource=dateHeader), so internal_date is only for
@@ -324,7 +347,9 @@ class GmailAdapter:
 
     async def _import_resumable(self, raw: bytes, labels: list[str]) -> httpx.Response:
         """A POST with the labels opens an upload session; a PUT to its address carries the
-        mail. Counted as one import."""
+        mail. Counted as one import. The whole mail goes in that one PUT (a mail is at most
+        tens of MB): there is no chunking or resuming of a cut-off upload, so Gmail's 308
+        ("send the rest") would surface as a plain refusal of this mail."""
         start = await self._call(
             "gmail.messages.import",
             "POST",
