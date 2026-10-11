@@ -293,9 +293,24 @@ describe("mail and Google API settings", () => {
     });
     renderApp(<SettingsPage />, { route: "/settings?tab=google", path: "/settings" });
     expect(await screen.findByText("1,250,000 of 10,000,000 units used today (UTC).")).toBeInTheDocument();
-    expect(screen.getByText("Drive syncs, estimated: about 4,300 units today. They don't count against the budget.")).toBeInTheDocument();
+    expect(screen.getByText("Drive syncs, estimated: about 4,300 units today. They count toward the budget but are never held back.")).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "Google API units used today" })).toHaveAttribute("aria-valuenow", "13");
     expect(screen.getByLabelText("Daily budget (units)")).toHaveValue("10000000");
+  });
+
+  it("caps the daily budget at half of Google's 80,000,000 paid line", async () => {
+    mockApi({
+      "GET /api/settings": MAIL_SETTINGS,
+      "GET /api/google/usage": { day: "2026-10-10", used: 0, budget: 10_000_000, drive_estimate: 0, reached: false },
+    });
+    renderApp(<SettingsPage />, { route: "/settings?tab=google", path: "/settings" });
+    const input = await screen.findByLabelText("Daily budget (units)");
+    await userEvent.clear(input);
+    await userEvent.type(input, "40000001");
+    expect(screen.getByText("Use a whole number from 1 to 40000000.")).toBeInTheDocument();
+    await userEvent.clear(input);
+    await userEvent.type(input, "40000000");
+    expect(screen.queryByText(/Use a whole number/)).not.toBeInTheDocument();
   });
 
   it("says when mail waits for the next UTC day", async () => {

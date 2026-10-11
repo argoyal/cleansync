@@ -20,7 +20,12 @@ export function MailStartCard({ account }: { account: Account }) {
       {info.isPending && <p className="mb-4 text-ink-2">Counting the mail in {account.email}…</p>}
       {info.isError && (
         <div className="mb-4">
-          <Notice tone="err">{friendlyError(info.error)}</Notice>
+          <Notice tone="err">
+            <p>{friendlyError(info.error)}</p>
+            <Button className="mt-2" icon="refresh" disabled={info.isFetching} onClick={() => info.refetch()}>
+              Retry
+            </Button>
+          </Notice>
         </div>
       )}
       {info.data && (

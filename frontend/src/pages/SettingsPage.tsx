@@ -348,7 +348,7 @@ function GoogleApiSettings() {
             {usage.reached ? " Mail jobs are paused until midnight UTC." : ""}
           </p>
           <p className="text-table tabular text-ink-2">
-            Drive syncs, estimated: about {usage.drive_estimate.toLocaleString()} units today. They don't count against the budget.
+            Drive syncs, estimated: about {usage.drive_estimate.toLocaleString()} units today. They count toward the budget but are never held back.
           </p>
         </div>
       )}
@@ -361,7 +361,7 @@ function GoogleApiSettings() {
           label="Daily budget (units)"
           value={settings.google_daily_budget_units}
           min={1}
-          max={80_000_000}
+          max={40_000_000}
           onSave={(v) => save.mutate({ google_daily_budget_units: v })}
         />
       )}

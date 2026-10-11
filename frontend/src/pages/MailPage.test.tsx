@@ -2,7 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { ACCOUNT, mockApi, renderApp } from "../test/utils";
+import { ACCOUNT, json, mockApi, renderApp } from "../test/utils";
 import { MailPage } from "./MailPage";
 
 describe("Mail before it is set up", () => {
@@ -115,8 +115,60 @@ describe("Mail backup", () => {
       "GET /api/mail/status": { ...STATUS, failed: [{ provider_id: "18a0000000000007", attempts: 3, last_error: "Gmail refused the request (HTTP 500)" }] },
     });
     renderApp(<MailPage />, { withAccount: true, route: "/mail" });
-    expect(await screen.findByText("1 mail couldn't be backed up after 3 tries. CleanSync tries again once a day.")).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "1 mail couldn't be backed up after 3 tries. CleanSync keeps trying: first after 20 minutes, then waiting twice as long each time, up to once a day.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText("18a0000000000007")).toBeInTheDocument();
     expect(screen.getByText("Gmail refused the request (HTTP 500)")).toBeInTheDocument();
+  });
+
+  it("shows only the first 50 failed mails and says how many more there are", async () => {
+    const failed = Array.from({ length: 53 }, (_, i) => ({ provider_id: `18a00000000${String(i).padStart(5, "0")}`, attempts: 3, last_error: "Gmail refused the request (HTTP 400)" }));
+    mockApi({ "GET /api/accounts": [ACTIVE], "GET /api/mail/status": { ...STATUS, failed } });
+    renderApp(<MailPage />, { withAccount: true, route: "/mail" });
+    expect(await screen.findByText(/^53 mails couldn't be backed up/)).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(50);
+    expect(screen.getByText("and 3 more")).toBeInTheDocument();
+  });
+
+  it("reads the progress out as it changes", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/status": { ...STATUS, phase: "initial", running: true, stored: 12345, time_left_s: null },
+    });
+    renderApp(<MailPage />, { withAccount: true, route: "/mail" });
+    expect(await screen.findByText("12,345 of about 38,300 mails")).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("says it is loading while the status is on its way", async () => {
+    mockApi({ "GET /api/accounts": [ACTIVE], "GET /api/mail/status": () => new Promise(() => {}) });
+    renderApp(<MailPage />, { withAccount: true, route: "/mail" });
+    expect(await screen.findByText("Loading the mail backup…")).toBeInTheDocument();
+  });
+
+  it("says when the status can't be loaded and tries again on Retry", async () => {
+    let n = 0;
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/status": () => (++n === 1 ? json(500, { detail: "The server had a problem." }) : STATUS),
+    });
+    renderApp(<MailPage />, { withAccount: true, route: "/mail" });
+    expect(await screen.findByText(/Could not load the mail backup/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText(/^38,214 mails · 6.2 GB · checked/)).toBeInTheDocument();
+  });
+
+  it("offers Retry when counting the mail fails", async () => {
+    let n = 0;
+    mockApi({
+      "GET /api/accounts": [{ ...ACCOUNT, services: { files: "active", mail: "setting_up" } }],
+      "GET /api/mail/setup-info": () => (++n === 1 ? json(502, { detail: "could not reach Gmail" }) : { total: 26, size_bytes: null }),
+    });
+    renderApp(<MailPage />, { withAccount: true, route: "/mail" });
+    expect(await screen.findByText(/could not reach Gmail/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("About 26 mails. The first backup takes a few hours. Nothing in Gmail changes.")).toBeInTheDocument();
   });
 });
