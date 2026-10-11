@@ -217,7 +217,7 @@ def test_delete_brakes_are_their_own_failure_class(msg):
 
 def test_same_change_on_both_sides_is_not_a_conflict():
     # rclone warns "New or changed in both paths", then finds both sides equal (or a folder)
-    # and leaves them alone: e.g. after DriveSync renamed a folder on both sides.
+    # and leaves them alone: e.g. after CleanSync renamed a folder on both sides.
     c = Counters()
     c.feed(parse_line(jl('Synching Path1 "/l/p1/" with Path2 "gd:Docs/"')))
     for path in ("New", "New/a.txt", "both.txt"):

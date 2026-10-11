@@ -76,7 +76,7 @@ def refuse_offloaded(
     message: str = OFFLOADED_MSG,
 ) -> None:
     """Offloaded items (and folders holding them) keep their place until they are restored:
-    moving them would put them back in sync under a new name, or out of DriveSync's sight.
+    moving them would put them back in sync under a new name, or out of CleanSync's sight.
     With inside=False only the item itself and what is inside an offloaded folder count."""
     for rel in rels:
         pair = pair_for(scope.pairs, rel)
@@ -115,7 +115,7 @@ def os_error(e: OSError) -> HTTPException:
         return HTTPException(507, "the server disk is full")
     if e.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
         return HTTPException(
-            403, "DriveSync is not allowed to change this (check folder permissions)"
+            403, "CleanSync is not allowed to change this (check folder permissions)"
         )
     log.warning("file action failed: %s", e.strerror)
     return HTTPException(500, f"the file action failed: {e.strerror}")

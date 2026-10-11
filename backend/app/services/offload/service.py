@@ -70,13 +70,13 @@ DONE_MSG = "Removed from Google Drive (it is in Drive's trash). Kept on this ser
 STOPPED_BEFORE_DELETE = (
     "Syncing stopped before anything was removed from Google Drive. Use Restore to Drive to undo."
 )
-NOT_RUN_MSG = "DriveSync stopped before this item ran, so nothing was removed."
+NOT_RUN_MSG = "CleanSync stopped before this item ran, so nothing was removed."
 EMPTY_FOLDERS_STAY = "Syncing stopped, so its empty folders may still be on Google Drive."
 RESTORE_ONE_WAY_MSG = (
     "Restore to Drive works only in folders that sync both ways. Make this folder sync both "
     "ways first."
 )
-EMPTYING_MSG = "DriveSync is emptying these from the trash right now. Try again when it's done."
+EMPTYING_MSG = "CleanSync is emptying these from the trash right now. Try again when it's done."
 RESTORING_NO_EMPTY_MSG = (
     "This is going back to Google Drive, so its copies in Drive's trash are kept."
 )
@@ -174,12 +174,12 @@ def _listing_problem(files: list[DriveFile], name: str, is_dir: bool, pretend: b
         return None
     if any(f.id is None for f in files):
         return (
-            "Google Drive didn't give an ID for every file, so DriveSync couldn't "
+            "Google Drive didn't give an ID for every file, so CleanSync couldn't "
             "check the trash afterwards. Nothing was removed."
         )
     if any(f.md5 is None for f in files):
         return (
-            "Google Drive didn't give a checksum for every file, so DriveSync couldn't "
+            "Google Drive didn't give a checksum for every file, so CleanSync couldn't "
             "check the trash afterwards. Nothing was removed."
         )
     return None
@@ -363,7 +363,7 @@ class OffloadService:
             log.exception("could not hold pair %s for an offload", pair_id)
             for bi, _ in items:
                 bi.state = "failed"
-                bi.message = f"DriveSync couldn't start this offload, so nothing was removed: {e}"
+                bi.message = f"CleanSync couldn't start this offload, so nothing was removed: {e}"
             return
         try:
             for bi, p in items:
@@ -452,7 +452,7 @@ class OffloadService:
                 bi,
                 account,
                 res,
-                "DriveSync couldn't list it on Google Drive, so nothing was removed.",
+                "CleanSync couldn't list it on Google Drive, so nothing was removed.",
             )
         problem = _listing_problem(files, name, p.is_dir, pretend)
         if problem:
@@ -473,7 +473,7 @@ class OffloadService:
                 db,
                 job,
                 bi,
-                "Some names on Google Drive can't be removed safely by DriveSync, so nothing "
+                "Some names on Google Drive can't be removed safely by CleanSync, so nothing "
                 "was removed.",
             )
 
@@ -565,10 +565,10 @@ class OffloadService:
         if missing:
             parts.append(f"These files are not in Google Drive's trash: {shown(missing)}.")
         if missing is None:
-            parts.append("DriveSync could not check Google Drive's trash.")
+            parts.append("CleanSync could not check Google Drive's trash.")
         if changed:
             parts.append(
-                "These files changed on Google Drive after DriveSync checked them, so the "
+                "These files changed on Google Drive after CleanSync checked them, so the "
                 "newer version is in Google Drive's trash, not on this server: "
                 f"{shown(changed)}. Recover them from Google Drive's trash soon: Google "
                 "empties it after 30 days."
@@ -610,15 +610,15 @@ class OffloadService:
                 f"differences, for example {other[0]}). Nothing was removed."
             )
         if res.exit_code != 0 or summary.fatal:
-            return "DriveSync couldn't compare it with Google Drive, so nothing was removed."
+            return "CleanSync couldn't compare it with Google Drive, so nothing was removed."
         if same_count != len(listed):  # a check that compared nothing must never pass
             return (
-                f"DriveSync compared {same_count} files but Google Drive lists {len(listed)}, "
+                f"CleanSync compared {same_count} files but Google Drive lists {len(listed)}, "
                 "so nothing was removed."
             )
         if same != listed:
             return (
-                "DriveSync compared other files than the ones Google Drive lists, so nothing "
+                "CleanSync compared other files than the ones Google Drive lists, so nothing "
                 "was removed."
             )
         return None
@@ -782,7 +782,7 @@ class OffloadService:
             if off is None:
                 raise OffloadError("offload not found", 404)
             if off.id in self.emptying:
-                raise OffloadError("DriveSync is already emptying these from the trash.")
+                raise OffloadError("CleanSync is already emptying these from the trash.")
             if off.state == S.RESTORING:
                 raise OffloadError(RESTORING_NO_EMPTY_MSG)
             if off.state != S.ACTIVE or not off.trash_verified:
@@ -834,7 +834,7 @@ class OffloadService:
             if not manifest:
                 return self._set_note(
                     offload_id,
-                    "DriveSync lost its list of these files, so nothing was deleted from the trash.",
+                    "CleanSync lost its list of these files, so nothing was deleted from the trash.",
                 )
             # Re-check the copy here first (spec §7.2): it is about to be the only one.
             changed = await asyncio.to_thread(local_copy_problems, local_parent, manifest)
@@ -913,7 +913,7 @@ class OffloadService:
                 if unlisted:
                     noun = "file isn't" if unlisted == 1 else "files aren't"
                     parts.append(
-                        f"{unlisted} {noun} in DriveSync's saved list, so "
+                        f"{unlisted} {noun} in CleanSync's saved list, so "
                         f"{'it was' if unlisted == 1 else 'they were'} left in the trash."
                     )
                 self._set_note(offload_id, " ".join(parts), emptied=False)

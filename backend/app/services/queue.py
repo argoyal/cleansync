@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable, Iterator
 log = logging.getLogger(__name__)
 Handler = Callable[[int, str, str], Awaitable[object]]
 MISSING_DISK_MSG = (
-    "Storage disk is missing — syncing stopped. Reconnect the disk and restart DriveSync."
+    "Storage disk is missing — syncing stopped. Reconnect the disk and restart CleanSync."
 )
 DB_BROKEN_MSG = "database integrity check failed; restore a backup (see docs/backup-recovery.md)"
 

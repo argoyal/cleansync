@@ -178,7 +178,7 @@ function AccountRow({ account }: { account: Account }) {
             </>
           }
         >
-          <p>DriveSync forgets this Google sign-in and stops syncing it. No files are deleted, here or on Google Drive. The files already on this server are kept.</p>
+          <p>CleanSync forgets this Google sign-in and stops syncing it. No files are deleted, here or on Google Drive. The files already on this server are kept.</p>
         </Dialog>
       )}
     </li>
@@ -318,7 +318,7 @@ function System() {
   return (
     <div className="space-y-4">
       {!s.db_ok && <Notice tone="err">The database check failed, so syncing is off. See docs/backup-recovery.md.</Notice>}
-      {s.insecure_http && <Notice tone="warn">DriveSync is served over plain http ({s.public_url}). Use https outside your home network.</Notice>}
+      {s.insecure_http && <Notice tone="warn">CleanSync is served over plain http ({s.public_url}). Use https outside your home network.</Notice>}
       <dl className="grid grid-cols-[auto,1fr] gap-x-6 gap-y-2 text-table">
         <dt className="text-ink-2">{s.app_name}</dt>
         <dd>{s.app_version}</dd>

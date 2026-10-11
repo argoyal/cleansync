@@ -1,4 +1,4 @@
-// Applies the theme picked in DriveSync (System, Light or Dark) before the page draws, so it
+// Applies the theme picked in CleanSync (System, Light or Dark) before the page draws, so it
 // never flashes the wrong colours. Loaded from index.html as a file: the Content-Security-Policy
 // allows no inline scripts. Keep the key in step with src/lib/theme.ts.
 (function () {

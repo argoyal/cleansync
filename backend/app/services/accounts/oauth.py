@@ -103,7 +103,7 @@ async def exchange_code(
     data = resp.json()
     if not data.get("refresh_token"):
         raise OAuthError(
-            "Google did not return a refresh token. Remove DriveSync's access at "
+            "Google did not return a refresh token. Remove CleanSync's access at "
             "myaccount.google.com/permissions and connect again."
         )
     return data

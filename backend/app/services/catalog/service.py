@@ -171,7 +171,7 @@ class CatalogService:
                 return await self._failed(pair_id, account_id, res)
             entries = []  # the Drive folder does not exist yet (first sync creates it)
         elif unreadable:
-            self.last_error[pair_id] = "rclone printed a listing DriveSync could not read"
+            self.last_error[pair_id] = "rclone printed a listing CleanSync could not read"
             log.warning(
                 "pair %s: %s unreadable listing lines; kept the old listing", pair_id, unreadable
             )

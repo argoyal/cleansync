@@ -432,7 +432,7 @@ class SyncEngine:
             if not bidirectional and count_dry_run_deletes(line):
                 one_way_deletes.append(line.path_obj or "")
 
-        # The dry run lifts bisync's own 50% brake: DriveSync's count gate below decides, and
+        # The dry run lifts bisync's own 50% brake: CleanSync's count gate below decides, and
         # a blocked plan is stored for review. The real run keeps the brake (see below).
         res = await self.run(
             self._args(

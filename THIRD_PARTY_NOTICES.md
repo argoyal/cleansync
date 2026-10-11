@@ -1,6 +1,6 @@
 # Third-party software
 
-The DriveSync image includes:
+The CleanSync image includes:
 - rclone (MIT License) — https://github.com/rclone/rclone
 - poppler-utils, for PDF previews (GPL-2.0-or-later; a separate program, installed from Debian) — https://poppler.freedesktop.org
 - Python and the packages listed in `backend/uv.lock`, each under its own license (Pillow: MIT-CMU; python-docx, openpyxl, python-pptx are MIT and only used at build time to make blank Office files).

@@ -50,7 +50,7 @@ def test_native_docs_are_skipped_not_blocking(world):
     folder, native = _plan(scope, ["Drive/Old", "Drive/Sheet.xlsx"], catalogs=cats)
     assert folder.blocked is None and folder.stays_on_drive == ["Drive/Old/Plan"]
     assert native.blocked == P.NATIVE_MSG
-    assert P.NATIVE_MSG == "Stays on Drive — not a file DriveSync can keep a copy of yet."
+    assert P.NATIVE_MSG == "Stays on Drive — not a file CleanSync can keep a copy of yet."
 
 
 def test_a_folder_holding_only_native_docs_has_nothing_to_offload(world):

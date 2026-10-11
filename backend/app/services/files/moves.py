@@ -98,7 +98,7 @@ class DriveMover:
         except ValueError:
             item = None
         if not isinstance(item, dict):
-            raise FileOpError("Google Drive gave an answer DriveSync could not read", 502)
+            raise FileOpError("Google Drive gave an answer CleanSync could not read", 502)
         return True
 
     async def move(self, account: Account, src: str, dst: str) -> None:
@@ -222,7 +222,7 @@ async def prepare_moves(
                 on_drive = await drive.exists(account, src_target)
             elif pair.initialized:  # no listing, or one that may be out of date
                 raise FileOpError(
-                    "DriveSync can't tell whether this item is on Google Drive until the Google "
+                    "CleanSync can't tell whether this item is on Google Drive until the Google "
                     "login is reconnected."
                 )
         if not on_drive:

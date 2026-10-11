@@ -49,7 +49,7 @@ describe("Recovery", () => {
   it("shows where each entry came from, where it goes back, and when it is cleaned up", async () => {
     setup();
     const table = await screen.findByRole("table");
-    expect(within(table).getByText("Deleted in DriveSync")).toBeInTheDocument();
+    expect(within(table).getByText("Deleted in CleanSync")).toBeInTheDocument();
     expect(within(table).getByText("Conflict: the version not kept")).toBeInTheDocument();
     expect(within(table).getByText("Offloaded, in Drive's trash")).toBeInTheDocument();
     expect(within(table).getByText("Docs/a.txt")).toBeInTheDocument();

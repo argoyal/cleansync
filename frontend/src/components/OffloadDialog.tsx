@@ -7,7 +7,7 @@ import type { OffloadBatch, OffloadBatchItem, OffloadPreview } from "../api/type
 import { formatBytes } from "../lib/format";
 import { Button, Dialog, Notice } from "./ui";
 
-const NATIVE_NOTE = "Stays on Drive — not a file DriveSync can keep a copy of yet.";
+const NATIVE_NOTE = "Stays on Drive — not a file CleanSync can keep a copy of yet.";
 const RESULT: Record<OffloadBatchItem["state"], string> = {
   waiting: "Waiting",
   running: "Working on it",

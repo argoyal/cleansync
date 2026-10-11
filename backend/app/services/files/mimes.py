@@ -53,7 +53,7 @@ _TEXT_LIKE = frozenset(
 def serve_policy(mime: str | None) -> tuple[str, bool]:
     """(Content-Type to send, may the browser show it inline).
 
-    Anything that could run script on DriveSync's own address (HTML, XML, JavaScript) is
+    Anything that could run script on CleanSync's own address (HTML, XML, JavaScript) is
     sent as plain text, and every inline response also gets a sandboxing CSP (api/serve.py).
     """
     if mime is None:

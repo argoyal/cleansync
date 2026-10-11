@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Runs against an already running DriveSync (CI: the built container with a seeded
+// Runs against an already running CleanSync (CI: the built container with a seeded
 // local "pretend Google" account). Set E2E_BASE_URL and E2E_ADMIN_PASSWORD.
 export default defineConfig({
   testDir: "./e2e",

@@ -27,8 +27,8 @@ def test_queued_jobs_get_a_not_started_message(db, make_account, make_pair):
     recover_interrupted(db)
     msgs = [j.error_message for j in db.scalars(select(SyncJob).order_by(SyncJob.id))]
     assert msgs == [
-        "DriveSync stopped before this job started.",
-        "DriveSync stopped while this job was running.",
+        "CleanSync stopped before this job started.",
+        "CleanSync stopped while this job was running.",
     ]
 
 

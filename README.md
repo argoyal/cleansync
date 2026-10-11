@@ -1,8 +1,8 @@
-# DriveSync
+# CleanSync
 
 Keep a folder on your own server and Google Drive in two-way sync, with a web page to watch it, and safety checks so a sync can never quietly delete your files.
 
-DriveSync is a control panel around [rclone](https://rclone.org) `bisync`. rclone moves the files; DriveSync decides when, checks every plan before it runs, and asks you when something needs a human.
+CleanSync is a control panel around [rclone](https://rclone.org) `bisync`. rclone moves the files; CleanSync decides when, checks every plan before it runs, and asks you when something needs a human.
 
 > Status: early development. Backend, web UI, offload and the Recovery page are in; Office conversion comes next.
 
@@ -17,12 +17,12 @@ DriveSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 - Files replaced or deleted locally are copied to a backup folder first. Files deleted on Drive go to Drive's trash.
 - If a file changed on both sides, both versions are kept and you choose.
 - **Offload:** keep files on the server and remove them from Google Drive (into Drive's trash) to free Drive space. Only when you ask, checked file by file before and after. Right-click, or pick many at once on the Offloaded page. Google Docs, Sheets and Slides stay on Drive. Restore to Drive any time.
-- **Recovery:** every copy DriveSync kept, with where it came from and when it is cleaned up. Restore one or many (never overwrites), or download them.
+- **Recovery:** every copy CleanSync kept, with where it came from and when it is cleaned up. Restore one or many (never overwrites), or download them.
 - New files and uploads only go into synced folders.
 
 ## Quick start
 1. Create a Google OAuth client: [docs/google-oauth-setup.md](docs/google-oauth-setup.md).
-2. Copy `docker-compose.example.yml` to `compose.yml` and `.env.example` to `.env`; fill in `.env`. (Don't copy over `docker-compose.yml`: that one builds DriveSync from source for development.)
+2. Copy `docker-compose.example.yml` to `compose.yml` and `.env.example` to `.env`; fill in `.env`. (Don't copy over `docker-compose.yml`: that one builds CleanSync from source for development.)
 3. Make the data folder owned by user 1000: `sudo mkdir -p /srv/drivesync && sudo chown 1000:1000 /srv/drivesync`.
 4. While the image is private, log in to the registry once: `docker login ghcr.io` (a GitHub token with `read:packages`).
 5. `docker compose -f compose.yml pull && docker compose -f compose.yml up -d`. Run the same two commands again to update to the newest `latest` image.
@@ -33,7 +33,7 @@ Open `PUBLIC_URL`, log in, choose your own password, and the setup wizard walks 
 ## Configuration
 | Variable | Required | Meaning |
 |---|---|---|
-| `PUBLIC_URL` | yes | Address you open DriveSync at. https unless localhost/LAN. Google redirects back to `PUBLIC_URL/api/oauth/callback`. |
+| `PUBLIC_URL` | yes | Address you open CleanSync at. https unless localhost/LAN. Google redirects back to `PUBLIC_URL/api/oauth/callback`. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | yes | Your own OAuth client. |
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | first start | Initial login. If no password is set, one is generated into `app/data/secrets/initial-admin-password`. |
 | `RCLONE_CONFIG_PASS` | no | Encrypts the saved Google logins. Generated into `app/data/secrets/` on first start if empty. |
@@ -44,4 +44,4 @@ Open `PUBLIC_URL`, log in, choose your own password, and the setup wizard walks 
 [Architecture](docs/architecture.md) · [Google OAuth setup](docs/google-oauth-setup.md) · [Security](docs/security.md) · [Backup and recovery](docs/backup-recovery.md) · [Troubleshooting](docs/troubleshooting.md) · [Known limitations](docs/limitations.md) · [Contributing](CONTRIBUTING.md)
 
 ## License
-AGPL-3.0. If you run a modified DriveSync as a service for other people, you must publish your changes.
+AGPL-3.0. If you run a modified CleanSync as a service for other people, you must publish your changes.

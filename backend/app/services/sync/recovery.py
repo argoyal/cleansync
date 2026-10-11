@@ -14,9 +14,9 @@ def recover_interrupted(db: Session) -> list[int]:
     ):
         job.completed_at = utcnow()
         job.error_message = (
-            "DriveSync stopped before this job started."
+            "CleanSync stopped before this job started."
             if job.state == JobState.QUEUED
-            else "DriveSync stopped while this job was running."
+            else "CleanSync stopped while this job was running."
         )
         job.state = JobState.INTERRUPTED
         pair_ids.add(job.pair_id)

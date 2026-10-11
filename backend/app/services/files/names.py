@@ -39,7 +39,7 @@ def validate_name(name: str) -> str:
     if len(name.encode("utf-8")) > MAX_NAME_BYTES:
         raise UnsafePath("that name is too long")
     if is_hidden_name(name):
-        raise UnsafePath("that name is used by DriveSync itself")
+        raise UnsafePath("that name is used by CleanSync itself")
     return name
 
 

@@ -51,7 +51,7 @@ def _moves(fake_rclone):
 
 
 def _stat_missing(fake_rclone):
-    """Drive answers 'not found' when DriveSync checks that a target name is free."""
+    """Drive answers 'not found' when CleanSync checks that a target name is free."""
     fake_rclone.on("lsjson", **NOT_FOUND)
 
 
@@ -695,7 +695,7 @@ def test_no_login_and_an_item_missing_from_the_listing_is_refused(
 
     acc, root, pair = env
     _put(root, "Drive/new.txt")
-    save_catalog(pair.id, [])  # may be old: DriveSync can't tell whether new.txt is on Drive
+    save_catalog(pair.id, [])  # may be old: CleanSync can't tell whether new.txt is on Drive
     with app.state.session_factory() as db:
         db.get(Account, acc.id).status = "NEEDS_REAUTH"
         db.commit()

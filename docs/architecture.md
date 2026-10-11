@@ -4,7 +4,7 @@ One container, one process.
 
 - **FastAPI** serves the REST API (`/api/*`, docs at `/api/docs` after login) and a Server-Sent Events stream (`/api/events`) for live status.
 - **SQLite** (`app/data/drivesync.db`) holds accounts, sync pairs, job history, conflicts and settings. There is no row per file.
-- **rclone** is the only thing that touches Google Drive file content. DriveSync runs it as a subprocess with a fixed list of arguments (`backend/app/services/rclone/commands.py`), never through a shell.
+- **rclone** is the only thing that touches Google Drive file content. CleanSync runs it as a subprocess with a fixed list of arguments (`backend/app/services/rclone/commands.py`), never through a shell.
 - **Queue**: at most one job per sync pair; extra requests while a pair is running collapse into one follow-up run. A small number of pairs (default 2) run at once.
 - **Scheduler** (APScheduler) asks the queue for a sync every N minutes per pair, refreshes Drive quota hourly, and runs daily maintenance (database copy, pruning old backups and logs).
 - **Watcher** (watchdog) asks the queue for a sync a few seconds after local files stop changing. If the folder does not deliver change events (common on Windows-mounted or network drives), the watcher reports "limited" and the schedule covers it.

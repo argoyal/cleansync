@@ -32,7 +32,7 @@ def env(auth_client, app, make_account, make_pair, stub_queue, db):
     _put(b, f"{P}/2026-10-03/conflicts/notes.conflict2.txt", "loser")
     _put(b, "unsynced/2026-10-04/.drivesync-deleted-111111-cd34/Loose/x.txt", "loose")
     _put(b, "99/2026-10-04/z.txt", "orphan")  # its pair was removed
-    _put(b, "unsynced/2026-10-04/stray.txt", "not ours")  # not made by DriveSync: ignored
+    _put(b, "unsynced/2026-10-04/stray.txt", "not ours")  # not made by CleanSync: ignored
     off = Offload(
         pair_id=pair.id,
         path="Old",

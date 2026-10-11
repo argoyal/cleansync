@@ -32,7 +32,7 @@ format:
 	cd backend && uv run ruff check --fix . && uv run ruff format .
 
 build:
-	docker build -t drivesync:dev .
+	docker build -t cleansync:dev .
 
 fe-install:
 	cd frontend && npm ci

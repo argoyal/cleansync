@@ -18,8 +18,8 @@ from app.services.files.zipstream import zip_folder
 
 router = APIRouter()
 
-# Opened files run on DriveSync's address, so they get a sandbox: no script, no forms,
-# no access to DriveSync's cookies or pages. Chrome's PDF viewer does not work inside a
+# Opened files run on CleanSync's address, so they get a sandbox: no script, no forms,
+# no access to CleanSync's cookies or pages. Chrome's PDF viewer does not work inside a
 # sandbox; a PDF cannot run script on our pages in Chrome, so it only gets frame-ancestors.
 FILE_CSP = (
     "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; "

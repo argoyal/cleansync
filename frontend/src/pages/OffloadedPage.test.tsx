@@ -13,7 +13,7 @@ const off = (over: Partial<Offload>): Offload => ({
   created_at: "2026-10-09T08:00:00Z", updated_at: "2026-10-09T08:00:00Z", note: null, busy: false, ...over,
 });
 const STATUS = { accounts: 1, accounts_attention: 0, pairs: 1, new: 0, healthy: 1, attention: 0, running: 0, paused: 0, conflicts: 0, sync_stopped: null };
-const STOPPED = "Storage disk is missing — syncing stopped. Reconnect the disk and restart DriveSync.";
+const STOPPED = "Storage disk is missing — syncing stopped. Reconnect the disk and restart CleanSync.";
 
 function setup(offloads: Offload[], extra: Record<string, unknown> = {}) {
   const api = mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/status": STATUS, "GET /api/offloads": offloads, ...extra });

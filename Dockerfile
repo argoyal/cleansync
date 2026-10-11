@@ -40,9 +40,9 @@ COPY backend/scripts/make_office_templates.py scripts/
 RUN .venv/bin/python scripts/make_office_templates.py /out/office
 
 FROM python:3.12-slim
-LABEL org.opencontainers.image.source="https://github.com/argoyal/drivesync" \
+LABEL org.opencontainers.image.source="https://github.com/argoyal/cleansync" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
-      org.opencontainers.image.description="Two-way Google Drive sync for your own server"
+      org.opencontainers.image.description="Google Drive and Gmail backup and clean-up for your own server"
 COPY --from=rclone /out/rclone /usr/local/bin/rclone
 # pdftoppm makes the PDF previews
 RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils \

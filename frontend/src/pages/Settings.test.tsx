@@ -19,7 +19,7 @@ const SETTINGS = {
   log_retention_days: 30,
 };
 const SYSTEM = {
-  app_name: "DriveSync",
+  app_name: "CleanSync",
   app_version: "0.1.0",
   python_version: "3.12.9",
   rclone_version: "rclone v1.75.1",
@@ -147,7 +147,7 @@ describe("storage page", () => {
 describe("routes", () => {
   it("sends a new installation from Home to the wizard", async () => {
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [],
       "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 0, pairs: 0, initialized_pairs: 0 },
     });
@@ -158,7 +158,7 @@ describe("routes", () => {
   it("still opens the wizard's folder step on an account after setup is done", async () => {
     const second = { ...ACCOUNT, id: 2, email: "bob@example.com" };
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT, second],
       "GET /api/sync-pairs": [PAIR],
       "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 2, pairs: 1, initialized_pairs: 1 },
@@ -172,7 +172,7 @@ describe("routes", () => {
   it("shows a sign-in error as plain text and clears the address", async () => {
     sessionStorage.setItem("drivesync.oauthReturn", "/settings?tab=accounts");
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT],
       "GET /api/sync-pairs": [PAIR],
       "GET /api/settings": SETTINGS,
@@ -188,7 +188,7 @@ describe("routes", () => {
   it.each([["//evil.example.com/x"], ["https://evil.example.com"]])("ignores an unsafe saved return path %s", async (saved) => {
     sessionStorage.setItem("drivesync.oauthReturn", saved);
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT],
       "GET /api/sync-pairs": [PAIR],
       "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 1, initialized_pairs: 1 },
@@ -200,7 +200,7 @@ describe("routes", () => {
 
   it("ignores a connected value that is not a positive whole number and caps long errors", async () => {
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT],
       "GET /api/sync-pairs": [PAIR],
       "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 1, initialized_pairs: 1 },
@@ -213,7 +213,7 @@ describe("routes", () => {
   it("returns from Google sign-in to where the person started", async () => {
     sessionStorage.setItem("drivesync.oauthReturn", "/settings?tab=accounts");
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT],
       "GET /api/sync-pairs": [PAIR],
       "GET /api/status": { accounts: 1, accounts_attention: 0, pairs: 1, new: 0, healthy: 1, attention: 0, running: 0, paused: 0, conflicts: 0 },
@@ -229,7 +229,7 @@ describe("routes", () => {
 describe("setup wizard skip", () => {
   it("Skip for now goes to My Drive and Home stops sending you back this session", async () => {
     mockApi({
-      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "DriveSync" },
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
       "GET /api/accounts": [ACCOUNT],
       "GET /api/sync-pairs": [],
       "GET /api/browse": { account_id: 1, path: "", pair: null, items: [] },

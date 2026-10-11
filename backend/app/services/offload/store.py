@@ -1,4 +1,4 @@
-"""Offload rows, and the questions the rest of DriveSync asks about them.
+"""Offload rows, and the questions the rest of CleanSync asks about them.
 
 Paths here are pair paths (relative to the pair's own folder), like the filter file uses.
 """
@@ -20,10 +20,10 @@ from app.paths import Layout
 EXCLUDED_STATES = (S.PENDING, S.DELETING, S.VERIFYING, S.ACTIVE, S.ATTENTION)
 # Not finished with: in force, or on its way back to Drive.
 OPEN_STATES = (*EXCLUDED_STATES, S.RESTORING)
-# A run was busy with these when DriveSync stopped.
+# A run was busy with these when CleanSync stopped.
 UNFINISHED_STATES = (S.PENDING, S.DELETING, S.VERIFYING)
 INTERRUPTED_NOTE = (
-    "DriveSync stopped during this offload. The files are still on this server and stay out "
+    "CleanSync stopped during this offload. The files are still on this server and stay out "
     "of sync. Use Restore to Drive to put back anything that left Google Drive."
 )
 

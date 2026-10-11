@@ -12,7 +12,7 @@
 - The first time you browse a folder right after a sync, an item can still show its status from before the sync for a moment. It corrects itself within about a minute.
 - Folders are listed in one piece, not page by page. A folder with a huge number of items (tens of thousands) can be slow to open.
 - On disks that ignore letter case (Windows, some network shares), two names that differ only by case are shown as two items, even though the disk treats them as the same file.
-- Renaming or moving an item in DriveSync is done on Drive too, as a real rename, so the Drive file keeps its ID and sharing.
+- Renaming or moving an item in CleanSync is done on Drive too, as a real rename, so the Drive file keeps its ID and sharing.
 - Changing only the letter case of a folder name (for example `photos` to `Photos`) can fail on case-insensitive storage. If it does, nothing changes and you see an error.
 - A development build that was made without the Office template generator cannot create blank Word, Excel or PowerPoint files (the container image always includes them).
 - Google Docs, Sheets and Slides are recognised in the Drive listing by their Google file type or their missing size; this is still to be confirmed against a real Drive.

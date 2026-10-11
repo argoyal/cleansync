@@ -1,4 +1,4 @@
-"""Recovery (spec §8): list what DriveSync kept, restore copies, download."""
+"""Recovery (spec §8): list what CleanSync kept, restore copies, download."""
 
 import asyncio
 import os
@@ -141,7 +141,7 @@ async def list_recovery(
         raise HTTPException(e.status, str(e)) from e
     scope = get_scope(request, db, account_id)
     default_days = _default_days(db)
-    # Files DriveSync sent to Drive's trash in an offload, still there. trashed_ids is set
+    # Files CleanSync sent to Drive's trash in an offload, still there. trashed_ids is set
     # when the delete starts, so an offload that stopped before it (its files still live on
     # Drive) is not listed.
     offloads = db.execute(

@@ -124,7 +124,7 @@ function AccountStep({ onNext }: { onNext: () => void }) {
     <section className="space-y-5">
       <StepHeading>Connect a Google account</StepHeading>
       <p className="max-w-prose text-ink-2">
-        DriveSync uses your own Google sign-in client. In the Google Cloud console, add this address to the client's
+        CleanSync uses your own Google sign-in client. In the Google Cloud console, add this address to the client's
         allowed redirect addresses:
       </p>
       {setup.data && (
@@ -140,7 +140,7 @@ function AccountStep({ onNext }: { onNext: () => void }) {
       )}
       {setup.data && !setup.data.oauth_configured && (
         <Notice tone="warn">
-          No Google client is set yet. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and restart DriveSync (see
+          No Google client is set yet. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and restart CleanSync (see
           docs/google-oauth-setup.md).
         </Notice>
       )}
@@ -276,7 +276,7 @@ export function PreviewSummary({ preview }: { preview: Preview }) {
       </p>
       {preview.errors > 0 && (
         <Notice tone="err">
-          rclone could not compare {preview.errors} files, so DriveSync will refuse to start. Fix these and compare again.
+          rclone could not compare {preview.errors} files, so CleanSync will refuse to start. Fix these and compare again.
         </Notice>
       )}
       <Samples title="Upload to Google Drive" paths={preview.samples.only_local} total={preview.only_local} />
@@ -344,7 +344,7 @@ function PreviewStep({ pairId, onNext }: { pairId: number; onNext: () => void })
     <section className="space-y-6">
       <StepHeading>Check before anything moves</StepHeading>
       <p className="max-w-prose text-ink-2">
-        DriveSync compares both folders without changing either. The first sync never deletes anything: files on one side are
+        CleanSync compares both folders without changing either. The first sync never deletes anything: files on one side are
         copied to the other, and for files that differ the newer one wins (the older local version is saved to backups first).
       </p>
       {!waiting && (
@@ -402,7 +402,7 @@ function StartStep({ pairId }: { pairId: number }) {
         <h1 className="text-hero font-semibold tracking-tight">{done ? "Synced" : failed ? "The first sync did not finish" : "First sync running"}</h1>
         {!done && !failed && <Notice tone="run">Copying in both directions. You can leave this page; it keeps going.</Notice>}
         {failed && <Notice tone="err">{failed}</Notice>}
-        {done && <Notice tone="ok">Both sides are in step. From now on DriveSync keeps them that way.</Notice>}
+        {done && <Notice tone="ok">Both sides are in step. From now on CleanSync keeps them that way.</Notice>}
       </div>
       <div className="flex flex-wrap gap-2">
         <Button tone="primary" icon="folder" onClick={() => navigate(`/drive?path=${encodeURIComponent(p?.local_subpath ?? "")}`)}>

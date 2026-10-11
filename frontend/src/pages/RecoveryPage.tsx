@@ -12,7 +12,7 @@ import { formatBytes } from "../lib/format";
 
 const KIND: Record<RecoveryKind, string> = {
   sync_backup: "Replaced or deleted by a sync",
-  deleted: "Deleted in DriveSync",
+  deleted: "Deleted in CleanSync",
   first_sync: "Saved before the first sync",
   resync: "Saved before a safe resync",
   conflict: "Conflict: the version not kept",
@@ -34,7 +34,7 @@ function cleanup(e: RecoveryEntry): string {
 /** Only these can be picked: offloads go back from the Offloaded page; orphans are downloaded from their row. */
 const pickable = (e: RecoveryEntry) => e.kind !== "offload" && e.original_path !== null;
 
-/** Spec §8: everything DriveSync kept, where it came from, and a way back. */
+/** Spec §8: everything CleanSync kept, where it came from, and a way back. */
 export function RecoveryPage() {
   const { accountId } = useCurrentAccount();
   const [params, setParams] = useSearchParams();
@@ -83,7 +83,7 @@ export function RecoveryPage() {
     try {
       res = await fetch(href, { method: "HEAD", credentials: "same-origin" });
     } catch {
-      setProblem("Can't reach DriveSync. Check your connection and try again.");
+      setProblem("Can't reach CleanSync. Check your connection and try again.");
       return;
     }
     if (res.ok) startDownload(href);
@@ -114,7 +114,7 @@ export function RecoveryPage() {
     <div className="p-4 sm:p-6">
       <h1 className="mb-2 text-title font-semibold">Recovery</h1>
       <p className="mb-4 max-w-3xl text-ink-2">
-        Copies DriveSync kept: files replaced or deleted by a sync, items deleted here, versions not kept in a conflict,
+        Copies CleanSync kept: files replaced or deleted by a sync, items deleted here, versions not kept in a conflict,
         and files it sent to Google Drive's trash in an offload. Restore puts a copy back where it was and never
         overwrites: if that name is taken, it comes back next to it as "name (restored)".
       </p>

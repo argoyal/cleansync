@@ -622,7 +622,7 @@ describe("Several items, offload and restore", () => {
     const dialog = await screen.findByRole("dialog", { name: "Offload 2 items?" });
     expect(await within(dialog).findByText(/12 files, 3.0 MB freed on Google Drive/)).toBeInTheDocument();
     expect(within(dialog).getByText("This has an open conflict. Resolve it in Conflicts first.")).toBeInTheDocument();
-    expect(within(dialog).getByText(/Stays on Drive — not a file DriveSync can keep a copy of yet\. Plan/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Stays on Drive — not a file CleanSync can keep a copy of yet\. Plan/)).toBeInTheDocument();
     expect(calls.find((c) => c.path === "/api/offloads/preview")?.body).toEqual({ account_id: 1, paths: ["Work", "photo.jpg"] });
     await userEvent.click(within(dialog).getByRole("button", { name: "Offload" }));
     expect(calls.find((c) => c.method === "POST" && c.path === "/api/offloads")?.body).toEqual({ account_id: 1, paths: ["Work"] });

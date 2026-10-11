@@ -10,6 +10,6 @@ def test_health_reports_ok_and_version(settings):
     assert resp.json() == {
         "status": "ok",
         "version": "0.1.0",
-        "app_name": "DriveSync",
+        "app_name": "CleanSync",
         "syncing": "on",
     }

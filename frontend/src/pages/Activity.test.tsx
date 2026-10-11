@@ -123,7 +123,7 @@ describe("sync activity", () => {
   });
 
   it("shows every switch as stopped while the storage disk is missing, and sends nothing", async () => {
-    const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart DriveSync.";
+    const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart CleanSync.";
     const { calls } = mockApi({
       "GET /api/sync-pairs": [PAIR, { ...PAIR, id: 8, name: "Photos", paused: true, status: "PAUSED" }],
       "GET /api/sync-pairs/7/catalog": CATALOG,
@@ -296,7 +296,7 @@ describe("every attention reason is explained", () => {
     ["BLOCKED", {}, /would delete more files than your limit/, /Review blocked sync, My Drive/],
     ["CONFLICTS", {}, /changed on both sides/, /Resolve conflicts, My Drive/],
     ["NEEDS_RESYNC", {}, /safe resync copies both ways/, /Run safe resync, My Drive/],
-    ["AUTH", {}, /no longer lets DriveSync in/, /Reconnect account, My Drive/],
+    ["AUTH", {}, /no longer lets CleanSync in/, /Reconnect account, My Drive/],
     ["ACCESS_CHECK", {}, /storage folder or its marker file can't be found/, /Sync now, My Drive/],
     ["PLAN_UNREADABLE", {}, /couldn't read rclone's plan, so nothing was changed/, /Sync now, My Drive/],
     ["FAILED", { next_sync_at: "2999-01-01T00:00:00Z" }, /The last sync failed. Retrying/, /Sync now, My Drive/],

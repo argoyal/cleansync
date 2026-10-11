@@ -254,7 +254,7 @@ describe("mobile drawer", () => {
 });
 
 describe("stopped syncing", () => {
-  const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart DriveSync.";
+  const MSG = "Storage disk is missing — syncing stopped. Reconnect the disk and restart CleanSync.";
 
   it("says so on every page", async () => {
     mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": { ...STATUS, sync_stopped: MSG } });

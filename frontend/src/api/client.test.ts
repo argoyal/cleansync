@@ -82,7 +82,7 @@ describe("api client", () => {
   it("explains network failures and leaves aborts alone", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
     await expect(api("/api/x")).rejects.toMatchObject({
-      detail: "Can't reach DriveSync. Check your connection and try again.",
+      detail: "Can't reach CleanSync. Check your connection and try again.",
     });
     const abort = new DOMException("aborted", "AbortError");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(abort));

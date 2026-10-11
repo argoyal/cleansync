@@ -123,11 +123,11 @@ export function attentionText(pair: Pair): string | null {
         ? "The two sides have lost track of each other. A safe resync copies both ways and deletes nothing."
         : "The two sides have lost track of each other. Use Sync now to bring them back in line.";
     case "AUTH":
-      return "Google no longer lets DriveSync in. Reconnect the account to continue.";
+      return "Google no longer lets CleanSync in. Reconnect the account to continue.";
     case "ACCESS_CHECK":
       return "The storage folder or its marker file can't be found. Check the drive or mount is connected, then use Sync now.";
     case "PLAN_UNREADABLE":
-      return "DriveSync couldn't read rclone's plan, so nothing was changed. Try Sync now; if it keeps happening, check the logs.";
+      return "CleanSync couldn't read rclone's plan, so nothing was changed. Try Sync now; if it keeps happening, check the logs.";
     case "FAILED":
       return `The last sync failed. ${pair.next_sync_at ? `Retrying ${formatRelative(pair.next_sync_at)}.` : "Use Sync now to try again."}`;
     default:

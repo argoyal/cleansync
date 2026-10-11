@@ -1,4 +1,4 @@
-"""Every rclone command DriveSync runs is built here. Nothing else may build rclone args.
+"""Every rclone command CleanSync runs is built here. Nothing else may build rclone args.
 
 Backup note: the backup dir (--backup-dir1 / --backup-dir) only keeps local-side
 overwrites and deletions. Drive-side changes are protected by Drive trash and

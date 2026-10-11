@@ -343,7 +343,7 @@ async def test_cached_token_is_forgotten_when_the_login_changes(app, env):
 
 
 class FakeDriveApi:
-    """Stands in for Google: records what DriveSync asked to create."""
+    """Stands in for Google: records what CleanSync asked to create."""
 
     def __init__(self):
         self.made: list[tuple[str, str, str, str]] = []

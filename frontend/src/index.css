@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* DriveSync's own palette: cool porcelain neutrals, one plum accent that never collides
+/* CleanSync's own palette: cool porcelain neutrals, one plum accent that never collides
    with the status colours (green healthy, yellow attention, red error, blue running,
    gray paused). Values are "R G B" so Tailwind can add opacity. */
 :root {
@@ -27,7 +27,7 @@
   --shadow: 20 24 36;
 }
 
-/* Dark colours when the system asks for them, unless Light was picked in DriveSync... */
+/* Dark colours when the system asks for them, unless Light was picked in CleanSync... */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
