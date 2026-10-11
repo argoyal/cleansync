@@ -12,6 +12,12 @@ export function ContentBar({ section, onViews }: { section: SectionId; onViews: 
   const [params] = useSearchParams();
   const mail = section === "mail";
   const [q, setQ] = useState(params.get("q") ?? "");
+  // A new section starts from its own search, so a mail query never sits in "Search files".
+  const [shownFor, setShownFor] = useState(section);
+  if (shownFor !== section) {
+    setShownFor(section);
+    setQ(params.get("q") ?? "");
+  }
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const text = q.trim();

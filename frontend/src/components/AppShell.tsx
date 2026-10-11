@@ -1,12 +1,14 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 
-import { useStatus } from "../api/queries";
+import { useHealth, useStatus } from "../api/queries";
+import { DEFAULT_APP_NAME } from "../config";
 import { useLiveEvents } from "../hooks/live";
 import { useRailBadges } from "../hooks/useRailBadges";
 import { sectionFor } from "../lib/sections";
 import { BottomBar } from "./BottomBar";
 import { ContentBar } from "./ContentBar";
+import { Mark } from "./Mark";
 import { Rail } from "./Rail";
 import { SectionPanel } from "./SectionPanel";
 import { Notice } from "./ui";
@@ -18,6 +20,7 @@ export function AppShell({ newButton }: { newButton?: ReactNode }) {
   const section = sectionFor(location.pathname);
   const badges = useRailBadges();
   const stopped = useStatus().data?.sync_stopped;
+  const name = useHealth().data?.app_name ?? DEFAULT_APP_NAME;
   const [sheet, setSheet] = useState(false);
   const sheetBox = useRef<HTMLElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -58,6 +61,10 @@ export function AppShell({ newButton }: { newButton?: ReactNode }) {
               if ((e.target as HTMLElement).closest("a")) setSheet(false);
             }}
           >
+            {/* On phones the rail is hidden, so the sheet carries the way Home. */}
+            <Link to="/" aria-label={`${name} home`} className="ml-3 mt-4 inline-block rounded-[11px]">
+              <Mark size={32} onRail={false} />
+            </Link>
             <SectionPanel section={section} newButton={newButton} />
           </aside>
         </div>

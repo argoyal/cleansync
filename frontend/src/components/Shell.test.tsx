@@ -259,6 +259,15 @@ describe("rail and panel", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument(); // even the page already open
   });
 
+  it("the views sheet has the way Home on phones, and closes on it", async () => {
+    shell("/recent");
+    await userEvent.click(screen.getByRole("button", { name: "Show views" }));
+    const dialog = screen.getByRole("dialog", { name: "Views" });
+    await userEvent.click(within(dialog).getByRole("link", { name: "CleanSync home" }));
+    await waitFor(() => expect(screen.getAllByTestId("location")[0].textContent).toBe("/"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("has a bottom bar with every section for phones", () => {
     shell("/mail");
     const bar = screen.getByRole("navigation", { name: "Sections at the bottom" });
@@ -324,6 +333,17 @@ describe("content bar", () => {
     await open("/mail");
     await userEvent.type(screen.getByRole("textbox", { name: "Search mail" }), "from:bank{Enter}");
     expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/mail?q=from%3Abank");
+  });
+});
+
+describe("search across sections", () => {
+  it("a mail search does not stay in the files search box", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR], "GET /api/status": STATUS });
+    renderApp(<AppShell />, { withAccount: true, route: "/mail" });
+    await userEvent.type(screen.getByRole("textbox", { name: "Search mail" }), "from:bank{Enter}");
+    expect(screen.getByRole("textbox", { name: "Search mail" })).toHaveValue("from:bank");
+    await userEvent.click(within(screen.getByRole("navigation", { name: "Sections" })).getByRole("link", { name: /^Files/ }));
+    expect(screen.getByRole("textbox", { name: "Search files" })).toHaveValue("");
   });
 });
 
