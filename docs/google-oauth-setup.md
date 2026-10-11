@@ -1,6 +1,6 @@
 # Create your Google OAuth client
 
-CleanSync needs its own Google OAuth client to read and write your Drive. Google treats full Drive access as a "restricted" scope, so a shared client would need Google's paid review; using your own client avoids that. This takes about 10 minutes.
+CleanSync needs its own Google OAuth client to read and write your Drive and, if you set up mail backup, to read and manage your Gmail. Google treats full Drive access as a "restricted" scope, so a shared client would need Google's paid review; using your own client avoids that. This takes about 10 minutes.
 
 1. Go to https://console.cloud.google.com/ and create a new project (for example "drivesync").
 2. **APIs & Services → Library** → search "Google Drive API" → **Enable**.
@@ -14,6 +14,7 @@ CleanSync needs its own Google OAuth client to read and write your Drive. Google
    - Application type: **Web application**.
    - Authorized redirect URI: `<PUBLIC_URL>/api/oauth/callback`, for example `https://drivesync.example.com/api/oauth/callback`. It must match `PUBLIC_URL` exactly.
 5. Copy the client ID and secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` and restart CleanSync.
+6. For mail backup, also enable the Gmail API and add the `gmail.modify` scope: see [Setting up mail backup](mail-backup.md).
 
 ## No public HTTPS address?
 Google only redirects to `https://` addresses or `http://localhost`. Options:

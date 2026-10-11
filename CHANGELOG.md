@@ -5,6 +5,12 @@
 - DriveSync is now called CleanSync. The data folder, `.drivesync-volume` and the environment variables keep their names, so an existing installation upgrades in place. The image is `ghcr.io/argoyal/cleansync`.
 - Upgrading: the example compose service is renamed from `drivesync` to `cleansync`. Run `docker compose up -d --remove-orphans` once when you upgrade, so the old `drivesync` container goes away.
 - The + New button and uploads are hidden in 0.2.0 (one switch; the code stays and comes back later). "Sync a Drive folder…" moved to the Files panel.
+- New navigation: an icon rail (Files, Mail, Activity, Recovery, Settings) with a panel for each section; a bottom bar on phones.
+- Mail backup: every Gmail message except Spam and Trash is kept on the server as its original .eml, kept up to date every few minutes; the first backup resumes after any stop. Set it up from the new Mail section (docs/mail-backup.md); it needs the Gmail API and the `gmail.modify` scope on your Google client.
+- Mail reader: views, labels, conversations, search with operators, safe display (no scripts, images on request), attachments.
+- Mail offload: by filter or by pick, with a preview and a typed count; each mail is checked here before it goes to Gmail's trash, and Gmail empties its trash after 30 days. Offloads wait while the backup is checking the mailbox. Restore to Gmail never makes a duplicate. Recovery shows mail too.
+- Cost guard: Google API calls are paced and kept under a daily budget (default 10 million units, at most 40 million; Settings → Google API). Drive is counted but never held back.
+- Fix: a sync that fails or is cut off no longer leaves its folder "syncing right now".
 
 ## 0.1.0 — 2026-10-09
 - Backend core: login, Google account connection, sync pairs, first-sync preview and confirmation, scheduled and watched two-way sync with deletion limit, conflicts, history, logs and live events.

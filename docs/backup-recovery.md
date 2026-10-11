@@ -52,6 +52,12 @@ Back up `app/data/offloads/` with the rest of `app/data/`, and keep `storage/` b
 
 How this is tested: the automated tests use a local folder in place of Google Drive, and a local folder has no trash. Drive's real trash is checked with the Drive API while offloading, and in the owner's manual end-to-end test with a real Google account.
 
+## Mail
+
+Mail lives in `mail/` next to `storage/`, one `.eml` file per mail; the list of mails, their labels and the search index are in the database. Back up `mail/` with `storage/` and `app/data/`. Restoring an old database copy is safe: mail files it doesn't know about are downloaded again by the next re-check, and nothing in `mail/` is ever deleted by CleanSync.
+
+Recovery → Mail lists your mail offloads (with how long Gmail keeps them in its trash) and the mail deleted in Gmail, with **Restore all to Gmail**. After a mail offload, the copy here is the only one once Gmail empties its trash (after 30 days), so keep `mail/` backed up.
+
 ## Restore the database
 1. Stop the container.
 2. Copy the newest good `app/data/db-backups/drivesync-*.db` over `app/data/drivesync.db`.

@@ -21,10 +21,14 @@ One container, one process.
 
 Accounts have a provider (Google today) and one row per service (Files, Mail) in account_services. Each service reaches its provider through an adapter (app/services/adapters/): Files covers the Drive calls made outside rclone's sync runs.
 
+## Mail
+Gmail is reached through a Gmail adapter (`app/services/mail/gmail.py`) on top of one shared Google client that paces every call and counts it against a daily budget (default 10 million units, at most 40 million; Drive calls are counted but never held back). Mail work goes through a mail queue, one job per account at a time: backup and re-check, offload, and restore are queue actions, so they never overlap. Each mail is kept once as its original `.eml` under `mail/<email>/<year>/<month>/`, and the database holds its labels, state and an SQLite FTS5 search index. An offload checks the stored file, moves the mail to Gmail's trash (the narrow `gmail.modify` scope, so Gmail empties the trash itself after 30 days) and checks it is there; restore takes it out of the trash, or imports the stored `.eml` when Gmail no longer has it.
+
 ## Folder layout
     /drivesync/
       app/data/   drivesync.db, db-backups/, rclone/ (encrypted rclone.conf, bisync state),
                   filters/, previews/, catalog/, thumbs/, uploads/, backups/, logs/, secrets/
       storage/<email>/   your files, one folder per Google account
+      mail/<email>/      your mail, one .eml per message
 
 Path1 is always the local folder; Path2 is always Google Drive.

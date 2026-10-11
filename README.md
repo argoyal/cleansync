@@ -1,6 +1,6 @@
 # CleanSync
 
-Keep a folder on your own server and Google Drive in two-way sync, with a web page to watch it, and safety checks so a sync can never quietly delete your files.
+CleanSync keeps Google Drive in sync with your own server and keeps a copy of every Gmail message, with a web page to watch it and safety checks so a sync can never quietly delete your files. It can offload old files and mail to free space on Google, with a way back.
 
 CleanSync is a control panel around [rclone](https://rclone.org) `bisync`. rclone moves the files; CleanSync decides when, checks every plan before it runs, and asks you when something needs a human.
 
@@ -18,6 +18,9 @@ CleanSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 - If a file changed on both sides, both versions are kept and you choose.
 - **One place for Files and Mail:** a rail on the left picks Files, Mail, Activity, Recovery or Settings; the panel beside it has the account switcher and that section's views. On a phone the rail is a bar along the bottom.
 - **Offload:** keep files on the server and remove them from Google Drive (into Drive's trash) to free Drive space. Only when you ask, checked file by file before and after. Right-click, or pick many at once on the Offloaded page. Google Docs, Sheets and Slides stay on Drive. Restore to Drive any time.
+- **Mail backup:** every Gmail message except Spam and Trash is kept on the server as its original `.eml`, kept up to date every few minutes. Set it up from the Mail section: [docs/mail-backup.md](docs/mail-backup.md).
+- **Mail reader:** views, labels, conversations, search with operators, mail shown safely (no scripts, images only on request), attachments.
+- **Mail offload and restore:** move old or large mail to Gmail's trash (Gmail empties it after 30 days) after checking the copy here, and put it back any time without duplicates.
 - **Recovery:** every copy CleanSync kept, with where it came from and when it is cleaned up. Restore one or many (never overwrites), or download them.
 - In 0.2.0 the + New button (new folders, uploads, blank Office files, Google Docs/Sheets/Slides) is hidden while Files and Mail settle into one app. Its code stays, and it comes back in a later release.
 
@@ -43,7 +46,7 @@ Open `PUBLIC_URL`, log in, choose your own password, and the setup wizard walks 
 | `TZ`, `LOG_LEVEL`, `APP_NAME` | no | Container time zone (log timestamps; syncing always uses UTC), log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`), name shown in the UI. |
 
 ## Docs
-[Architecture](docs/architecture.md) · [Google OAuth setup](docs/google-oauth-setup.md) · [Security](docs/security.md) · [Backup and recovery](docs/backup-recovery.md) · [Troubleshooting](docs/troubleshooting.md) · [Known limitations](docs/limitations.md) · [Contributing](CONTRIBUTING.md)
+[Architecture](docs/architecture.md) · [Google OAuth setup](docs/google-oauth-setup.md) · [Mail backup](docs/mail-backup.md) · [Security](docs/security.md) · [Backup and recovery](docs/backup-recovery.md) · [Troubleshooting](docs/troubleshooting.md) · [Known limitations](docs/limitations.md) · [Contributing](CONTRIBUTING.md)
 
 ## License
 AGPL-3.0. If you run a modified CleanSync as a service for other people, you must publish your changes.

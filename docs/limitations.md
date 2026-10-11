@@ -32,3 +32,16 @@
 ## After an upgrade that changes the sync rules
 
 When a new version changes the list of files that never sync (for example, the version that started skipping `.drivesync-upload-*` upload copies), every two-way folder runs one automatic safe resync on its next sync. A safe resync merges both sides and never deletes. The catch: a file you deleted on one side, whose deletion had not synced yet, comes back on that side instead of being deleted on the other. Delete it again after the resync.
+
+## Mail
+
+- CleanSync backs up and offloads mail; it does not send mail, invitations or replies, and the reader is read-only (no marking as read, labelling or deleting).
+- Gmail only for now; Outlook comes later.
+- Spam, Trash, drafts and chats are not backed up.
+- Mail that cannot be downloaded from Gmail is never offloaded, and the offload preview does not count it among the mails it leaves out.
+- Offloaded mail goes to Gmail's trash and Gmail empties it after 30 days. CleanSync cannot empty it sooner: that needs Google's full mailbox permission, and CleanSync asks only for `gmail.modify`.
+- Offloads wait while the mail backup is checking the mailbox.
+- A mail without a usable Message-ID that is restored after a lost Gmail answer could be duplicated in Gmail (rare).
+- The size shown before the first backup is what Gmail and Google Photos use together; Google doesn't report Gmail alone.
+- Images inside a mail are shown up to 10 MB per mail; the mail frame has a fixed height and scrolls by itself.
+- If CleanSync stops right after moving a mail to Gmail's trash but before marking it offloaded, that mail shows as "Deleted in Gmail" after the next check; restore it from there.

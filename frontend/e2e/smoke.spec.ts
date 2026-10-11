@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -504,4 +505,129 @@ test("on a phone, opening a mail hides the list and Back returns to it", async (
   await expect(list).toBeHidden();
   await page.getByRole("link", { name: "Back" }).first().click();
   await expect(list).toBeVisible();
+});
+
+/** Subjects of the mails the pretend Gmail holds in its trash. Needs E2E_CONTAINER (the container's
+ * name) to look inside; without it this returns null and the test skips that check. */
+function fakeGmailTrash(): string[] | null {
+  const name = process.env.E2E_CONTAINER;
+  if (!name) return null;
+  const json = execFileSync(
+    "docker",
+    [
+      "exec",
+      name,
+      "cat",
+      "/drivesync/app/data/fake-gmail/alice@example.com.json",
+    ],
+    { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
+  );
+  const data = JSON.parse(json) as {
+    messages: { labels: string[]; raw: string }[];
+  };
+  return data.messages
+    .filter((m) => m.labels.includes("TRASH"))
+    .map(
+      (m) =>
+        /^Subject: (.*)$/m
+          .exec(Buffer.from(m.raw, "base64").toString("utf8"))?.[1]
+          ?.trim() ?? "",
+    );
+}
+
+test("offload old mail by filter, restore one, and a filter that finds only recent mail offloads nothing", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await ready(page);
+  await setUpMail(page);
+  expect(fakeGmailTrash() ?? []).toEqual([]);
+
+  // Build the filter: older than 1 year. The preview asks for the count.
+  await page.getByRole("button", { name: "Offload mail…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Offload mail" });
+  await dialog.getByLabel("Older than").fill("1");
+  await dialog.getByLabel("Unit").selectOption("y");
+  await dialog.getByRole("button", { name: "Preview" }).click();
+  await expect(
+    dialog.getByText(
+      /^13 mails, .* The space is freed in Gmail once Gmail's trash is emptied\.$/,
+    ),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("list", { name: "Oldest" }).getByRole("listitem").first(),
+  ).toContainText("Hello");
+  await dialog.getByLabel("To start, type 13").fill("13");
+  await dialog.getByRole("button", { name: "Start offload" }).click();
+
+  // The offload's page: done, nothing skipped, in Gmail's trash for about 30 days (no button to empty it).
+  await expect(
+    page.getByRole("heading", { name: "Mail offload" }),
+  ).toBeVisible();
+  await expect(page.getByText("Done", { exact: true })).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect(page.getByText(/^Offloaded 13 of 13 mails/)).toBeVisible();
+  await expect(page.getByText(/In Gmail's trash until about/)).toBeVisible();
+  await expect(
+    page.getByText("Gmail empties its trash on its own after 30 days", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Empty from Gmail trash/ }),
+  ).toHaveCount(0);
+  const trashed = fakeGmailTrash();
+  if (trashed) {
+    expect(trashed).toHaveLength(13);
+    expect(trashed).toContain("Holiday plans");
+  }
+
+  // Offloaded mail stays readable here (one row per thread: the Contract draft pair is one).
+  await page.goto("/mail?view=offloaded");
+  await expect(
+    page.getByRole("list", { name: "Mail" }).getByRole("listitem"),
+  ).toHaveCount(12);
+  const frame = await openMailNamed(page, "Holiday plans");
+  await expect(frame.locator("body")).not.toBeEmpty();
+
+  // Restore one: it comes out of Gmail's trash and leaves the Offloaded view.
+  await page.getByRole("button", { name: "Restore to Gmail" }).click();
+  await expect(
+    page.getByText(
+      "Putting 1 mail back in Gmail. Sync activity shows when it's done.",
+    ),
+  ).toBeVisible();
+  await expect
+    .poll(
+      async () => {
+        await page.goto("/mail?view=offloaded");
+        const rows = page
+          .getByRole("list", { name: "Mail" })
+          .getByRole("listitem");
+        await rows.first().waitFor(); // the list has loaded
+        return rows.count();
+      },
+      { timeout: 60_000 },
+    )
+    .toBe(11);
+  const after = fakeGmailTrash();
+  if (after) {
+    expect(after).toHaveLength(12);
+    expect(after).not.toContain("Holiday plans");
+  }
+
+  // A filter that only finds recent mail offloads nothing, and says why.
+  await page.goto("/mail");
+  await page.getByRole("button", { name: "Offload mail…" }).click();
+  const again = page.getByRole("dialog", { name: "Offload mail" });
+  await again.getByLabel("Filter").fill("newer_than:7d");
+  await again.getByRole("button", { name: "Preview" }).click();
+  await expect(again.getByRole("list", { name: "Left out" })).toContainText(
+    "30 days",
+  );
+  await expect(
+    again.getByRole("button", { name: "Start offload" }),
+  ).toHaveCount(0);
 });
