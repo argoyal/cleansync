@@ -9,6 +9,7 @@ import { FileView } from "../components/FileView";
 import { Icon } from "../components/Icon";
 import { PairStatusPill } from "../components/StatusBadge";
 import { Empty, IconButton, Menu, type MenuItem, Notice } from "../components/ui";
+import { SHOW_NEW } from "../config";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { NOT_SYNCED_NOTE, ONE_WAY_NOTE, ROOT_NOT_SYNCED_NOTE } from "../lib/files";
 
@@ -237,7 +238,9 @@ export function DrivePage() {
             ? "Files added on Google Drive appear here after the next sync."
             : !browse.data.pair
               ? notSyncedNote
-              : "Use New to add a folder or upload files."}
+              : SHOW_NEW
+                ? "Use New to add a folder or upload files."
+                : "Files added on Google Drive show up here after the next sync."}
         </Empty>
       )}
       {browse.data && browse.data.items.length > 0 && <FileArea key={path} items={browse.data.items} view={view} />}

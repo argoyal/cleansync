@@ -6,6 +6,14 @@ import { ACCOUNT, item, json, mockApi, PAIR, renderApp } from "../test/utils";
 import { DrivePage } from "./DrivePage";
 import { RecentPage, SearchPage } from "./ListPages";
 
+const newSwitch = vi.hoisted(() => ({ on: true }));
+vi.mock("../config", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config")>()),
+  get SHOW_NEW() {
+    return newSwitch.on;
+  },
+}));
+
 const ITEMS = [
   item({ name: "Work", path: "Work", is_dir: true, size: null, status: "upload", mime: null }),
   item({ name: "photo.jpg", path: "photo.jpg", mime: "image/jpeg", thumb: true }),
@@ -954,5 +962,26 @@ describe("Several items, offload and restore", () => {
     await waitFor(() =>
       expect(calls.find((c) => c.path === "/api/files/delete")?.body).toEqual({ account_id: 1, paths: ["Work/Old", "Work/b.txt"], only_copy_ok: true }),
     );
+  });
+});
+
+describe("Empty synced folder and the New switch", () => {
+  const empty = { "GET /api/browse": browse("", []) };
+
+  it("points to New when New is on", async () => {
+    newSwitch.on = true;
+    setup("/drive", empty);
+    expect(await screen.findByText("Use New to add a folder or upload files.")).toBeInTheDocument();
+  });
+
+  it("does not mention New when New is off", async () => {
+    newSwitch.on = false;
+    try {
+      setup("/drive", empty);
+      expect(await screen.findByText("Files added on Google Drive show up here after the next sync.")).toBeInTheDocument();
+      expect(screen.queryByText(/Use New/)).not.toBeInTheDocument();
+    } finally {
+      newSwitch.on = true;
+    }
   });
 });
