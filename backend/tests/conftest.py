@@ -22,6 +22,8 @@ from app.services.sync.engine import SyncEngine
 from tests.fake_rclone import FakeRclone
 from tests.mail_helpers import Box
 
+pytest_plugins = ["tests.offload_helpers"]  # the offload_box fixture
+
 _ENV_VARS = (
     "DRIVESYNC_ROOT",
     "PUBLIC_URL",

@@ -44,9 +44,11 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_mail_offload_items_offload_id", "mail_offload_items", ["offload_id"])
+    op.create_index("ix_mail_offload_items_message_id", "mail_offload_items", ["message_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_mail_offload_items_message_id", table_name="mail_offload_items")
     op.drop_index("ix_mail_offload_items_offload_id", table_name="mail_offload_items")
     op.drop_table("mail_offload_items")
     op.drop_index("ix_mail_offloads_account_id", table_name="mail_offloads")

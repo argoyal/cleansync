@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.common import UtcDatetime
 
@@ -127,3 +127,33 @@ class MessageOut(BaseModel):
     has_remote_images: bool | None  # known for one opened mail; null in a thread list
     gmail_url: str | None
     file_missing: bool
+
+
+class MailPickIn(BaseModel):
+    account_id: int
+    q: str | None = None
+    message_ids: list[int] | None = Field(default=None, max_length=100_000)
+    thread_ids: list[str] | None = Field(default=None, max_length=100_000)
+
+
+class MailBriefOut(BaseModel):
+    id: int
+    subject: str
+    from_addr: str
+    date: UtcDatetime
+    size: int
+
+
+class ExcludedOut(BaseModel):
+    reason: str
+    count: int
+    text: str
+
+
+class OffloadPreviewOut(BaseModel):
+    filter_text: str
+    count: int
+    bytes: int
+    largest: list[MailBriefOut]
+    oldest: list[MailBriefOut]
+    excluded: list[ExcludedOut]

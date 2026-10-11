@@ -155,6 +155,8 @@ class MailOffloadItem(Base):
     offload_id: Mapped[int] = mapped_column(
         ForeignKey("mail_offloads.id", ondelete="CASCADE"), index=True
     )
-    message_id: Mapped[int] = mapped_column(ForeignKey("mail_messages.id", ondelete="CASCADE"))
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("mail_messages.id", ondelete="CASCADE"), index=True
+    )
     result: Mapped[str] = mapped_column(String(16), default=MailItemResult.PENDING)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)

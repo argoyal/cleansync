@@ -20,6 +20,7 @@ from app.api import (
     health,
     jobs,
     mail,
+    mail_offload,
     mail_reader,
     offloads,
     pairs,
@@ -53,6 +54,7 @@ from app.services.google.client import GoogleClient
 from app.services.google.quota import ApiBudget, Pacer
 from app.services.mail.adapters import MailAdapters
 from app.services.mail.jobs import recover_mail_jobs
+from app.services.mail.offload import MailOffloads
 from app.services.mail.offload_plan import recover_mail_offloads
 from app.services.mail.service import MailService
 from app.services.mail.store import sweep_temp_files
@@ -141,8 +143,11 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 recover_offloads(db)
                 for pair_id in recover_interrupted(db):
                     app.state.queue.request(pair_id, "RECOVERY")
+                try:
+                    recover_mail_offloads(db)
+                except Exception:
+                    logger.exception("could not mark mail offloads a stop cut short")
                 # A mail job a stop cut short goes on where it left off.
-                recover_mail_offloads(db)
                 for account_id in recover_mail_jobs(db):
                     app.state.mail.queue.request(account_id, "backup", trigger="RECOVERY")
             try:
@@ -315,6 +320,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         budget=app.state.budget,
         get_sync_queue=lambda: app.state.queue,  # tests swap the queue after startup
     )
+    app.state.mail_offloads = MailOffloads(app.state.mail)
     app.state.scheduler = Scheduler(
         session_factory=session_factory,
         queue=app.state.queue,
@@ -354,6 +360,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         conflicts.router,
         mail.router,
         mail_reader.router,
+        mail_offload.router,
         activity_jobs.router,
         system.router,
         google.router,
