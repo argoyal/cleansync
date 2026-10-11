@@ -105,3 +105,65 @@ def test_paused_pair_left_running_comes_back_paused(db, make_account, make_pair)
     recover_interrupted(db)
     db.refresh(pair)
     assert pair.status == "PAUSED"
+
+
+def test_a_stop_during_a_job_is_recovered_at_the_next_start_not_failed(
+    settings, db, make_account, make_pair
+):
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+    from app.models import SyncPair
+    from app.models.enums import JobKind, PairStatus, Trigger
+
+    pair = make_pair(make_account(), initialized=True, schedule_interval_s=300)
+    app = create_app(settings, start_background=False)
+    started = []
+
+    async def hangs(pair_id, action, trigger):
+        engine = app.state.engine
+        with engine.session_factory() as s:
+            p = s.get(SyncPair, pair_id)
+            engine.start_job(s, p, JobKind.BISYNC, Trigger.MANUAL)
+            engine.set_status(s, p, PairStatus.RUNNING)
+        started.append(pair_id)
+        await asyncio.Event().wait()  # still running when the app stops
+
+    async def ask():
+        app.state.queue._handler = hangs
+        return app.state.queue.request(pair.id, "MANUAL")
+
+    with TestClient(app) as c:
+        assert c.portal.call(ask) == "queued"
+        for _ in range(200):
+            if started:
+                break
+            c.portal.call(asyncio.sleep, 0.01)
+        assert started == [pair.id]
+    db.expire_all()
+    assert db.get(SyncPair, pair.id).status == PairStatus.RUNNING  # left for the next start
+
+    again = create_app(settings)
+
+    class RecordingQueue:
+        disabled_reason = None
+
+        def __init__(self):
+            self.requests = []
+
+        def request(self, pair_id, trigger, action="sync"):
+            self.requests.append((pair_id, trigger, action))
+            return "queued"
+
+        async def stop(self):
+            pass
+
+    again.state.queue = rq = RecordingQueue()
+    with TestClient(again):
+        assert rq.requests == [(pair.id, "RECOVERY", "sync")]
+    db.expire_all()
+    assert db.get(SyncPair, pair.id).status == PairStatus.HEALTHY
+    job = db.scalars(select(SyncJob)).one()
+    assert job.state == "INTERRUPTED"

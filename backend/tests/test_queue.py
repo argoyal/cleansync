@@ -201,31 +201,34 @@ async def test_hold_refuses_a_busy_pair():
 
 
 async def test_a_cancelled_or_crashed_job_never_leaves_its_pair_busy():
-    gate = asyncio.Event()
     settled: list[int] = []
 
     async def handler(pair_id, action, trigger):
-        if pair_id == 1:
-            await gate.wait()  # never set: hangs until it is cancelled
         if pair_id == 3:
             raise asyncio.CancelledError  # e.g. a timeout inside the job
 
     q = SyncQueue(handler, max_parallel=1, settle=settled.append)
+    assert q.request(3, "MANUAL") == "queued"
+    await q.wait_idle()
+    assert not q.is_busy(3)
+    assert settled == [3]  # cut off while the app runs: closed now, not left RUNNING
+    assert q.request(3, "MANUAL") == "queued"  # and it can run again
+    await q.wait_idle()
+    assert settled == [3, 3]
+
+    gate = asyncio.Event()
+
+    async def hangs(pair_id, action, trigger):
+        await gate.wait()  # never set: hangs until it is cancelled
+
+    q = SyncQueue(hangs, max_parallel=1, settle=settled.append)
     assert q.request(1, "MANUAL") == "queued"
     await asyncio.sleep(0.01)
     assert q.request(2, "SCHEDULE") == "queued"  # waits for the one free slot
     await q.stop()  # cancels the running job and the one still waiting
     assert not q.is_busy(1)
     assert not q.is_busy(2)  # cancelled while waiting: not left "queued" forever
-    assert settled == [1]  # pair 2 never started, so there is nothing to tidy up
-
-    assert q.request(3, "MANUAL") == "queued"
-    await q.wait_idle()
-    assert not q.is_busy(3)
-    assert settled == [1, 3]
-    assert q.request(2, "MANUAL") == "queued"  # pair 2 can run again
-    await q.wait_idle()
-    assert settled == [1, 3, 2]
+    assert settled == [3, 3]  # a stop leaves the rows for the next start to close
 
 
 async def test_settle_runs_before_the_pair_stops_being_busy_and_never_breaks_the_queue():
@@ -259,3 +262,45 @@ async def test_settle_is_not_called_when_the_disk_check_stops_a_job():
     await q.wait_idle()
     assert settled == []
     assert not q.is_busy(1)
+
+
+async def test_stop_leaves_a_running_job_for_recovery_and_refuses_new_work():
+    """A stop is not a failure: the rows stay as they are for the next start to close."""
+    gate = asyncio.Event()
+    settled: list[int] = []
+    ended: list[int] = []
+    asked: list[str] = []
+    q: SyncQueue
+
+    async def handler(pair_id, action, trigger):
+        await gate.wait()  # never set: hangs until the stop cancels it
+
+    def listener(pair_id):
+        ended.append(pair_id)
+        asked.append(q.request(pair_id, "AFTER"))  # e.g. the watcher asking for a sync
+
+    q = SyncQueue(handler, settle=settled.append)
+    q.add_finish_listener(listener)
+    q.request(1, "MANUAL")
+    await asyncio.sleep(0.01)
+    q.request(1, "SCHEDULE")  # would re-run after the job
+    await q.stop()
+    assert settled == []  # not marked failed: the next start closes it as interrupted
+    assert asked in ([], ["disabled"])
+    assert not q.is_busy(1)
+    assert q.request(2, "MANUAL") == "disabled"
+    assert not q._tasks
+
+
+async def test_a_job_cancelled_before_it_ever_ran_does_not_stay_queued():
+    async def handler(pair_id, action, trigger):
+        pass
+
+    q = SyncQueue(handler)
+    assert q.request(1, "MANUAL") == "queued"
+    (task,) = q._tasks
+    task.cancel()  # before its first step: its own tidy-up never runs
+    await asyncio.gather(task, return_exceptions=True)
+    assert not q.is_busy(1)
+    assert q.request(1, "MANUAL") == "queued"
+    await q.wait_idle()
