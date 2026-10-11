@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
-import { buildQuery, EMPTY_FIELDS, OffloadMailDialog, parseTyped } from "./OffloadMailDialog";
+import { buildQuery, combine, EMPTY_FIELDS, OffloadMailDialog, parseTyped } from "./OffloadMailDialog";
 
 const ACTIVE = { ...ACCOUNT, services: { files: "active" as const, mail: "active" as const }, mail_permission: true };
 const brief = (id: number, subject: string, size: number, date: string) => ({ id, subject, from_addr: "bank@example.com", date, size });
@@ -25,6 +25,14 @@ describe("the offload filter", () => {
     expect(parseTyped("1,234")).toBe(1234);
     expect(parseTyped(" 12 ")).toBe(12);
     expect(parseTyped("12a")).toBeNull();
+    expect(parseTyped("1234")).toBe(1234);
+    expect(parseTyped("12,34")).toBeNull();
+    expect(parseTyped(",1234")).toBeNull();
+    expect(parseTyped("1,,234")).toBeNull();
+    expect(parseTyped("1234,")).toBeNull();
+    expect(parseTyped("")).toBeNull();
+    expect(combine("from:bank ", "older_than:1y")).toBe("from:bank older_than:1y");
+    expect(combine("", "")).toBe("");
   });
 });
 
@@ -152,5 +160,80 @@ describe("Offload mail…", () => {
     const dialog = screen.getByRole("dialog", { name: "Offload mail" });
     expect(within(dialog).getByText(/Gmail empties its trash on its own after 30 days; that's when the space comes back\./)).toBeInTheDocument();
     expect(within(dialog).queryByText(/Empty from Gmail trash/i)).not.toBeInTheDocument();
+  });
+
+  it("adds builder terms to the search it started from, never dropping them", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "POST /api/mail/offloads/preview": PREVIEW,
+    });
+    renderApp(<OffloadMailDialog account={ACTIVE} start={{ q: "from:bank" }} onClose={() => undefined} />, { withAccount: true, route: "/mail" });
+    const dialog = screen.getByRole("dialog", { name: "Offload mail" });
+    const filter = within(dialog).getByLabelText("Filter");
+    await userEvent.type(within(dialog).getByLabelText("Older than"), "1");
+    expect(filter).toHaveValue("from:bank older_than:1y");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/offloads/preview")?.body).toEqual({ account_id: 1, q: "from:bank older_than:1y" }));
+  });
+
+  it("keeps a hand edit of the filter when a builder field changes later", async () => {
+    mockApi({ "GET /api/accounts": [ACTIVE], "GET /api/mail/counts": { views: {}, labels: [] } });
+    renderApp(<OffloadMailDialog account={ACTIVE} start={{ q: "" }} onClose={() => undefined} />, { withAccount: true, route: "/mail" });
+    const dialog = screen.getByRole("dialog", { name: "Offload mail" });
+    const filter = within(dialog).getByLabelText("Filter");
+    await userEvent.type(within(dialog).getByLabelText("Older than"), "2");
+    await userEvent.click(filter);
+    await userEvent.keyboard("{Home}");
+    await userEvent.keyboard("is:unread ");
+    expect(filter).toHaveValue("is:unread older_than:2y");
+    await userEvent.type(within(dialog).getByLabelText("From"), "bank@example.com");
+    expect(filter).toHaveValue("is:unread older_than:2y from:bank@example.com");
+    // An edit inside the builder's terms: everything typed moves into the text, still all there.
+    await userEvent.clear(filter);
+    await userEvent.type(filter, "older_than:3y");
+    expect(within(dialog).getByLabelText("From")).toHaveValue("");
+    await userEvent.type(within(dialog).getByLabelText("To"), "me@example.com");
+    expect(filter).toHaveValue("older_than:3y to:me@example.com");
+  });
+
+  it("says when the view on screen isn't part of the filter", () => {
+    mockApi({ "GET /api/accounts": [ACTIVE], "GET /api/mail/counts": { views: {}, labels: [] } });
+    renderApp(<OffloadMailDialog account={ACTIVE} start={{ q: "" }} scope="Receipts" onClose={() => undefined} />, { withAccount: true, route: "/mail" });
+    expect(screen.getByText("The filter looks at all your mail, not only Receipts. Add a filter like a label to narrow it.")).toBeInTheDocument();
+  });
+
+  it("never starts an offload when Enter is pressed in a field", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "POST /api/mail/offloads/preview": { ...PREVIEW, count: 3 },
+      "POST /api/mail/offloads": { offload_id: 7, queued: "queued" },
+    });
+    renderApp(<OffloadMailDialog account={ACTIVE} start={{ q: "older_than:1y" }} onClose={() => undefined} />, { withAccount: true, route: "/mail" });
+    const dialog = screen.getByRole("dialog", { name: "Offload mail" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await userEvent.type(await within(dialog).findByLabelText("To start, type 3"), "3{Enter}");
+    await userEvent.type(within(dialog).getByLabelText("From"), "{Enter}");
+    await userEvent.type(within(dialog).getByLabelText("Filter"), "{Enter}");
+    expect(calls.some((c) => c.method === "POST" && c.path === "/api/mail/offloads")).toBe(false);
+  });
+
+  it("locks the filter while the start is on its way", async () => {
+    let finish = (_: Response) => undefined as void;
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "POST /api/mail/offloads/preview": { ...PREVIEW, count: 3 },
+      "POST /api/mail/offloads": () => new Promise<Response>((r) => (finish = r)),
+    });
+    renderApp(<OffloadMailDialog account={ACTIVE} start={{ q: "older_than:1y" }} onClose={() => undefined} />, { withAccount: true, route: "/mail" });
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await userEvent.type(await screen.findByLabelText("To start, type 3"), "3");
+    await userEvent.click(screen.getByRole("button", { name: "Start offload" }));
+    await waitFor(() => expect(screen.getByLabelText("Filter")).toBeDisabled());
+    expect(screen.getByLabelText("From")).toBeDisabled();
+    finish(json(202, { offload_id: 7, queued: "queued" }));
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/mail/offloads/7"));
   });
 });

@@ -42,6 +42,7 @@ export function MailReader({ account }: { account: Account }) {
     setPicked(next);
   };
   const title = q ? "Search results" : viewTitle(view, label ? (labelName ?? label) : null);
+  const scope = label ? (labelName ?? label) : view !== "all" ? viewTitle(view) : null;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-4 sm:px-6">
@@ -53,7 +54,7 @@ export function MailReader({ account }: { account: Account }) {
           </span>
         )}
         <div className="ml-auto flex flex-wrap gap-2">
-          <MailHeaderActions account={account} q={q} view={view} />
+          <MailHeaderActions account={account} q={q} view={view} label={label} scope={scope} />
         </div>
       </div>
       {picked.size > 0 && (

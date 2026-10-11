@@ -383,5 +383,36 @@ describe("offload and restore in the reader", () => {
     expect(screen.getByText("The picked mails.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Restore to Gmail" })).not.toBeInTheDocument();
   });
+
+  it("restores a view's whole list only when the search language can say that view", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [{ id: "Label_2", name: "Receipts", count: 3 }] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", offloaded: true })], next_cursor: null, total: 1, total_bytes: 1 },
+      "POST /api/mail/restore": { queued: "queued", count: 1 },
+    });
+    const first = renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=offloaded&q=from%3Abank" });
+    await userEvent.click(await screen.findByRole("button", { name: "Restore these to Gmail" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, q: "is:offloaded from:bank" }));
+    first.unmount();
+    for (const route of ["/mail?label=Label_2&q=from%3Abank", "/mail?view=inbox&q=from%3Abank", "/mail"]) {
+      const r = renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route });
+      await screen.findByRole("button", { name: "Offload mail…" });
+      expect(screen.queryByRole("button", { name: "Restore these to Gmail" }), route).not.toBeInTheDocument();
+      r.unmount();
+    }
+  });
+
+  it("tells the offload dialog which label isn't part of the filter", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [{ id: "Label_2", name: "Receipts", count: 3 }] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: 1, total_bytes: 1 },
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?label=Label_2" });
+    await screen.findByRole("heading", { name: "Receipts" });
+    await userEvent.click(screen.getByRole("button", { name: "Offload mail…" }));
+    expect(screen.getByText(/not only Receipts/)).toBeInTheDocument();
+  });
 });
 

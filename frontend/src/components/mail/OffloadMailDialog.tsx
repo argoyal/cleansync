@@ -26,10 +26,16 @@ export function buildQuery(f: FilterFields): string {
   return parts.join(" ");
 }
 
-/** The typed confirmation: the number, with or without thousands commas. */
+/** The typed confirmation: the number, plain or with thousands commas in their usual places. */
 export function parseTyped(text: string): number | null {
-  const t = text.replace(/,/g, "").trim();
-  return /^\d+$/.test(t) ? Number(t) : null;
+  const t = text.trim();
+  return /^\d{1,3}(,\d{3})*$|^\d+$/.test(t) ? Number(t.replace(/,/g, "")) : null;
+}
+
+/** The Filter box shows the hand-typed text (or the search it started from) AND the builder's
+ * terms. The builder only ever adds to the text: it never drops a term, so it can't widen. */
+export function combine(text: string, built: string): string {
+  return [text.trim(), built].filter(Boolean).join(" ");
 }
 
 function Briefs({ title, name, items, show }: { title: string; name: string; items: MailBrief[]; show: (m: MailBrief) => string }) {
@@ -50,12 +56,23 @@ function Briefs({ title, name, items, show }: { title: string; name: string; ite
 }
 
 /** "Offload mail…" (spec §5.1–5.3): build or pick what goes, preview it, type the count, start. */
-export function OffloadMailDialog({ account, start, onClose }: { account: Account; start: OffloadStart; onClose: () => void }) {
+export function OffloadMailDialog({
+  account,
+  start,
+  onClose,
+  scope = null,
+}: {
+  account: Account;
+  start: OffloadStart;
+  onClose: () => void;
+  /** The view or label the reader was showing, which a filter doesn't carry over. */
+  scope?: string | null;
+}) {
   const navigate = useNavigate();
   const fixed = !("q" in start);
   const labels = useMailCounts(account.id, !fixed).data?.labels ?? [];
   const [fields, setFields] = useState<FilterFields>(EMPTY_FIELDS);
-  const [q, setQ] = useState("q" in start ? start.q : "");
+  const [text, setText] = useState("q" in start ? start.q : "");
   const [typed, setTyped] = useState("");
   const preview = usePreviewOffload();
   const run = useStartOffload();
@@ -68,7 +85,20 @@ export function OffloadMailDialog({ account, start, onClose }: { account: Accoun
   const set = (patch: Partial<FilterFields>) => {
     const next = { ...fields, ...patch };
     setFields(next);
-    setQ(buildQuery(next));
+    forget();
+  };
+  const built = buildQuery(fields);
+  const q = combine(text, built);
+  // A hand edit of the Filter box: when the builder's terms are still at its end, the rest is
+  // the text; otherwise the whole box becomes the text and the builder starts empty again.
+  // Either way every term typed stays in the filter.
+  const editFilter = (value: string) => {
+    if (built && (value === built || value.endsWith(` ${built}`))) {
+      setText(value.slice(0, value.length - built.length));
+    } else {
+      setText(value);
+      setFields(EMPTY_FIELDS);
+    }
     forget();
   };
   const what: OffloadStart = fixed ? start : { q };
@@ -122,7 +152,9 @@ export function OffloadMailDialog({ account, start, onClose }: { account: Accoun
       {fixed ? (
         <p>{"thread_ids" in start ? "The picked threads." : "The picked mails."}</p>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
+        // Locked while a start is on its way: an edit then would lose where it goes next.
+        <fieldset disabled={run.isPending} className="grid gap-3 sm:grid-cols-2">
+          <legend className="sr-only">What to offload</legend>
           <div className="flex items-end gap-2">
             <Field label="Older than">
               <input className={`${inputClass} w-24`} inputMode="numeric" value={fields.age} onChange={(e) => set({ age: e.target.value })} />
@@ -163,14 +195,16 @@ export function OffloadMailDialog({ account, start, onClose }: { account: Accoun
               <input
                 className={inputClass}
                 value={q}
-                onChange={(e) => {
-                  setQ(e.target.value);
-                  forget();
-                }}
+                onChange={(e) => editFilter(e.target.value)}
               />
             </Field>
           </div>
-        </div>
+        </fieldset>
+      )}
+      {!fixed && scope && (
+        <p className="text-table text-ink-2">
+          The filter looks at all your mail, not only {scope}. Add a filter like a label to narrow it.
+        </p>
       )}
       {preview.isError && <Notice tone="err">{friendlyError(preview.error)}</Notice>}
       {run.isError && <Notice tone="err">{friendlyError(run.error)}</Notice>}
