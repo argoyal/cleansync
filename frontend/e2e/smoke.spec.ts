@@ -385,3 +385,103 @@ test("mail backup of the pretend account, with its job on Sync activity", async 
   await expect(page.getByText(/units used today \(UTC\)/)).toBeVisible();
   expect(problems, problems.join("\n")).toEqual([]);
 });
+
+async function openMailNamed(page: Page, subject: string) {
+  await page.getByRole("list", { name: "Mail" }).getByRole("link", { name: new RegExp(subject) }).first().click();
+  return page.frameLocator(`iframe[title="Mail: ${subject}"]`);
+}
+
+test("read mail safely: threads, a hostile mail, images on request, attachments, search, labels", async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const problems: string[] = [];
+  // The browser reports a request even when the page's policy stops it, so tell them apart:
+  // a blocked one fails with a "csp" error; one that was allowed goes out to the network.
+  const remoteImageRequests: string[] = [];
+  const blockedByPolicy: string[] = [];
+  page.on("pageerror", (e) => problems.push(e.message));
+  page.on("request", (r) => {
+    if (new URL(r.url()).hostname === "images.example.com") remoteImageRequests.push(r.url());
+  });
+  page.on("requestfailed", (r) => {
+    if (new URL(r.url()).hostname === "images.example.com" && /csp/i.test(r.failure()?.errorText ?? "")) blockedByPolicy.push(r.url());
+  });
+  await ready(page);
+  await setUpMail(page);
+
+  // All mail lists the 24 kept mails as threads (two of them are two-mail threads).
+  await expect(page.getByText(/^24 mails · /).first()).toBeVisible();
+  await expect(page.getByRole("list", { name: "Mail" }).getByRole("listitem")).toHaveCount(22);
+
+  // A mail with a script and an onclick: the text shows, nothing runs.
+  const hostile = await openMailNamed(page, "Weekly digest #52");
+  await expect(hostile.getByText("News")).toBeVisible();
+  expect(await hostile.locator("script").count()).toBe(0);
+  expect(await hostile.locator("[onclick]").count()).toBe(0);
+  // The frame is sandboxed with no scripts and no access to CleanSync itself.
+  const sandbox = (await page.locator('iframe[title="Mail: Weekly digest #52"]').getAttribute("sandbox")) ?? "";
+  expect(sandbox).not.toContain("allow-scripts");
+  expect(sandbox).not.toContain("allow-same-origin");
+
+  // A tracking image waits for "Show images".
+  await openMailNamed(page, "Your order has shipped");
+  await expect(page.getByText("Images from the internet are hidden, so the sender can't tell you opened this mail.")).toBeVisible();
+  // Every attempt so far was stopped by the frame's policy: nothing reached the sender's server.
+  await expect.poll(() => blockedByPolicy.length).toBe(remoteImageRequests.length);
+  await page.getByRole("button", { name: "Show images" }).click();
+  await expect(page.locator('iframe[title="Mail: Your order has shipped"]')).toHaveAttribute("src", /images=1$/);
+  // Now the browser asks for it, and the policy lets the request out.
+  await expect.poll(() => remoteImageRequests.length).toBeGreaterThan(blockedByPolicy.length);
+
+  // An inline image comes from the mail itself.
+  const photos = await openMailNamed(page, "Trip photos");
+  await expect(photos.locator('img[src^="data:image/png"]')).toHaveCount(1);
+
+  // Attachments: preview a PDF in a new tab, download it.
+  await openMailNamed(page, "Invoice October");
+  const files = page.getByRole("list", { name: "Attachments" });
+  // The preview opens in a new tab (headless Chromium has no PDF viewer, so the tab itself stays
+  // empty); what that tab is sent is checked straight from the link.
+  const preview = files.getByRole("link", { name: "Preview invoice.pdf" });
+  const [pdf] = await Promise.all([page.waitForEvent("popup"), preview.click()]);
+  await pdf.close();
+  const shown = await page.request.get((await preview.getAttribute("href"))!);
+  expect(shown.status()).toBe(200);
+  expect(shown.headers()["content-type"]).toBe("application/pdf");
+  const [download] = await Promise.all([page.waitForEvent("download"), files.getByRole("link", { name: "Download invoice.pdf" }).click()]);
+  expect(download.suggestedFilename()).toBe("invoice.pdf");
+
+  // Search with operators, from the search box at the top.
+  const search = page.getByRole("textbox", { name: "Search mail" });
+  await search.fill("from:bank");
+  await search.press("Enter");
+  await expect(page.getByRole("heading", { name: "Search results" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Mail" }).getByRole("listitem")).toHaveCount(2);
+  await search.fill("larger:5M");
+  await search.press("Enter");
+  await expect(page.getByRole("list", { name: "Mail" }).getByRole("link", { name: /Big video/ })).toBeVisible();
+  await search.fill("larger:abc");
+  await search.press("Enter");
+  await expect(page.getByText('"abc" is not a size. Use a number with K, M or G, like 5M.')).toBeVisible();
+
+  // A label from the panel.
+  const views = page.getByRole("navigation", { name: "Mail views" });
+  await views.getByRole("list", { name: "Labels" }).getByRole("link", { name: /^Receipts/ }).click();
+  await expect(page.getByRole("heading", { name: "Receipts" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Mail" }).getByRole("listitem")).toHaveCount(4);
+  expect(problems, problems.join("\n")).toEqual([]);
+});
+
+test("on a phone, opening a mail hides the list and Back returns to it", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await ready(page);
+  await setUpMail(page);
+  await page.goto("/mail");
+  const list = page.getByRole("list", { name: "Mail" });
+  await expect(list).toBeVisible();
+  await openMailNamed(page, "Trip photos");
+  await expect(list).toBeHidden();
+  await page.getByRole("link", { name: "Back" }).first().click();
+  await expect(list).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
