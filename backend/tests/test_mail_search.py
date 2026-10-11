@@ -11,6 +11,7 @@ from app.services.mail.adapter import MailMeta
 from app.services.mail.search import (
     MailQuery,
     SearchError,
+    fts_match,
     mail_conditions,
     parse_query,
 )
@@ -152,3 +153,41 @@ def test_conditions_find_the_right_mail(db, make_account):
     assert _found(db, acc, q='"weird \\" quote %_ value"') == []  # odd characters are safe
     with pytest.raises(SearchError, match="unknown view"):
         _found(db, acc, view="spam")
+
+
+@pytest.mark.parametrize("text", ["a\x00b", "\x00", "hello\x00", '"a\x00b"', "from:x\x00y"])
+def test_nul_bytes_never_break_the_search(db, make_account, text):
+    acc = make_account()
+    _add(db, acc, "m1", "Hello world")
+    _found(db, acc, q=text)  # must not raise
+    assert "\x00" not in fts_match([text])
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "older_than:99999999999d",
+        "older_than:9999999y",
+        "newer_than:999999y",
+        "newer_than:" + "9" * 5000 + "d",
+    ],
+)
+def test_huge_numbers_give_a_plain_error(text):
+    with pytest.raises(SearchError):
+        parse_query(text, now=NOW)
+
+
+def test_huge_sizes_are_capped_and_searchable(db, make_account):
+    acc = make_account()
+    _add(db, acc, "m1", "Hello")
+    assert parse_query("larger:" + "9" * 400, now=NOW).larger == 2**63 - 1
+    q = parse_query("smaller:99999999999999999999G", now=NOW)
+    assert q.smaller == 2**63 - 1
+    assert _found(db, acc, q="smaller:99999999999999999999G") == ["m1"]
+    assert _found(db, acc, q="larger:99999999999999999999G") == []
+
+
+@pytest.mark.parametrize("text", ["older_than:٣d", "before:٢٠٢٤-٠١-٣١"])
+def test_only_plain_digits_count(text):
+    with pytest.raises(SearchError):
+        parse_query(text, now=NOW)

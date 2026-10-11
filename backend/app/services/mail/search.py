@@ -4,6 +4,7 @@
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import Text, cast, column, false, func, or_, select, text
 from sqlalchemy.orm import Session
@@ -44,9 +45,10 @@ OPERATORS = (
     "is",
 )
 _TOKEN = re.compile(r'(?:[A-Za-z_]+:)?"[^"]*"?|\S+')
-_SIZE = re.compile(r"(\d+(?:\.\d+)?)\s*([kmg]?)b?", re.I)
-_AGE = re.compile(r"(\d+)([dmy])", re.I)
-_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+MAX_SIZE = 2**63 - 1  # the biggest number SQLite can compare with
+_SIZE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*([kmg]?)b?", re.I)
+_AGE = re.compile(r"([0-9]+)([dmy])", re.I)
+_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 class SearchError(ValueError):
@@ -85,16 +87,28 @@ def parse_size(value: str) -> int:
     m = _SIZE.fullmatch(value.strip())
     if m is None:
         raise SearchError(f'"{value}" is not a size. Use a number with K, M or G, like 5M.')
-    return int(float(m.group(1)) * UNITS[m.group(2).lower()])
+    # Decimal, not float: a huge number must cap, not overflow.
+    return min(int(Decimal(m.group(1)) * UNITS[m.group(2).lower()]), MAX_SIZE)
 
 
 def parse_age(value: str) -> timedelta:
     m = _AGE.fullmatch(value.strip())
+    msg = f'"{value}" is not an age. Use days, months or years, like 30d, 6m or 1y.'
     if m is None:
+        raise SearchError(msg)
+    try:
+        return timedelta(days=int(m.group(1)) * AGE_DAYS[m.group(2).lower()])
+    except (OverflowError, ValueError):
+        raise SearchError(msg) from None
+
+
+def _ago(now: datetime, value: str) -> datetime:
+    try:
+        return now - parse_age(value)
+    except OverflowError:  # further back than the calendar goes
         raise SearchError(
             f'"{value}" is not an age. Use days, months or years, like 30d, 6m or 1y.'
-        )
-    return timedelta(days=int(m.group(1)) * AGE_DAYS[m.group(2).lower()])
+        ) from None
 
 
 def parse_day(value: str) -> datetime:
@@ -117,7 +131,8 @@ def _later(a: datetime | None, b: datetime) -> datetime:
 
 def parse_query(text: str, *, now: datetime) -> MailQuery:
     q = MailQuery()
-    for tok in _TOKEN.findall(text or ""):
+    # A NUL byte would cut the search short inside SQLite.
+    for tok in _TOKEN.findall((text or "").replace("\x00", " ")):
         key, sep, value = tok.partition(":")
         op = key.lower()
         if not sep or op not in OPERATORS or key.startswith('"'):
@@ -147,9 +162,9 @@ def parse_query(text: str, *, now: datetime) -> MailQuery:
         elif op == "after":
             q.after = _later(q.after, parse_day(value))
         elif op == "older_than":
-            q.before = _earlier(q.before, now - parse_age(value))
+            q.before = _earlier(q.before, _ago(now, value))
         elif op == "newer_than":
-            q.after = _later(q.after, now - parse_age(value))
+            q.after = _later(q.after, _ago(now, value))
         else:  # is:
             v = value.lower()
             if v not in IS_VALUES:
@@ -183,7 +198,8 @@ def label_ids(db: Session, account_id: int, name: str) -> list[str]:
 
 def fts_match(words: list[str]) -> str:
     """Every word must match the start of a word in subject, from, to or body."""
-    return " ".join('"' + w.replace('"', '""') + '"*' for w in words)
+    clean = [w.replace("\x00", " ").replace('"', '""') for w in words]
+    return " ".join(f'"{w}"*' for w in clean)
 
 
 def query_conditions(db: Session, account_id: int, q: MailQuery) -> list:
