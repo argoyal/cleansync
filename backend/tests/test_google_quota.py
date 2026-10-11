@@ -26,11 +26,13 @@ def test_one_table_has_a_cost_for_every_call_cleansync_makes():
         "gmail.messages.untrash",
         "gmail.messages.delete",
         "gmail.messages.import",
+        "gmail.messages.import.upload",
         "drive.files.get",
         "drive.files.create",
         "drive.files.delete",
     }
     assert cost("gmail.messages.get") == 20  # the higher of the published numbers
+    assert cost("gmail.messages.import.upload") == 0  # a resumable import counts once
     assert drive_run_estimate(0) == 100
     assert drive_run_estimate(3) == 130
     with pytest.raises(KeyError):

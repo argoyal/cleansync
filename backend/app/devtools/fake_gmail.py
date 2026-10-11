@@ -11,6 +11,7 @@ import email.utils
 import json
 import os
 import re
+import secrets
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
@@ -34,6 +35,7 @@ SYSTEM_LABELS = [
 LEFT_OUT = {"SPAM", "TRASH", "DRAFT", "CHAT"}
 _BASE = "/gmail/v1/users/me"
 _UPLOAD = "/upload/gmail/v1/users/me"
+MULTIPART_LIMIT = 5 * 1024 * 1024  # Gmail's limit for a simple or multipart upload
 
 
 @dataclass
@@ -67,6 +69,7 @@ class FakeGmail:
     revoked: bool = False
     calls: list[tuple[str, str, dict]] = field(default_factory=list)
     _failures: list[_Failure] = field(default_factory=list)
+    _uploads: dict[str, list[str]] = field(default_factory=dict)  # resumable: id -> labels
     _next: int = 0x18A0000000000000
 
     # ---- building a mailbox ------------------------------------------------------------
@@ -198,6 +201,8 @@ class FakeGmail:
         if self.revoked or not request.headers.get("Authorization", "").startswith("Bearer "):
             return self._error(401)
         if path.startswith(_UPLOAD) and path.endswith("/messages/import"):
+            if params.get("uploadType") == "resumable":
+                return self._resumable(request, params)
             return self._import(request)
         if not path.startswith(_BASE):
             return self._error(404)
@@ -294,12 +299,31 @@ class FakeGmail:
         return httpx.Response(200, json=body)
 
     def _import(self, request: httpx.Request) -> httpx.Response:
+        if len(request.content) > MULTIPART_LIMIT:
+            return self._error(413, "uploadTooLarge")
         ctype = request.headers.get("Content-Type", "")
         boundary = ctype.split("boundary=", 1)[-1].encode()
         parts = request.content.split(b"--" + boundary)
         meta = json.loads(parts[1].split(b"\r\n\r\n", 1)[1].rstrip(b"\r\n"))
         raw = parts[2].split(b"\r\n\r\n", 1)[1]
         raw = raw[:-2] if raw.endswith(b"\r\n") else raw
+        return self._imported(raw, meta.get("labelIds") or [])
+
+    def _resumable(self, request: httpx.Request, params: dict) -> httpx.Response:
+        """Gmail's resumable upload: a POST with the labels opens a session (its address in
+        Location), then a PUT to that address carries the mail."""
+        if request.method == "POST":
+            upload_id = secrets.token_hex(8)
+            meta = json.loads(request.content or b"{}")
+            self._uploads[upload_id] = list(meta.get("labelIds") or [])
+            location = str(request.url.copy_merge_params({"upload_id": upload_id}))
+            return httpx.Response(200, headers={"Location": location})
+        labels = self._uploads.pop(params.get("upload_id", ""), None)
+        if request.method != "PUT" or labels is None:
+            return self._error(404)
+        return self._imported(request.content, labels)
+
+    def _imported(self, raw: bytes, labels: list[str]) -> httpx.Response:
         when = datetime.now(UTC)
         date_line = re.search(rb"^Date: (.+?)\r?$", raw, re.M)
         if date_line:
@@ -307,7 +331,7 @@ class FakeGmail:
                 when = email.utils.parsedate_to_datetime(date_line.group(1).decode())
             except (TypeError, ValueError):
                 pass
-        mid = self.add(raw, labels=meta.get("labelIds") or [], when=when)
+        mid = self.add(raw, labels=labels, when=when)
         return httpx.Response(
             200, json={"id": mid, "threadId": mid, "labelIds": self.messages[mid].labels}
         )

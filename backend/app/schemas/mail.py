@@ -197,3 +197,12 @@ class SkippedOut(BaseModel):
 
 class MailOffloadDetailOut(MailOffloadOut):
     skipped_items: list[SkippedOut]
+
+
+class RestoreMailIn(MailPickIn):
+    offload_id: int | None = None
+
+
+class RestoreQueuedOut(BaseModel):
+    queued: str
+    count: int

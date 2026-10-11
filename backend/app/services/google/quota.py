@@ -27,6 +27,7 @@ UNIT_COSTS: dict[str, int] = {
     "gmail.messages.untrash": 5,
     "gmail.messages.delete": 10,
     "gmail.messages.import": 25,
+    "gmail.messages.import.upload": 0,  # the bytes of a resumable import: part of that call
     # Drive API calls CleanSync makes itself (rclone's own calls are estimated below).
     "drive.files.get": 1,
     "drive.files.create": 1,

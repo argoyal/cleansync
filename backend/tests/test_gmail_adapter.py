@@ -96,6 +96,74 @@ async def test_trash_untrash_state_delete_and_import():
     assert fake.messages[new_id].internal_date_ms == int(WHEN.timestamp() * 1000)  # from Date
 
 
+def _big_mail(mb: int = 6) -> bytes:
+    data = b"x" * (mb * 1024 * 1024)
+    return make_mail(
+        "Big one", when=WHEN, attachments=(("big.bin", "application/octet-stream", data),)
+    )
+
+
+def _import_calls(fake):
+    return [c for c in fake.calls if c[1].endswith("/messages/import")]
+
+
+async def test_a_small_mail_is_imported_in_one_multipart_call():
+    fake, ids = _fake()
+    gmail = fake_adapter(fake)
+    new_id = await gmail.import_raw(make_mail("Small", when=WHEN), ["INBOX"], WHEN)
+    calls = _import_calls(fake)
+    assert [(c[0], c[2]["uploadType"]) for c in calls] == [("POST", "multipart")]
+    assert fake.messages[new_id].labels == ["INBOX"]
+
+
+async def test_a_mail_over_4_mb_is_imported_with_a_resumable_upload():
+    fake, ids = _fake()
+    gmail = fake_adapter(fake)
+    raw = _big_mail(6)
+    assert len(raw) > 6 * 1024 * 1024  # over Gmail's 5 MB limit for a multipart upload
+    new_id = await gmail.import_raw(raw, ["INBOX", "Label_1"], WHEN)
+    calls = _import_calls(fake)
+    assert [(c[0], c[2]["uploadType"]) for c in calls] == [
+        ("POST", "resumable"),
+        ("PUT", "resumable"),
+    ]
+    assert "upload_id" in calls[1][2]
+    msg = fake.messages[new_id]
+    assert msg.raw == raw and msg.labels == ["INBOX", "Label_1"]
+    assert msg.internal_date_ms == int(WHEN.timestamp() * 1000)
+
+
+async def test_the_fake_refuses_a_multipart_upload_over_5_mb_like_gmail():
+    fake, ids = _fake()
+    resp = fake.handle(
+        httpx.Request(
+            "POST",
+            "https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/import",
+            params={"uploadType": "multipart"},
+            headers={"Authorization": "Bearer x", "Content-Type": "multipart/related; boundary=b"},
+            content=b"--b\r\n\r\n{}\r\n--b\r\n\r\n" + _big_mail(6) + b"\r\n--b--\r\n",
+        )
+    )
+    assert resp.status_code == 413
+
+
+async def test_a_resumable_upload_is_only_sent_to_google():
+    fake, ids = _fake()
+    real = fake.handle
+
+    def elsewhere(request):
+        resp = real(request)
+        if "location" in resp.headers:
+            resp.headers["location"] = "https://evil.example.com/upload?upload_id=1"
+        return resp
+
+    fake.handle = elsewhere
+    gmail = fake_adapter(fake)
+    with pytest.raises(MailApiError):
+        await gmail.import_raw(_big_mail(5), ["INBOX"], WHEN)
+    assert not any(c[0] == "PUT" for c in fake.calls)
+
+
 async def test_an_expired_token_is_renewed_once_then_reconnect_is_asked_for():
     fake, ids = _fake()
     gmail = fake_adapter(fake)

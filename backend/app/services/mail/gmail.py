@@ -30,6 +30,11 @@ from app.services.mail.adapter import (
 
 GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
 GMAIL_UPLOAD = "https://gmail.googleapis.com/upload/gmail/v1/users/me"
+# Gmail takes at most 5 MB in one multipart upload: bigger mail goes up resumable.
+RESUMABLE_OVER = 4 * 1024 * 1024
+# Where a resumable upload's session may live: the bearer token is never sent elsewhere.
+UPLOAD_HOSTS = frozenset({"gmail.googleapis.com", "www.googleapis.com"})
+IMPORT_PARAMS = {"internalDateSource": "dateHeader", "neverMarkSpam": "true"}
 # Spec §4.3. Chats are left out too (spec §2).
 LIST_QUERY = "-in:spam -in:trash -in:drafts -in:chats"
 PAGE_SIZE = 500
@@ -109,10 +114,11 @@ class GmailAdapter:
         path: str,
         *,
         upload: bool = False,
+        url: str | None = None,
         headers: dict | None = None,
         **kwargs,
     ) -> httpx.Response:
-        url = (GMAIL_UPLOAD if upload else GMAIL) + path
+        url = url or (GMAIL_UPLOAD if upload else GMAIL) + path
         resp: httpx.Response | None = None
         for attempt in (1, 2):
             try:
@@ -284,7 +290,17 @@ class GmailAdapter:
     async def import_raw(self, raw: bytes, labels: list[str], internal_date: datetime) -> str:
         """Put a kept mail back into Gmail (Plan 4's restore). Gmail takes the date from the
         mail's Date header (internalDateSource=dateHeader), so internal_date is only for
-        providers that need it."""
+        providers that need it. Mail over 4 MB goes up as a resumable upload."""
+        if len(raw) > RESUMABLE_OVER:
+            resp = await self._import_resumable(raw, labels)
+        else:
+            resp = await self._import_multipart(raw, labels)
+        new_id = valid_mail_id(_json(resp).get("id"))
+        if new_id is None:
+            raise MailApiError("Gmail gave an unexpected answer to the import")
+        return new_id
+
+    async def _import_multipart(self, raw: bytes, labels: list[str]) -> httpx.Response:
         boundary = "cleansync-" + secrets.token_hex(12)
         meta = json.dumps({"labelIds": list(labels)}).encode()
         body = b"".join(
@@ -296,20 +312,44 @@ class GmailAdapter:
                 f"\r\n--{boundary}--\r\n".encode(),
             ]
         )
-        resp = await self._call(
+        return await self._call(
             "gmail.messages.import",
             "POST",
             "/messages/import",
             upload=True,
-            params={
-                "uploadType": "multipart",
-                "internalDateSource": "dateHeader",
-                "neverMarkSpam": "true",
-            },
+            params={"uploadType": "multipart", **IMPORT_PARAMS},
             content=body,
             headers={"Content-Type": f"multipart/related; boundary={boundary}"},
         )
-        new_id = valid_mail_id(_json(resp).get("id"))
-        if new_id is None:
+
+    async def _import_resumable(self, raw: bytes, labels: list[str]) -> httpx.Response:
+        """A POST with the labels opens an upload session; a PUT to its address carries the
+        mail. Counted as one import."""
+        start = await self._call(
+            "gmail.messages.import",
+            "POST",
+            "/messages/import",
+            upload=True,
+            params={"uploadType": "resumable", **IMPORT_PARAMS},
+            content=json.dumps({"labelIds": list(labels)}).encode(),
+            headers={
+                "Content-Type": "application/json; charset=UTF-8",
+                "X-Upload-Content-Type": "message/rfc822",
+                "X-Upload-Content-Length": str(len(raw)),
+            },
+        )
+        session = start.headers.get("location", "")
+        try:
+            where = httpx.URL(session)
+        except (httpx.InvalidURL, TypeError):
+            where = None
+        if where is None or where.scheme != "https" or where.host not in UPLOAD_HOSTS:
             raise MailApiError("Gmail gave an unexpected answer to the import")
-        return new_id
+        return await self._call(
+            "gmail.messages.import.upload",
+            "PUT",
+            "",
+            url=session,
+            content=raw,
+            headers={"Content-Type": "message/rfc822"},
+        )

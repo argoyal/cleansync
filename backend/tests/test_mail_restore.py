@@ -1,0 +1,289 @@
+from datetime import UTC, datetime, timedelta
+
+from app.devtools.fake_gmail import make_mail
+from app.models import MailJob, MailOffloadItem
+from app.models.enums import MailItemResult, MailPhase, MailState
+from app.services.google.quota import ApiBudget
+from app.services.mail.index import sync_state
+from app.services.mail.offload import RESTORE_SLOW_MSG
+from app.services.mail.store import eml_path
+from app.services.queue import MISSING_DISK_MSG
+from tests.mail_helpers import fake_adapter
+from tests.test_mail_api import OneAdapter
+
+OLD = ("Old statement", "Old photos", "Ancient note")
+
+
+async def _offloaded(client, box):
+    await box.backup()
+    r = client.post(
+        "/api/mail/offloads", json={"account_id": box.acc.id, "q": "older_than:1y", "confirm": 3}
+    )
+    assert r.status_code == 202
+    await box.run_queued()
+
+
+def _restore(client, box, **body):
+    return client.post("/api/mail/restore", json={"account_id": box.acc.id, **body})
+
+
+def _imports(box):
+    return [c for c in box.fake.calls if c[1].endswith("/messages/import")]
+
+
+def _last_job(client):
+    return client.get("/api/activity/jobs").json()[0]
+
+
+async def test_restore_never_creates_a_duplicate(auth_client, offload_box, db):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    in_trash = box.row("Old statement")
+    gone = box.row("Old photos")
+    box.fake.remove(gone.provider_id)  # Gmail emptied its trash
+    owner_put_back = box.row("Ancient note")
+    box.fake.set_labels(owner_put_back.provider_id, ("INBOX",))  # history not seen yet
+    r = _restore(auth_client, box, message_ids=[in_trash.id, gone.id, owner_put_back.id])
+    assert r.status_code == 202 and r.json()["count"] == 3
+    await box.run_queued()
+    assert box.row("Old statement").provider_id == in_trash.provider_id  # untrashed, same id
+    assert "TRASH" not in box.fake.messages[in_trash.provider_id].labels
+    assert len(_imports(box)) == 1  # imported only the one Gmail no longer had
+    new_id = box.row("Old photos").provider_id
+    assert new_id != gone.provider_id and box.fake.messages[new_id].raw
+    assert box.row("Old photos").file_path == gone.file_path  # the file stays where it is
+    for s in OLD:
+        assert box.row(s).state == MailState.IN_MAIL and box.row(s).offload_id is None
+    copies = [m for m in box.fake.messages.values() if b"Subject: Old photos" in m.raw]
+    assert len(copies) == 1
+    # Asked again: everything is in Gmail already; nothing is imported or moved.
+    r = _restore(auth_client, box, message_ids=[in_trash.id, gone.id])
+    assert r.status_code == 409
+    assert r.json()["detail"] == "Nothing here needs restoring: these mails are in Gmail."
+    await box.backup()  # the next check sees the imported mail in Gmail's history
+    assert len(box.rows_all()) == 6  # no second row for it
+    assert box.row("Old photos").provider_id == new_id
+    items = db.query(MailOffloadItem).all()
+    assert {i.result for i in items} == {MailItemResult.RESTORED}
+
+
+async def test_restore_by_import_puts_back_the_labels_that_still_exist(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old statement")  # labels: INBOX, Label_2 (Receipts)
+    box.fake.remove(row.provider_id)
+    r = _restore(auth_client, box, offload_id=row.offload_id)
+    assert r.json()["count"] == 3
+    await box.run_queued()
+    new = box.row("Old statement").provider_id
+    assert box.fake.messages[new].labels == ["INBOX", "Label_2"]
+
+
+async def test_an_import_gmail_refuses_goes_again_with_the_basic_labels(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old statement")
+    box.fake.remove(row.provider_id)
+    box.fake.fail("POST", r"/messages/import$", 400)  # say, a label Gmail won't take
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    new = box.row("Old statement").provider_id
+    assert box.fake.messages[new].labels == ["INBOX"]
+    assert len(_imports(box)) == 2
+    assert box.row("Old statement").state == MailState.IN_MAIL
+
+
+async def test_a_big_mail_is_restored_with_a_resumable_upload(auth_client, offload_box):
+    box = offload_box
+    when = datetime.now(UTC) - timedelta(days=600)
+    big = make_mail(
+        "Big video",
+        when=when,
+        attachments=(("clip.mp4", "video/mp4", b"v" * (6 * 1024 * 1024)),),
+    )
+    box.fake.add(big, labels=("INBOX",), when=when)
+    await box.backup()
+    r = auth_client.post(
+        "/api/mail/offloads", json={"account_id": box.acc.id, "q": "older_than:1y", "confirm": 4}
+    )
+    assert r.status_code == 202
+    await box.run_queued()
+    row = box.row("Big video")
+    assert row.state == MailState.OFFLOADED
+    box.fake.remove(row.provider_id)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    new = box.row("Big video").provider_id
+    assert box.fake.messages[new].raw == big
+    assert [c[2]["uploadType"] for c in _imports(box)] == ["resumable", "resumable"]
+
+
+async def test_mail_deleted_in_gmail_is_restored_the_same_way(auth_client, offload_box):
+    box = offload_box
+    await box.backup()
+    pid = box.provider_id("Last month")
+    box.fake.set_labels(pid, ("TRASH",))  # the owner deleted it in Gmail
+    await box.backup()
+    assert box.row("Last month").state == MailState.DELETED
+    r = _restore(auth_client, box, q="is:deleted")
+    assert r.json()["count"] == 1
+    await box.run_queued()
+    assert box.row("Last month").state == MailState.IN_MAIL
+    assert "TRASH" not in box.fake.messages[pid].labels
+
+
+async def test_mail_in_gmails_spam_is_left_there(auth_client, offload_box):
+    box = offload_box
+    await box.backup()
+    pid = box.provider_id("Last month")
+    box.fake.set_labels(pid, ("SPAM",))  # the owner marked it as spam
+    await box.backup()
+    assert box.row("Last month").state == MailState.DELETED
+    _restore(auth_client, box, q="is:deleted")
+    await box.run_queued()
+    assert box.row("Last month").state == MailState.DELETED
+    assert box.fake.messages[pid].labels == ["SPAM"]
+    assert _imports(box) == []
+    job = _last_job(auth_client)
+    assert job["state"] == "SUCCESS"
+    assert job["message"] == (
+        "Put 0 mails back in Gmail; 1 is in Gmail's Spam, so it was left there"
+    )
+
+
+async def test_restore_job_reports_what_happened(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    box.fake.remove(box.provider_id("Old photos"))
+    _restore(auth_client, box, q="is:offloaded")
+    await box.run_queued()
+    job = _last_job(auth_client)
+    assert job["kind"] == "RESTORE" and job["state"] == "SUCCESS"
+    assert job["message"] == "Put 3 mails back in Gmail (2 out of Gmail's trash, 1 imported)"
+
+
+async def test_a_copy_that_does_not_check_out_is_never_imported(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    box.fake.remove(row.provider_id)
+    path = eml_path(box.app.state.layout, box.acc.email, row.file_path)
+    raw = path.read_bytes()
+    path.write_bytes(raw[:-1] + b"!")  # same size, other contents
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    assert _imports(box) == []
+    assert box.row("Old photos").state == MailState.OFFLOADED
+    job = _last_job(auth_client)
+    assert job["state"] == "FAILED"
+    assert job["message"] == "Put 0 mails back in Gmail; 1 couldn't be put back (see the log)"
+
+
+async def test_restore_is_refused_when_the_disk_is_missing_or_the_login_is_lost(
+    auth_client, offload_box, app
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    app.state.queue.disabled_reason = MISSING_DISK_MSG
+    r = _restore(auth_client, box, q="is:offloaded")
+    assert r.status_code == 503 and r.json()["detail"] == MISSING_DISK_MSG
+    app.state.queue.disabled_reason = None
+    box.fake.revoke()
+    await box.backup()  # the check finds the login gone
+    r = _restore(auth_client, box, q="is:offloaded")
+    assert r.status_code == 409 and r.json()["detail"].startswith("Reconnect")
+    assert box.queue.requests == []
+    assert {box.row(s).state for s in OLD} == {MailState.OFFLOADED}
+
+
+async def test_restore_is_refused_while_the_backup_checks_the_mailbox(auth_client, offload_box, db):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    sync_state(db, box.acc.id).phase = MailPhase.RECHECK
+    db.commit()
+    r = _restore(auth_client, box, q="is:offloaded")
+    assert r.status_code == 409
+    assert r.json()["detail"] == (
+        "Wait until the mail backup has finished checking your mailbox, then try again."
+    )
+    assert box.queue.requests == []
+
+
+async def test_a_bad_search_is_a_422(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    r = _restore(auth_client, box, q="older_than:soon")
+    assert r.status_code == 422
+
+
+async def test_a_restore_stopped_by_the_budget_pauses_and_goes_on(
+    auth_client, offload_box, session_factory, db
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    day = {"now": datetime.now(UTC)}
+    # A mail in the trash costs 20 (state) + 5 (untrash) + 20 (state again): the first one
+    # uses up the day's budget, the second one's first call is refused.
+    budget = ApiBudget(session_factory, budget=lambda: 45, clock=lambda: day["now"])
+    box.mail.adapters = OneAdapter(fake_adapter(box.fake, budget=budget))
+    box.mail.budget = budget
+    _restore(auth_client, box, q="is:offloaded")
+    await box.run_queued()
+    job = _last_job(auth_client)
+    assert job["kind"] == "RESTORE" and job["state"] == "PAUSED"
+    assert "It goes on after midnight UTC" in job["message"]
+    states = [box.row(s).state for s in OLD]
+    assert states.count(MailState.IN_MAIL) == 1
+    await box.mail.tick()  # still the same day: nothing is asked for
+    assert box.queue.requests == []
+    day["now"] += timedelta(days=1)
+    box.mail.budget = ApiBudget(session_factory, budget=lambda: 10_000, clock=lambda: day["now"])
+    box.mail.adapters = OneAdapter(fake_adapter(box.fake))
+    await box.mail.tick()
+    await box.run_queued()
+    assert {box.row(s).state for s in OLD} == {MailState.IN_MAIL}
+    job = _last_job(auth_client)
+    assert job["state"] == "SUCCESS" and job["message"].startswith("Put 2 mails back in Gmail")
+    assert db.query(MailJob).filter_by(kind="RESTORE").count() == 2
+
+
+async def test_a_rate_limited_restore_goes_on_the_next_minute(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    box.fake.fail("POST", r"/untrash$", 429, times=8)  # every try Google's client makes
+    _restore(auth_client, box, q="is:offloaded")
+    await box.run_queued()
+    job = _last_job(auth_client)
+    assert job["state"] == "PAUSED" and RESTORE_SLOW_MSG in job["message"]
+    await box.mail.tick()
+    await box.run_queued()
+    assert {box.row(s).state for s in OLD} == {MailState.IN_MAIL}
+    assert _last_job(auth_client)["state"] == "SUCCESS"
+
+
+async def test_a_lost_login_stops_the_restore_and_asks_to_reconnect(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    _restore(auth_client, box, q="is:offloaded")
+    box.fake.revoke()
+    await box.run_queued()
+    job = _last_job(auth_client)
+    assert job["state"] == "FAILED" and "Reconnect" in job["message"]
+    assert {box.row(s).state for s in OLD} == {MailState.OFFLOADED}
+
+
+async def test_a_restore_that_finds_the_backup_checking_when_it_runs_changes_nothing(
+    auth_client, offload_box, db
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    assert _restore(auth_client, box, q="is:offloaded").status_code == 202
+    sync_state(db, box.acc.id).phase = MailPhase.RECHECK  # a recheck started in between
+    db.commit()
+    await box.run_queued()
+    job = _last_job(auth_client)
+    assert job["state"] == "FAILED" and job["message"].endswith(
+        "Wait until the mail backup has finished checking your mailbox, then try again."
+    )
+    assert {box.row(s).state for s in OLD} == {MailState.OFFLOADED}
+    assert not any(c[1].endswith("/untrash") for c in box.fake.calls)

@@ -18,6 +18,8 @@ from app.schemas.mail import (
     OffloadPreviewOut,
     OffloadStartedOut,
     OffloadStartIn,
+    RestoreMailIn,
+    RestoreQueuedOut,
     SkippedOut,
 )
 from app.services.mail.offload import offload_out
@@ -103,3 +105,14 @@ def get_offload(
             for reason, mid, subj, frm, when in skipped
         ],
     )
+
+
+@router.post("/api/mail/restore", status_code=202, response_model=RestoreQueuedOut)
+async def restore(body: RestoreMailIn, request: Request, ctx: AuthContext = Depends(require_user)):
+    try:
+        queued, count = await _offloads(request).request_restore(
+            body.account_id, _pick(body), body.offload_id
+        )
+    except MailError as e:
+        raise HTTPException(e.status, str(e)) from e
+    return RestoreQueuedOut(queued=queued, count=count)

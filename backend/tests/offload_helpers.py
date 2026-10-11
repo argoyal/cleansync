@@ -66,6 +66,12 @@ class OffloadBox:
         with self.app.state.session_factory() as db:
             return db.scalar(select(MailMessage).where(MailMessage.subject == subject))
 
+    def rows_all(self) -> list[MailMessage]:
+        with self.app.state.session_factory() as db:
+            return list(
+                db.scalars(select(MailMessage).where(MailMessage.account_id == self.acc.id))
+            )
+
     def provider_id(self, subject) -> str:
         return self.row(subject).provider_id
 
