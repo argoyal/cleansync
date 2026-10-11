@@ -99,7 +99,14 @@ class DriveApi:
         # Counted against the day's budget (spec §7) but never refused or held back by it:
         # Drive behaves as in 0.1.0.
         return await self.google.request(
-            remote_name, op, method, url, enforce_budget=False, wait_out_rate_limits=False, **kwargs
+            remote_name,
+            op,
+            method,
+            url,
+            enforce_budget=False,
+            wait_out_rate_limits=False,
+            http_factory=self.http_factory,
+            **kwargs,
         )
 
     async def create_native(

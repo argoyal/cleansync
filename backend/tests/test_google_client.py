@@ -132,3 +132,67 @@ def test_usage_api_shows_today_and_the_budget(auth_client, app):
     assert body["used"] == 42 and body["drive_estimate"] == 130
     assert body["budget"] == 10_000_000 and body["reached"] is False
     assert len(body["day"]) == 10
+
+
+@respx.mock
+async def test_drive_keeps_its_own_http_factory_with_the_google_client(session_factory):
+    from app.services.drive_api.client import DriveApi
+
+    used: list[int] = []
+
+    def factory():
+        used.append(1)
+        return httpx.AsyncClient(timeout=30)
+
+    class Tokens:
+        async def access_token(self, name):
+            return "ya29.test"
+
+        def forget(self, name):
+            pass
+
+    google, _, _, _ = _client(session_factory)
+    api = DriveApi(Tokens(), http_factory=factory, google=google)
+    respx.get(f"{FILES_URL}/F1").mock(
+        return_value=httpx.Response(200, json={"id": "F1", "trashed": False})
+    )
+    await api.file_state("gd_alice", "F1")
+    assert used == [1]
+
+
+@respx.mock
+async def test_a_call_that_is_only_counted_goes_ahead_when_counting_fails(session_factory):
+    class BrokenBudget:
+        def spend(self, units, *, enforce=True):
+            raise RuntimeError("database is locked")
+
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={}))
+    client = GoogleClient(budget=BrokenBudget(), pacer=None)
+    resp = await client.request("gd_alice", "drive.files.get", "GET", URL, enforce_budget=False)
+    assert resp.status_code == 200 and route.call_count == 1
+
+
+@respx.mock
+async def test_drive_refreshes_an_expired_token_through_the_google_client(session_factory):
+    from app.services.drive_api.client import DriveApi
+
+    forgotten: list[str] = []
+
+    class Tokens:
+        async def access_token(self, name):
+            return "ya29.test"
+
+        def forget(self, name):
+            forgotten.append(name)
+
+    google, budget, _, _ = _client(session_factory)
+    api = DriveApi(Tokens(), google=google)
+    route = respx.get(f"{FILES_URL}/F1").mock(
+        side_effect=[
+            httpx.Response(401, json={}),
+            httpx.Response(200, json={"id": "F1", "trashed": True}),
+        ]
+    )
+    state = await api.file_state("gd_alice", "F1")
+    assert state.trashed is True and route.call_count == 2
+    assert forgotten == ["gd_alice"] and budget.used_today() == 2

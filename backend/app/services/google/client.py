@@ -68,12 +68,14 @@ class GoogleClient:
         *,
         enforce_budget: bool = True,
         wait_out_rate_limits: bool = True,
+        http_factory: Callable[[], httpx.AsyncClient] | None = None,
         **kwargs,
     ) -> httpx.Response | None:
         """One Google call. `key` names the mailbox (the account's remote name) for the pace.
 
         BudgetReached is raised before anything is sent once the day's budget is used up
-        (only with enforce_budget). A rate limit is waited out (1, 2, 4 … 64 s, or what
+        (only with enforce_budget; a count-only call goes ahead even if the counting itself
+        fails). `http_factory` replaces the client's own for this call (Drive's shorter timeout). A rate limit is waited out (1, 2, 4 … 64 s, or what
         Google's Retry-After says) and RateLimited raised after rate_tries answers in a row.
         A call with wait_out_rate_limits=False is neither paced nor retried: the answer is
         handed back as it is (Drive calls, which are counted but never held back).
@@ -82,10 +84,16 @@ class GoogleClient:
         wait = FIRST_WAIT_S
         for attempt in range(1, self.rate_tries + 1):
             if self.budget is not None:
-                self.budget.spend(units, enforce=enforce_budget)
+                if enforce_budget:
+                    self.budget.spend(units)
+                else:
+                    try:
+                        self.budget.spend(units, enforce=False)
+                    except Exception:  # counting must never stop a call that is only counted
+                        log.exception("could not count a Google call (%s)", op)
             if self.pacer is not None and wait_out_rate_limits:
                 await self.pacer.wait(key, units)
-            resp = await request_or_none(self.http_factory, method, url, **kwargs)
+            resp = await request_or_none(http_factory or self.http_factory, method, url, **kwargs)
             if resp is None or not wait_out_rate_limits or not is_rate_limited(resp):
                 return resp
             if attempt == self.rate_tries:
