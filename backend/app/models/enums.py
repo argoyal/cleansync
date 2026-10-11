@@ -77,3 +77,21 @@ class OffloadState(StrEnum):
     ATTENTION = "ATTENTION"  # something to look at; still out of sync
     RESTORING = "RESTORING"  # back in sync; waiting for the safe resync that uploads it
     RESTORED = "RESTORED"  # back on Drive
+
+
+class Provider(StrEnum):
+    GOOGLE = "google"
+    MICROSOFT = "microsoft"  # later: OneDrive and Outlook
+
+
+class ServiceKind(StrEnum):
+    FILES = "files"
+    MAIL = "mail"
+
+
+class ServiceState(StrEnum):
+    NOT_SET_UP = "not_set_up"  # shows a "Set up" card
+    SETTING_UP = "setting_up"  # permission given; waiting for the owner to start
+    ACTIVE = "active"
+    NEEDS_RECONNECT = "needs_reconnect"  # the login or the permission went away
+    PAUSED = "paused"  # in the model for a later "pause mail" switch; nothing sets it yet

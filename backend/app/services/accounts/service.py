@@ -21,6 +21,7 @@ from app.services.accounts.oauth import (
     fetch_about,
     to_rclone_token,
 )
+from app.services.accounts.services import ensure_services
 from app.services.events.bus import EventBus, record_event
 from app.services.rclone.commands import (
     RcloneEnv,
@@ -207,6 +208,7 @@ class AccountService:
             acc.connected_at = self.clock()
             acc.last_checked_at = self.clock()
             db.commit()
+            ensure_services(db, acc)
             self.layout.account_dir(email).mkdir(parents=True, exist_ok=True)
             record_event(
                 db,
@@ -253,6 +255,7 @@ class AccountService:
             db.add(acc)
             self._login_changed(name)
             db.commit()
+            ensure_services(db, acc)
             self.layout.account_dir(email).mkdir(parents=True, exist_ok=True)
             logger.warning(
                 "added PRETEND local account %s (folder %s); development only", email, folder

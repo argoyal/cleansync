@@ -65,11 +65,14 @@ export const ACCOUNT: Account = {
   id: 1,
   email: "alice@example.com",
   status: "CONNECTED",
+  provider: "google",
   quota_total: 15 * 1024 ** 3,
   quota_used: 6 * 1024 ** 3,
   quota_trash: 1024 ** 3,
   connected_at: "2026-10-01T10:00:00Z",
   last_checked_at: "2026-10-08T07:00:00Z",
+  services: { files: "active", mail: "not_set_up" },
+  mail_permission: false,
 };
 
 export const PAIR: Pair = {

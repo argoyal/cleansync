@@ -11,18 +11,20 @@ from app.models import Account
 from app.schemas.accounts import AccountOut, AuthUrlOut
 from app.services.accounts.oauth import OAuthError
 from app.services.accounts.service import AccountError
+from app.services.accounts.services import service_states
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _out(acc: Account) -> AccountOut:
-    return AccountOut.model_validate(acc, from_attributes=True)
+def account_out(db: Session, acc: Account) -> AccountOut:
+    out = AccountOut.model_validate(acc, from_attributes=True)
+    return out.model_copy(update={"services": service_states(db, acc.id)})
 
 
 @router.get("/api/accounts", response_model=list[AccountOut])
 def list_accounts(ctx: AuthContext = Depends(require_user), db: Session = Depends(get_db)):
-    return [_out(a) for a in db.scalars(select(Account).order_by(Account.email))]
+    return [account_out(db, a) for a in db.scalars(select(Account).order_by(Account.email))]
 
 
 @router.post("/api/accounts/connect", response_model=AuthUrlOut)
@@ -74,9 +76,14 @@ async def oauth_callback(request: Request, state: str = "", code: str = "", erro
 
 
 @router.post("/api/accounts/{account_id}/disconnect", response_model=AccountOut)
-async def disconnect(account_id: int, request: Request, ctx: AuthContext = Depends(require_user)):
+async def disconnect(
+    account_id: int,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
     try:
-        return _out(await request.app.state.accounts.disconnect(account_id))
+        return account_out(db, await request.app.state.accounts.disconnect(account_id))
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
     except AccountError as e:
@@ -84,8 +91,13 @@ async def disconnect(account_id: int, request: Request, ctx: AuthContext = Depen
 
 
 @router.get("/api/accounts/{account_id}/quota", response_model=AccountOut)
-async def quota(account_id: int, request: Request, ctx: AuthContext = Depends(require_user)):
+async def quota(
+    account_id: int,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
     try:
-        return _out(await request.app.state.accounts.refresh_quota(account_id))
+        return account_out(db, await request.app.state.accounts.refresh_quota(account_id))
     except LookupError as e:
         raise HTTPException(404, str(e)) from e

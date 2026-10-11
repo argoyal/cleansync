@@ -1,15 +1,20 @@
 export type Me = { username: string; must_change_password: boolean; csrf_token: string };
 
 export type AccountStatus = "CONNECTED" | "NEEDS_REAUTH" | "DISCONNECTED";
+export type ServiceState = "not_set_up" | "setting_up" | "active" | "needs_reconnect" | "paused";
 export type Account = {
   id: number;
   email: string;
   status: AccountStatus;
+  provider: string;
   quota_total: number | null;
   quota_used: number | null;
   quota_trash: number | null;
   connected_at: string;
   last_checked_at: string | null;
+  services: { files: ServiceState; mail: ServiceState };
+  /** Google gave CleanSync permission to read and manage mail at the last sign-in. */
+  mail_permission: boolean;
 };
 
 export type PairStatus = "NEW" | "HEALTHY" | "RUNNING" | "ATTENTION" | "ERROR" | "PAUSED";
