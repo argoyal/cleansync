@@ -206,12 +206,16 @@ async def _move(request: Request, db: Session, scope: Scope, steps: list[ops.Mov
             steps,
             queue=state.queue,
             catalog=state.catalog,
-            drive=state.drive_mover,
+            drive=state.files.for_account(scope.account).mover,
             conflicts=open_conflicts(db, pair_ids),
         )
     )
     try:
-        moved = await guarded(moves.run_moves(plan, queue=state.queue, drive=state.drive_mover))
+        moved = await guarded(
+            moves.run_moves(
+                plan, queue=state.queue, drive=state.files.for_account(scope.account).mover
+            )
+        )
     finally:
         # Also after a failure part-way: earlier items may have moved already.
         await update_listing(request, plan.listing_changes())
@@ -426,7 +430,7 @@ async def new_file(
     except UnsafePath as e:
         raise HTTPException(422, str(e)) from e
     try:
-        created = await state.drive_api.create_native(
+        created = await state.files.for_account(scope.account).create_native(
             scope.account.remote_name, body.kind, name, parent_id
         )
     except DriveAuthError as e:

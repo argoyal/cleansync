@@ -30,8 +30,10 @@ from app.config import Settings
 from app.core.logsetup import configure_logging
 from app.database.engine import integrity_ok, make_engine
 from app.database.migrate import run_migrations
+from app.models.enums import Provider
 from app.paths import Layout
 from app.services.accounts.service import AccountService
+from app.services.adapters.files import FilesAdapters, GoogleDriveFiles
 from app.services.app_settings import get_setting
 from app.services.catalog.service import CatalogService
 from app.services.catalog.store import CatalogStore
@@ -229,6 +231,14 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         TokenProvider(settings=settings, rclone_env=app.state.rclone_env)
     )
     app.state.accounts.on_login_changed = app.state.drive_api.tokens.forget
+    # Spec §3.2: the Drive calls made outside a sync run go through the Files adapter.
+    app.state.files = FilesAdapters(
+        {
+            Provider.GOOGLE: GoogleDriveFiles(
+                lambda: app.state.drive_api, lambda: app.state.drive_mover
+            )
+        }
+    )
     app.state.queue = SyncQueue(
         make_handler(
             app.state.engine,
@@ -251,7 +261,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         get_queue=lambda: app.state.queue,  # tests swap the queue after startup
         catalog=app.state.catalog,
         indexes=app.state.indexes,
-        drive=app.state.drive_api,
+        drive=app.state.files.google,
         allow_pretend=settings.allow_local_accounts,
     )
     # A Restore to Drive finishes when the pair's safe resync has uploaded the files.
