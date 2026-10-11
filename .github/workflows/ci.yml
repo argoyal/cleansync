@@ -100,7 +100,7 @@ jobs:
       - name: Add local pretend Google accounts
         # bob has nothing synced: a second pretend account, used by the New menu tests.
         run: |
-          docker exec -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 cs python -m app.devtools.seed_local_account alice@example.com --sample-files
+          docker exec -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 cs python -m app.devtools.seed_local_account alice@example.com --sample-files --sample-mail
           docker exec -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 cs python -m app.devtools.seed_local_account bob@example.com
       - uses: actions/setup-node@v4
         with:

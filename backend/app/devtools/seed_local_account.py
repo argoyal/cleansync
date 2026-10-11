@@ -4,7 +4,9 @@ For development (`make dev-seed`) and the browser smoke test in CI: no Google lo
 Drive-only features (Open in Google, new Google Docs) do not work for such an account.
 Needs DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 so it can never happen by accident in production.
 
-    python -m app.devtools.seed_local_account alice@example.com [--folder DIR] [--sample-files]
+    python -m app.devtools.seed_local_account alice@example.com [--folder DIR] [--sample-files] [--sample-mail]
+
+--sample-mail gives it a fake Gmail mailbox (app/data/fake-gmail/<email>.json) that its mail backup reads.
 """
 
 import argparse
@@ -34,7 +36,21 @@ def write_samples(folder: Path) -> None:
     Image.new("RGB", (595, 842), "white").save(folder / "Reports" / "summary.pdf")
 
 
-async def seed(settings: Settings, email: str, folder: Path | None, samples: bool) -> str:
+def write_sample_mail(layout: Layout, email: str) -> Path:
+    """The pretend account's Gmail: the sample mailbox, saved where its mail adapter reads it."""
+    from app.core.clock import utcnow
+    from app.devtools.fake_gmail import FakeGmail, sample_mailbox
+
+    fake = FakeGmail(email=email)
+    sample_mailbox(fake, utcnow())
+    fake.path = layout.data / "fake-gmail" / f"{email}.json"
+    fake.save()  # once, at the end: each change would rewrite the whole file
+    return fake.path
+
+
+async def seed(
+    settings: Settings, email: str, folder: Path | None, samples: bool, mail: bool = False
+) -> str:
     if not settings.allow_local_accounts:
         raise SystemExit(
             "Refusing: pretend accounts are for development only. "
@@ -65,12 +81,17 @@ async def seed(settings: Settings, email: str, folder: Path | None, samples: boo
             await service.add_local_account(email, target)
         except (AccountError, UnsafeArgument) as e:
             raise SystemExit(str(e)) from e
+        if mail:
+            write_sample_mail(layout, email)
     finally:
         engine.dispose()
-    return (
+    text = (
         f"Added {email}. Its pretend Google Drive is {target}\n"
         "If the app is running, restart the app to pick up the new account."
     )
+    if mail:
+        text += "\nIts pretend Gmail has sample mail; set up mail backup in the Mail section."
+    return text
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -78,8 +99,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("email")
     parser.add_argument("--folder", type=Path, help="the local folder that acts as Drive")
     parser.add_argument("--sample-files", action="store_true", help="put a few files in it")
+    parser.add_argument(
+        "--sample-mail", action="store_true", help="give it a fake Gmail with sample mail"
+    )
     args = parser.parse_args(argv)
-    print(asyncio.run(seed(Settings(), args.email, args.folder, args.sample_files)))
+    print(
+        asyncio.run(seed(Settings(), args.email, args.folder, args.sample_files, args.sample_mail))
+    )
     return 0
 
 

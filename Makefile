@@ -15,7 +15,7 @@ dev-frontend:
 	cd frontend && npm run dev
 
 dev-seed:
-	cd backend && $(DEV_ENV) DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 uv run python -m app.devtools.seed_local_account alice@example.com --sample-files
+	cd backend && $(DEV_ENV) DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 uv run python -m app.devtools.seed_local_account alice@example.com --sample-files --sample-mail
 
 templates:
 	cd backend && uv run python scripts/make_office_templates.py app/resources/office

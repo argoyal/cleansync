@@ -90,6 +90,19 @@ async function uploadViaApi(page: Page, accountId: number, name: string, body: s
   expect(r.status(), await r.text()).toBe(200);
 }
 
+/** Mail set up for alice and its first backup done (the sample mailbox: 24 kept of 26). */
+async function setUpMail(page: Page) {
+  await page.goto("/mail");
+  const status = page.getByText(/^24 mails · .* · checked/);
+  if (await status.isVisible().catch(() => false)) return;
+  const setUp = page.getByRole("button", { name: "Set up mail backup" }).first();
+  if (await setUp.isVisible().catch(() => false)) await setUp.click();
+  await expect(page.getByRole("heading", { name: "Start mail backup" })).toBeVisible();
+  await expect(page.getByText("About 26 mails. The first backup takes a few hours. Nothing in Gmail changes.")).toBeVisible();
+  await page.getByRole("button", { name: "Start", exact: true }).click();
+  await expect(status).toBeVisible({ timeout: 120_000 });
+}
+
 const SHOW_NEW = process.env.E2E_SHOW_NEW === "1";
 
 async function openNew(page: Page) {
@@ -338,4 +351,27 @@ test("the rail opens each section, New is hidden, and Mail asks to be set up", a
   await page.getByRole("dialog", { name: "Views" }).getByRole("link", { name: /^Recent/ }).click();
   await expect(page).toHaveURL(/\/recent$/);
   await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test("mail backup of the pretend account, with its job on Sync activity", async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const problems: string[] = [];
+  page.on("pageerror", (e) => problems.push(e.message));
+  await ready(page);
+  await setUpMail(page);
+  await expect(page.getByRole("heading", { name: "Mail backup" })).toBeVisible();
+  await page.getByRole("button", { name: "Check now" }).click();
+  await expect(page.getByText(/^24 mails · .* · checked/)).toBeVisible({ timeout: 60_000 });
+
+  await rail(page).getByRole("link", { name: /^Activity/ }).click();
+  await expect(page.getByRole("region", { name: "Mail: alice@example.com" })).toBeVisible();
+  const log = page.getByRole("link", { name: "Log of Mail: alice@example.com" }).last();
+  const r = await page.request.get((await log.getAttribute("href"))!);
+  expect(await r.text()).toContain("saved ");
+
+  await rail(page).getByRole("link", { name: /^Settings/ }).click();
+  await page.getByRole("navigation", { name: "Settings views" }).getByRole("link", { name: "Google API" }).click();
+  await expect(page.getByText(/units used today \(UTC\)/)).toBeVisible();
+  expect(problems, problems.join("\n")).toEqual([]);
 });
