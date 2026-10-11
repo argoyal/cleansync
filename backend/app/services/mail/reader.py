@@ -2,8 +2,10 @@
 inline images from the .eml, attachments by position."""
 
 import base64
+import codecs
 import html as html_lib
 import logging
+import re
 from email.message import EmailMessage
 from urllib.parse import quote
 
@@ -12,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models import MailLabel, MailMessage
 from app.paths import Layout
+from app.services.files.mimes import serve_policy
 from app.services.mail.sanitize import INLINE_LIMIT, Cleaned, cid_refs, sanitize_html
 from app.services.mail.store import attachment_parts, eml_path, part_filename, read_message
 
@@ -114,27 +117,100 @@ def body_csp(images: bool) -> str:
     )
 
 
-PREVIEW_TYPES = ("application/pdf", "text/plain")
+PREVIEW_TYPES = (
+    "application/pdf",
+    "text/plain",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "image/avif",
+)
+OTHER_TYPE = "application/octet-stream"
+_TYPE_OK = re.compile(r"[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*")
+_COMMENT = re.compile(r"\([^()]*\)")
+MAX_NAME_CHARS = 200
+UNREADABLE_ATTACHMENT_MSG = "This attachment can't be read. Download the .eml to open it elsewhere."
+
+
+class AttachmentUnreadable(Exception):
+    pass
+
+
+def clean_type(content_type: str | None) -> str:
+    """One plain `maintype/subtype` token: no parameters, comments, spaces or control
+    characters. Anything that doesn't look like a type becomes a generic download."""
+    text = (content_type or "").split(";", 1)[0]
+    while True:  # comments can nest
+        text = _COMMENT.sub("", text)
+        if "(" not in text:
+            break
+        text = text.replace("(", "").replace(")", "")
+    text = "".join(c for c in text if c.isprintable() and not c.isspace()).lower()
+    return text if _TYPE_OK.fullmatch(text) else OTHER_TYPE
 
 
 def can_preview(content_type: str) -> bool:
-    """What the browser can show by itself (spec 6.2): PDF, images, plain text. SVG can carry
-    script, so it is only ever downloaded."""
-    if content_type == "image/svg+xml":
-        return False
-    return content_type in PREVIEW_TYPES or content_type.startswith("image/")
+    """What the browser can show by itself (spec 6.2): PDF, plain text and the plain image
+    formats. SVG can carry script, so it (like every other type) is only downloaded."""
+    return clean_type(content_type) in PREVIEW_TYPES
 
 
-def attachment_of(raw: bytes, index: int) -> tuple[str, str, bytes]:
+def served_type(content_type: str, charset: str | None = None) -> str:
+    """The Content-Type to send for an attachment."""
+    ctype = clean_type(content_type)
+    if ctype in PREVIEW_TYPES and ctype != "text/plain":
+        return ctype
+    if serve_policy(ctype)[0].startswith("text/plain"):
+        return f"text/plain; charset={charset or 'utf-8'}"  # HTML etc. never runs on our address
+    return OTHER_TYPE
+
+
+def safe_charset(name: str | None) -> str | None:
+    if not name:
+        return None
+    try:
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name if re.fullmatch(r"[A-Za-z0-9_.:-]{1,40}", name) else None
+
+
+def download_name(name: str) -> str:
+    """A name safe to put in a header and to save under: no slashes, at most 200 characters,
+    the extension kept."""
+    name = "".join(c if c.isprintable() else "_" for c in name.replace("/", "_").replace("\\", "_"))
+    name = name.strip() or "attachment"
+    if len(name) <= MAX_NAME_CHARS:
+        return name
+    stem, dot, ext = name.rpartition(".")
+    if not dot or len(ext) > 20:
+        return name[:MAX_NAME_CHARS]
+    return stem[: MAX_NAME_CHARS - len(ext) - 1] + "." + ext
+
+
+def open_attachment(raw: bytes, index: int) -> tuple[str, str, bytes, str | None]:
+    """(name, clean type, data, the attachment's own character set)."""
     parts = attachment_parts(read_message(raw))
     if index < 0 or index >= len(parts):
         raise IndexError(index)
     part = parts[index]
     try:
-        data = part.get_payload(decode=True) or b""
+        data = part.get_payload(decode=True)
+        charset = safe_charset(part.get_content_charset())
     except Exception:
-        data = b""
-    return part_filename(part) or "attachment", part.get_content_type(), data
+        log.warning("could not decode attachment %s of a mail", index, exc_info=True)
+        raise AttachmentUnreadable(UNREADABLE_ATTACHMENT_MSG) from None
+    if not isinstance(data, bytes):
+        log.warning("attachment %s of a mail has no readable content", index)
+        raise AttachmentUnreadable(UNREADABLE_ATTACHMENT_MSG)
+    return part_filename(part) or "attachment", clean_type(part.get_content_type()), data, charset
+
+
+def attachment_of(raw: bytes, index: int) -> tuple[str, str, bytes]:
+    name, ctype, data, _ = open_attachment(raw, index)
+    return name, ctype, data
 
 
 def gmail_url(email: str, provider_id: str) -> str:
@@ -143,17 +219,21 @@ def gmail_url(email: str, provider_id: str) -> str:
     )
 
 
-def label_names(db: Session, account_id: int, ids: list[str]) -> list[dict]:
-    """User labels of a mail, by name (system labels are what the views show)."""
+def user_label_map(db: Session, account_id: int) -> dict[str, str]:
+    """Every user label of the account, id to name, in one query."""
     rows = db.scalars(
-        select(MailLabel).where(
-            MailLabel.account_id == account_id,
-            MailLabel.type == "user",
-            MailLabel.provider_label_id.in_(ids),
-        )
+        select(MailLabel).where(MailLabel.account_id == account_id, MailLabel.type == "user")
     )
+    return {r.provider_label_id: r.name for r in rows}
+
+
+def label_names(
+    db: Session, account_id: int, ids: list[str], known: dict[str, str] | None = None
+) -> list[dict]:
+    """User labels of a mail, by name (system labels are what the views show)."""
+    names = known if known is not None else user_label_map(db, account_id)
     return sorted(
-        ({"id": r.provider_label_id, "name": r.name} for r in rows), key=lambda x: x["name"].lower()
+        ({"id": i, "name": names[i]} for i in ids if i in names), key=lambda x: x["name"].lower()
     )
 
 

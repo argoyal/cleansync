@@ -13,21 +13,27 @@ from app.core.clock import utcnow
 from app.models import Account, MailMessage
 from app.models.enums import MailState
 from app.schemas.mail import AttachmentOut, MailCountsOut, MessageOut, ThreadOut, ThreadPageOut
-from app.services.files.mimes import serve_policy
 from app.services.mail.gmail import valid_mail_id
 from app.services.mail.listing import label_counts, list_threads, totals, view_counts
 from app.services.mail.reader import (
+    MISSING_FILE_MSG,
+    AttachmentUnreadable,
     MailFileMissing,
-    attachment_of,
     body_csp,
     can_preview,
+    clean_type,
+    download_name,
     gmail_url,
     has_remote_images,
     label_names,
+    open_attachment,
     read_eml_of,
     render_body,
+    served_type,
+    user_label_map,
 )
 from app.services.mail.search import SearchError, mail_conditions
+from app.services.mail.store import eml_path
 
 MAX_QUERY_CHARS = 1000
 
@@ -92,6 +98,8 @@ def eml_bytes(request: Request, account: Account, row: MailMessage) -> bytes:
         return read_eml_of(request.app.state.layout, account.email, row)
     except MailFileMissing as e:
         raise HTTPException(404, str(e)) from e
+    except (OSError, ValueError):
+        raise HTTPException(404, MISSING_FILE_MSG) from None
 
 
 @router.get("/messages/{message_id}/body")
@@ -117,23 +125,45 @@ def body(
     )
 
 
-def message_out(request: Request, db: Session, row: MailMessage, account: Account) -> MessageOut:
+def _file_there(request: Request, account: Account, row: MailMessage) -> bool:
     try:
-        raw: bytes | None = read_eml_of(request.app.state.layout, account.email, row)
-    except MailFileMissing:
-        raw = None
+        return eml_path(request.app.state.layout, account.email, row.file_path).is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def message_out(
+    request: Request,
+    row: MailMessage,
+    account: Account,
+    labels: dict[str, str],
+    *,
+    detail: bool,
+) -> MessageOut:
+    """`detail` reads the whole mail to tell if it has remote images; a thread list only
+    checks that the file is there."""
+    remote: bool | None = None
+    if detail:
+        try:
+            raw: bytes | None = read_eml_of(request.app.state.layout, account.email, row)
+        except (MailFileMissing, OSError, ValueError):
+            raw = None
+        present = raw is not None
+        remote = has_remote_images(raw) if raw is not None else False
+    else:
+        present = _file_there(request, account, row)
     attachments = (
         [
             AttachmentOut(
                 index=i,
                 name=a["name"],
-                type=a["type"],
+                type=clean_type(a["type"]),
                 size=a["size"],
                 preview=can_preview(a["type"]),
             )
             for i, a in enumerate(row.attachments or [])
         ]
-        if raw is not None
+        if present
         else []
     )
     return MessageOut(
@@ -148,15 +178,15 @@ def message_out(request: Request, db: Session, row: MailMessage, account: Accoun
         date=row.date,
         size=row.size,
         file_size=row.file_size,
-        labels=label_names(db, row.account_id, list(row.labels or [])),
+        labels=label_names(None, row.account_id, list(row.labels or []), labels),
         state=row.state,
         offload_id=row.offload_id,
         attachments=attachments,
-        has_remote_images=raw is not None and has_remote_images(raw),
+        has_remote_images=remote,
         gmail_url=gmail_url(account.email, row.provider_id)
         if row.state == MailState.IN_MAIL
         else None,
-        file_missing=raw is None,
+        file_missing=not present,
     )
 
 
@@ -168,7 +198,7 @@ def message(
     db: Session = Depends(get_db),
 ):
     row, account = message_or_404(db, message_id)
-    return message_out(request, db, row, account)
+    return message_out(request, row, account, user_label_map(db, row.account_id), detail=True)
 
 
 @router.get("/threads/{thread_id}", response_model=list[MessageOut])
@@ -187,7 +217,8 @@ def thread(
         .where(MailMessage.account_id == account_id, MailMessage.thread_id == thread_id)
         .order_by(MailMessage.date, MailMessage.id)
     )
-    return [message_out(request, db, r, account) for r in rows]
+    labels = user_label_map(db, account_id)
+    return [message_out(request, r, account, labels, detail=False) for r in rows]
 
 
 @router.get("/messages/{message_id}/attachments/{index}")
@@ -201,11 +232,13 @@ def attachment(
 ):
     row, account = message_or_404(db, message_id)
     try:
-        name, ctype, data = attachment_of(eml_bytes(request, account, row), index)
+        name, ctype, data, charset = open_attachment(eml_bytes(request, account, row), index)
     except IndexError:
         raise HTTPException(404, "attachment not found") from None
-    served, inline_ok = serve_policy(ctype)
-    show = inline_ok and can_preview(ctype) and not download
+    except AttachmentUnreadable as e:
+        raise HTTPException(422, str(e)) from e
+    served = served_type(ctype, charset)
+    show = can_preview(ctype) and not download
     return Response(
         data,
         media_type=served,
@@ -213,7 +246,9 @@ def attachment(
             "Content-Security-Policy": csp_for(served),
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "private, no-store",
-            "Content-Disposition": content_disposition("inline" if show else "attachment", name),
+            "Content-Disposition": content_disposition(
+                "inline" if show else "attachment", download_name(name)
+            ),
         },
     )
 

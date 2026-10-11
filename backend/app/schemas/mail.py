@@ -124,6 +124,6 @@ class MessageOut(BaseModel):
     state: str
     offload_id: int | None
     attachments: list[AttachmentOut]
-    has_remote_images: bool
+    has_remote_images: bool | None  # known for one opened mail; null in a thread list
     gmail_url: str | None
     file_missing: bool

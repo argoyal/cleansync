@@ -92,7 +92,7 @@ def test_svg_attachments_are_only_downloaded_and_hostile_names_stay_in_the_heade
     r = auth_client.get(f"/api/mail/messages/{row.id}/attachments/0")
     assert r.headers["content-disposition"].startswith("attachment")
     assert r.headers["content-disposition"].startswith('attachment; filename="a_b_ _;x.svg"')
-    assert "filename*=UTF-8''a%22b%5C%20%C3%A9%3Bx.svg" in r.headers["content-disposition"]
+    assert "filename*=UTF-8''a%22b_%20%C3%A9%3Bx.svg" in r.headers["content-disposition"]
 
 
 def test_a_thread_lists_its_mails_oldest_first(auth_client, app, db, make_account):
@@ -121,3 +121,127 @@ def test_a_missing_file_says_so(auth_client, app, db, make_account):
     )
     assert auth_client.get("/api/mail/threads", params={"account_id": acc.id}).status_code == 200
     assert auth_client.get("/api/mail/messages/999").status_code == 404
+
+
+def test_a_disguised_svg_is_never_previewed(auth_client, app, db, make_account):
+    acc = make_account()
+    svg = b"<svg xmlns='http://www.w3.org/2000/svg'><script>x</script></svg>"
+    raw = make_mail(
+        "Sneaky", attachments=(("a.svg", "image/svg+xml", svg), ("b.svg", "image/png", svg))
+    )
+    raw = raw.replace(b"image/svg+xml", b"image/svg+xml (c)")
+    row = _keep(app, db, acc, "m1", raw)
+    detail = auth_client.get(f"/api/mail/messages/{row.id}").json()["attachments"]
+    assert detail[0]["preview"] is False and detail[0]["type"] == "image/svg+xml"
+    r = auth_client.get(f"/api/mail/messages/{row.id}/attachments/0")
+    assert r.status_code == 200 and r.headers["content-disposition"].startswith("attachment")
+    assert r.headers["content-type"] == "application/octet-stream"
+
+
+def test_a_nul_in_the_type_does_not_break_the_response(auth_client, app, db, make_account):
+    acc = make_account()
+    raw = make_mail("Odd", attachments=(("a.bin", "application/x-thing", b"abc"),))
+    raw = raw.replace(b"application/x-thing", b"image/svg+xml\x00")
+    row = _keep(app, db, acc, "m1", raw)
+    r = auth_client.get(f"/api/mail/messages/{row.id}/attachments/0")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/octet-stream"
+    assert r.headers["content-disposition"].startswith("attachment")
+
+
+def test_text_keeps_its_own_charset_and_long_names_keep_their_extension(
+    auth_client, app, db, make_account
+):
+    acc = make_account()
+    long_name = "x" * 300 + ".pdf"
+    raw = make_mail(
+        "Txt",
+        attachments=(
+            ("n.txt", "text/plain", b"abc"),
+            (long_name, "application/pdf", MINI_PDF),
+            ("a/b\\c.png", "image/png", TINY_PNG),
+        ),
+    )
+    raw = (
+        raw.replace(b'charset="utf-8"', b'charset="iso-8859-1"') if b'name="n.txt"' in raw else raw
+    )
+    row = _keep(app, db, acc, "m1", raw)
+    txt = auth_client.get(f"/api/mail/messages/{row.id}/attachments/0")
+    assert txt.headers["content-type"].startswith("text/plain; charset=")
+    pdf = auth_client.get(f"/api/mail/messages/{row.id}/attachments/1?download=1")
+    assert 'filename="' + "x" * 196 + '.pdf"' in pdf.headers["content-disposition"]
+    png = auth_client.get(f"/api/mail/messages/{row.id}/attachments/2?download=1")
+    assert 'filename="a_b_c.png"' in png.headers["content-disposition"]
+
+
+def test_a_thread_does_not_open_each_mail(auth_client, app, db, make_account, monkeypatch):
+    acc = make_account()
+    _keep(
+        app,
+        db,
+        acc,
+        "a",
+        make_mail("One", attachments=(("f.pdf", "application/pdf", MINI_PDF),)),
+        days=3,
+    )
+    _keep(app, db, acc, "b", make_mail("Two"), days=2)
+    calls = []
+    for mod, name in (
+        ("app.api.mail_reader", "has_remote_images"),
+        ("app.api.mail_reader", "read_eml_of"),
+        ("app.services.mail.reader", "render_body"),
+    ):
+        monkeypatch.setattr(f"{mod}.{name}", lambda *a, **k: calls.append(1))
+    rows = auth_client.get("/api/mail/threads/t1", params={"account_id": acc.id}).json()
+    assert calls == [] and len(rows) == 2
+    assert rows[0]["has_remote_images"] is None and rows[0]["attachments"][0]["name"] == "f.pdf"
+    assert rows[0]["file_missing"] is False
+
+
+def test_an_unreadable_attachment_is_a_clear_error(auth_client, app, db, make_account, monkeypatch):
+    acc = make_account()
+    row = _keep(
+        app, db, acc, "m1", make_mail("Bad", attachments=(("f.pdf", "application/pdf", MINI_PDF),))
+    )
+
+    class Broken:
+        def get_payload(self, decode=False):
+            raise ValueError("bad")
+
+    monkeypatch.setattr("app.services.mail.reader.attachment_parts", lambda msg: [Broken()])
+    r = auth_client.get(f"/api/mail/messages/{row.id}/attachments/0")
+    assert r.status_code == 422
+    assert (
+        r.json()["detail"]
+        == "This attachment can't be read. Download the .eml to open it elsewhere."
+    )
+
+
+def test_missing_file_on_attachment_and_eml_and_logged_out(
+    auth_client, client, app, db, make_account
+):
+    acc = make_account()
+    row = _keep(
+        app, db, acc, "m1", make_mail("Gone", attachments=(("f.pdf", "application/pdf", MINI_PDF),))
+    )
+    eml_path(app.state.layout, acc.email, row.file_path).unlink()
+    for tail in ("attachments/0", "eml"):
+        r = auth_client.get(f"/api/mail/messages/{row.id}/{tail}")
+        assert r.status_code == 404 and "missing" in r.json()["detail"]
+    thread = auth_client.get("/api/mail/threads/t1", params={"account_id": acc.id}).json()
+    assert thread[0]["file_missing"] is True
+    auth_client.post("/api/auth/logout")
+    for url in (
+        f"/api/mail/messages/{row.id}",
+        f"/api/mail/messages/{row.id}/eml",
+        f"/api/mail/messages/{row.id}/attachments/0",
+        "/api/mail/threads/t1?account_id=1",
+    ):
+        assert client.get(url).status_code == 401
+
+
+def test_text_uses_the_charset_it_names_and_ignores_a_bad_one():
+    from app.services.mail.reader import safe_charset, served_type
+
+    assert served_type("text/plain", safe_charset("iso-8859-1")) == "text/plain; charset=iso-8859-1"
+    assert served_type("text/plain", safe_charset("nope\r\nx")) == "text/plain; charset=utf-8"
+    assert served_type("text/html") == "text/plain; charset=utf-8"
