@@ -8,13 +8,12 @@ from email.message import EmailMessage
 
 from app.models import MailMessage
 from app.paths import Layout
-from app.services.mail.sanitize import Cleaned, sanitize_html
+from app.services.mail.sanitize import INLINE_LIMIT, Cleaned, cid_refs, sanitize_html
 from app.services.mail.store import eml_path, read_message
 
 log = logging.getLogger(__name__)
 MISSING_FILE_MSG = "This mail's file is missing on the storage disk."
 UNREADABLE_MSG = "This mail can't be shown. Download the .eml to open it elsewhere."
-INLINE_LIMIT = 10 * 1024 * 1024
 # Mail HTML is written for white paper, so the mail frame keeps fixed paper colours: the
 # stated exception to "colours are theme tokens" (pre-flight ruling P3 F7).
 _STYLE = (
@@ -37,13 +36,17 @@ def read_eml_of(layout: Layout, email: str, row: MailMessage) -> bytes:
         raise MailFileMissing(MISSING_FILE_MSG) from None
 
 
-def inline_images(msg: EmailMessage) -> dict[str, str]:
-    """Content-ID → data: address, for images shown inside the mail (at most 10 MB)."""
+def inline_images(msg: EmailMessage, wanted: set[str] | None = None) -> dict[str, str]:
+    """Content-ID → data: address, for images shown inside the mail (at most INLINE_LIMIT).
+    With `wanted`, only the images the HTML points at are read out."""
     out: dict[str, str] = {}
     used = 0
     for part in msg.walk():
         cid = part.get("Content-ID")
         if part.is_multipart() or not cid or part.get_content_maintype() != "image":
+            continue
+        key = str(cid).strip().strip("<>")
+        if wanted is not None and key not in wanted:
             continue
         try:
             data = part.get_payload(decode=True) or b""
@@ -53,7 +56,7 @@ def inline_images(msg: EmailMessage) -> dict[str, str]:
         if used > INLINE_LIMIT:
             break
         encoded = base64.b64encode(data).decode()
-        out[str(cid).strip().strip("<>")] = f"data:{part.get_content_type()};base64,{encoded}"
+        out[key] = f"data:{part.get_content_type()};base64,{encoded}"
     return out
 
 
@@ -83,7 +86,7 @@ def render_body(raw: bytes) -> Rendered:
     if not isinstance(content, str):
         content = ""
     if part is not None and part.get_content_type() == "text/html":
-        cleaned = sanitize_html(content, inline_images(msg))
+        cleaned = sanitize_html(content, inline_images(msg, cid_refs(content)))
         return Rendered(_document(cleaned.html), cleaned.remote_images)
     return Rendered(_document(f"<pre>{html_lib.escape(content)}</pre>"), 0)
 
@@ -99,6 +102,8 @@ def body_csp(images: bool) -> str:
             img,
             "style-src 'unsafe-inline'",
             "font-src data:",
+            "form-action 'none'",
+            "base-uri 'none'",
             "frame-ancestors 'self'",
         ]
     )

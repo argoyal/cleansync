@@ -1,11 +1,12 @@
 from datetime import UTC, datetime
+from email.message import EmailMessage
 
 import pytest
 
 from app.devtools.fake_gmail import make_mail
 from app.services.mail import index, reader
 from app.services.mail.adapter import MailMeta
-from app.services.mail.reader import UNREADABLE_MSG, body_csp, render_body
+from app.services.mail.reader import INLINE_LIMIT, UNREADABLE_MSG, body_csp, render_body
 from app.services.mail.sanitize import sanitize_html
 from app.services.mail.store import parse_eml, write_eml
 
@@ -97,6 +98,7 @@ def test_styles_stay_text_and_the_frame_policy_stops_what_they_could_load():
     )
     out = sanitize_html(css, {})
     assert "<style>" in out.html  # kept as text: no browser runs expression() any more
+    assert out.remote_images == 2  # the two CSS backgrounds; @import is a style sheet
     for images in (False, True):
         policy = body_csp(images)
         # @import and fonts need a style or font source; only inline styles and data: fonts are allowed
@@ -105,6 +107,8 @@ def test_styles_stay_text_and_the_frame_policy_stops_what_they_could_load():
         assert "default-src 'none'" in policy.split("; ")
         assert "script-src" not in policy and "allow-scripts" not in policy
         assert "allow-same-origin" not in policy and "allow-forms" not in policy
+        assert "form-action 'none'" in policy.split("; ")
+        assert "base-uri 'none'" in policy.split("; ")
     # background images in CSS fall under img-src: blocked until "Show images"
     assert "img-src data:" in body_csp(False).split("; ")
 
@@ -131,7 +135,7 @@ def test_remote_images_wait_for_show_images():
     assert (
         'src="https://track.example.com/p.gif"' in out.html
     )  # kept, but the frame's policy blocks it
-    assert body_csp(False).split("; ")[2] == "img-src data:"
+    assert "img-src data:" in body_csp(False).split("; ")
     assert "img-src data: https: http:" in body_csp(True)
     for part in (
         "sandbox allow-popups allow-popups-to-escape-sandbox",
@@ -154,6 +158,40 @@ def test_inline_images_come_from_the_mail_itself():
     assert page.remote_images == 0
     assert page.html.startswith("<!doctype html>")
     assert '<base target="_blank">' in page.html
+
+
+def test_remote_images_in_css_also_wait_for_show_images():
+    out = sanitize_html(
+        '<style>td{background:URL( "https://track.example.com/a.gif" )}</style>'
+        "<table><tr><td style=\"background-image:url('http://x.example.com/b.png')\">x</td>"
+        "</tr></table>"
+        '<p style="background:url(data:image/png;base64,AAAA)">inline</p>'
+        "<p>Read more at url(https://example.com) in the text</p>",
+        {},
+    )
+    assert out.remote_images == 2
+
+
+def test_one_image_repeated_many_times_stays_under_the_limit():
+    big = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 800  # about 200 KB
+    msg = EmailMessage()
+    msg["From"] = "friend@example.com"
+    msg["Subject"] = "Repeats"
+    msg.set_content("x")
+    msg.add_alternative("<p>x</p>" + '<img src="cid:big">' * 500, subtype="html")
+    msg.get_payload()[1].add_related(big, "image", "png", cid="<big>", disposition="inline")
+    page = render_body(msg.as_bytes())
+    shown = page.html.count("data:image/png;base64,")
+    assert 0 < shown < 500  # later references are dropped once the limit is reached
+    assert page.html.count("<img") == 500
+    assert len(page.html) < INLINE_LIMIT + 100_000
+
+
+def test_only_the_images_the_mail_points_at_are_read_out():
+    raw = make_mail("Photo", html='<p>Look</p><img src="cid:photo1">', inline_png_cid="photo1")
+    msg = reader.read_message(raw)
+    assert set(reader.inline_images(msg, set())) == set()
+    assert set(reader.inline_images(msg, {"photo1"})) == {"photo1"}
 
 
 def test_plain_text_mail_is_shown_as_text_never_as_html():
