@@ -11,17 +11,21 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings
 from app.core.clock import utcnow
 from app.models import Account
-from app.models.enums import AccountStatus
+from app.models.enums import AccountStatus, ServiceKind, ServiceState
 from app.paths import Layout, email_dirname
 from app.services.accounts.oauth import (
+    GMAIL_SCOPE,
+    SCOPES,
     OAuthError,
     OAuthStates,
     build_auth_url,
     exchange_code,
     fetch_about,
+    granted_scopes,
+    has_scope,
     to_rclone_token,
 )
-from app.services.accounts.services import ensure_services
+from app.services.accounts.services import ensure_services, get_service, set_service_state
 from app.services.events.bus import EventBus, record_event
 from app.services.rclone.commands import (
     RcloneEnv,
@@ -42,6 +46,7 @@ class AccountError(Exception):
 
 
 PRETEND_PREFIX = "local_"
+MAIL_LOST_NOTE = "Google no longer lets CleanSync read this account's mail. Set up mail again."
 
 
 def is_pretend(account: Account, allowed: bool) -> bool:
@@ -120,16 +125,50 @@ class AccountService:
             secrets=self._secrets(*extra_secrets),
         )
 
-    def start_connect(self, reconnect_account_id: int | None = None) -> str:
+    def start_connect(
+        self, reconnect_account_id: int | None = None, purpose: str = "connect"
+    ) -> str:
         if not self.settings.google_client_id or not self.settings.google_client_secret:
             raise OAuthError(
                 "Google OAuth client is not configured: set GOOGLE_CLIENT_ID and "
                 "GOOGLE_CLIENT_SECRET (see docs/google-oauth-setup.md)."
             )
-        state, challenge = self.states.new(reconnect_account_id)
+        state, challenge = self.states.new(reconnect_account_id, purpose)
         return build_auth_url(
             self.settings.google_client_id, self.settings.oauth_redirect_uri, state, challenge
         )
+
+    def start_mail_setup(self, account_id: int) -> str | None:
+        """Ask Google again, now with Gmail too (spec §3.1). Drive keeps syncing meanwhile.
+
+        A pretend local account has no Google behind it: it goes straight to "setting up"
+        (Plan 2 gives it a fake Gmail) and None is returned."""
+        with self.session_factory() as db:
+            acc = db.get(Account, account_id)
+            if acc is None:
+                raise LookupError("account not found")
+            if acc.status == AccountStatus.DISCONNECTED:
+                raise AccountError("Connect this Google account again first (Settings, Accounts).")
+            if is_pretend(acc, self.settings.allow_local_accounts):
+                row = get_service(db, acc.id, ServiceKind.MAIL)
+                if row is None or row.state == ServiceState.NOT_SET_UP:
+                    set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.SETTING_UP)
+                return None
+        return self.start_connect(account_id, purpose="mail")
+
+    def _follow_mail_permission(self, db: Session, acc: Account, purpose: str) -> None:
+        """Mail's state after a sign-in, from what Google granted (see the plan's rulings)."""
+        row = get_service(db, acc.id, ServiceKind.MAIL)
+        state = row.state if row is not None else ServiceState.NOT_SET_UP
+        if has_scope(acc.scopes, GMAIL_SCOPE):
+            if state == ServiceState.NEEDS_RECONNECT:
+                set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.ACTIVE)
+            elif state == ServiceState.NOT_SET_UP and purpose == "mail":
+                set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.SETTING_UP)
+        elif state in (ServiceState.SETTING_UP, ServiceState.ACTIVE, ServiceState.PAUSED):
+            set_service_state(
+                db, acc.id, ServiceKind.MAIL, ServiceState.NEEDS_RECONNECT, MAIL_LOST_NOTE
+            )
 
     def _new_remote_name(self, db: Session) -> str:
         while True:
@@ -202,6 +241,7 @@ class AccountService:
                 db.add(acc)
             self._login_changed(name)
             acc.status = AccountStatus.CONNECTED
+            acc.scopes = granted_scopes(tok)
             acc.quota_total = about["quota_total"]
             acc.quota_used = about["quota_used"]
             acc.quota_trash = about["quota_trash"]
@@ -209,6 +249,7 @@ class AccountService:
             acc.last_checked_at = self.clock()
             db.commit()
             ensure_services(db, acc)
+            self._follow_mail_permission(db, acc, pending.purpose)
             self.layout.account_dir(email).mkdir(parents=True, exist_ok=True)
             record_event(
                 db,
@@ -249,6 +290,7 @@ class AccountService:
                 email=email,
                 remote_name=name,
                 status=AccountStatus.CONNECTED,
+                scopes=SCOPES,
                 connected_at=self.clock(),
                 last_checked_at=self.clock(),
             )

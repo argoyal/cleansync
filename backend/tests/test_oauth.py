@@ -43,14 +43,35 @@ def test_pkce_challenge_matches_verifier():
     assert challenge == expected
 
 
-def test_auth_url_asks_for_offline_drive_access():
+def test_auth_url_asks_for_drive_and_gmail_offline():
     url = build_auth_url("cid", "https://x.example.com/api/oauth/callback", "st", "ch")
     q = parse_qs(urlparse(url).query)
-    assert q["scope"] == ["https://www.googleapis.com/auth/drive"]
+    assert q["scope"] == [
+        "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/gmail.modify"
+    ]
+    assert q["include_granted_scopes"] == ["true"]
     assert q["access_type"] == ["offline"]
     assert q["prompt"] == ["consent"]
     assert q["code_challenge_method"] == ["S256"]
     assert q["state"] == ["st"]
+
+
+def test_granted_scopes_reads_googles_answer_and_assumes_drive_only_without_it():
+    from app.services.accounts.oauth import DRIVE_SCOPE, GMAIL_SCOPE, granted_scopes, has_scope
+
+    both = granted_scopes({"scope": f"{GMAIL_SCOPE} {DRIVE_SCOPE} openid"})
+    assert has_scope(both, GMAIL_SCOPE) and has_scope(both, DRIVE_SCOPE)
+    assert granted_scopes({}) == DRIVE_SCOPE
+    assert not has_scope(granted_scopes({}), GMAIL_SCOPE)
+    assert not has_scope("", GMAIL_SCOPE)
+
+
+def test_peek_does_not_use_up_the_state():
+    states = OAuthStates()
+    s, _ = states.new(reconnect_account_id=3, purpose="mail")
+    assert states.peek(s).purpose == "mail"
+    assert states.pop(s).reconnect_account_id == 3
+    assert states.peek(s) is None
 
 
 @respx.mock

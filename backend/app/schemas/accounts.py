@@ -17,5 +17,9 @@ class AccountOut(BaseModel):
     mail_permission: bool = False
 
 
+class MailSetupOut(BaseModel):
+    auth_url: str | None  # None: nothing to sign in to (a pretend account); go to Mail
+
+
 class AuthUrlOut(BaseModel):
     auth_url: str

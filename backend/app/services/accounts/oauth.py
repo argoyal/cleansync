@@ -13,7 +13,23 @@ import httpx
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 ABOUT_URL = "https://www.googleapis.com/drive/v3/about"
-SCOPE = "https://www.googleapis.com/auth/drive"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+# Read, label and trash mail; Plan 4's restore imports and "empty trash" deletes with it too.
+GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+SCOPES = f"{DRIVE_SCOPE} {GMAIL_SCOPE}"
+
+
+def granted_scopes(token_answer: dict) -> str:
+    """The permissions Google granted, from its token answer. Without a "scope" field, only
+    Drive is assumed: Mail must never be thought to work when it might not."""
+    raw = token_answer.get("scope")
+    if not isinstance(raw, str) or not raw.strip():
+        return DRIVE_SCOPE
+    return " ".join(sorted(set(raw.split())))
+
+
+def has_scope(scopes: str, scope: str) -> bool:
+    return scope in scopes.split()
 
 
 class OAuthError(Exception):
@@ -25,6 +41,7 @@ class PendingAuth:
     verifier: str
     created: float
     reconnect_account_id: int | None
+    purpose: str = "connect"  # "connect" (add or reconnect) or "mail" (set up Mail)
 
 
 class OAuthStates:
@@ -33,7 +50,9 @@ class OAuthStates:
         self.clock = clock
         self._pending: dict[str, PendingAuth] = {}
 
-    def new(self, reconnect_account_id: int | None = None) -> tuple[str, str]:
+    def new(
+        self, reconnect_account_id: int | None = None, purpose: str = "connect"
+    ) -> tuple[str, str]:
         now = self.clock()
         self._pending = {k: v for k, v in self._pending.items() if now - v.created < self.ttl_s}
         state = secrets.token_urlsafe(32)
@@ -43,8 +62,15 @@ class OAuthStates:
             .rstrip(b"=")
             .decode()
         )
-        self._pending[state] = PendingAuth(verifier, now, reconnect_account_id)
+        self._pending[state] = PendingAuth(verifier, now, reconnect_account_id, purpose)
         return state, challenge
+
+    def peek(self, state: str) -> PendingAuth | None:
+        """What a sign-in was for, without using it up."""
+        pending = self._pending.get(state)
+        if pending is None or self.clock() - pending.created >= self.ttl_s:
+            return None
+        return pending
 
     def pop(self, state: str) -> PendingAuth | None:
         pending = self._pending.pop(state, None)
@@ -62,7 +88,7 @@ def build_auth_url(client_id: str, redirect_uri: str, state: str, challenge: str
                 "client_id": client_id,
                 "redirect_uri": redirect_uri,
                 "response_type": "code",
-                "scope": SCOPE,
+                "scope": SCOPES,
                 "access_type": "offline",
                 "prompt": "consent",
                 "include_granted_scopes": "true",

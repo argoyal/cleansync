@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.auth.deps import AuthContext, get_db, require_user
 from app.models import Account
-from app.schemas.accounts import AccountOut, AuthUrlOut
-from app.services.accounts.oauth import OAuthError
+from app.schemas.accounts import AccountOut, AuthUrlOut, MailSetupOut
+from app.services.accounts.oauth import GMAIL_SCOPE, OAuthError, has_scope
 from app.services.accounts.service import AccountError
 from app.services.accounts.services import service_states
 
@@ -19,7 +19,12 @@ router = APIRouter()
 
 def account_out(db: Session, acc: Account) -> AccountOut:
     out = AccountOut.model_validate(acc, from_attributes=True)
-    return out.model_copy(update={"services": service_states(db, acc.id)})
+    return out.model_copy(
+        update={
+            "services": service_states(db, acc.id),
+            "mail_permission": has_scope(acc.scopes, GMAIL_SCOPE),
+        }
+    )
 
 
 @router.get("/api/accounts", response_model=list[AccountOut])
@@ -50,6 +55,16 @@ def reconnect(
         raise HTTPException(400, str(e)) from e
 
 
+@router.post("/api/accounts/{account_id}/mail/setup", response_model=MailSetupOut)
+def mail_setup(account_id: int, request: Request, ctx: AuthContext = Depends(require_user)):
+    try:
+        return MailSetupOut(auth_url=request.app.state.accounts.start_mail_setup(account_id))
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except (AccountError, OAuthError) as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @router.get("/api/oauth/callback")
 async def oauth_callback(request: Request, state: str = "", code: str = "", error: str = ""):
     # No session check: Google's redirect is cross-site, so the SameSite=Strict cookie is not
@@ -63,6 +78,8 @@ async def oauth_callback(request: Request, state: str = "", code: str = "", erro
             else "Google sign-in failed."
         )
         return RedirectResponse(f"/?oauth_error={quote(msg)}", 303)
+    pending = service.states.peek(state)
+    purpose = pending.purpose if pending is not None else "connect"
     try:
         acc = await service.finish_connect(state, code)
     except OAuthError as e:
@@ -72,6 +89,9 @@ async def oauth_callback(request: Request, state: str = "", code: str = "", erro
         msg = "Connecting the Google account failed; see the logs."
         return RedirectResponse(f"/?oauth_error={quote(msg)}", 303)
     request.app.state.catalog.refresh_account(acc.id)  # a reconnect may have missed changes
+    if purpose == "mail":
+        outcome = "ready" if has_scope(acc.scopes, GMAIL_SCOPE) else "denied"
+        return RedirectResponse(f"/?connected={acc.id}&mail={outcome}", 303)
     return RedirectResponse(f"/?connected={acc.id}", 303)
 
 
