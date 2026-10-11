@@ -30,6 +30,8 @@
   --rail: 46 35 99;
   --rail-ink: 207 200 243;
   --rail-mark: 255 255 255;
+  /* The rail badge: one strong red in every theme, so its white number stays readable. */
+  --rail-badge: 194 54 47;
   --panel: 255 255 255;
   --sec-files: 112 210 198;
   --sec-files-ink: 6 48 43;
@@ -78,6 +80,7 @@
     --rail: 46 35 99;
     --rail-ink: 207 200 243;
     --rail-mark: 255 255 255;
+    --rail-badge: 194 54 47;
     --panel: 27 30 38;
     --sec-files: 112 210 198;
     --sec-files-ink: 6 48 43;
@@ -126,6 +129,8 @@
   --rail: 46 35 99;
   --rail-ink: 207 200 243;
   --rail-mark: 255 255 255;
+  /* The rail badge: one strong red in every theme, so its white number stays readable. */
+  --rail-badge: 194 54 47;
   --panel: 27 30 38;
   --sec-files: 112 210 198;
   --sec-files-ink: 6 48 43;

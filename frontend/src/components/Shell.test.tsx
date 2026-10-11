@@ -174,6 +174,8 @@ describe("rail and panel", () => {
     }
     expect(within(rail).getByRole("link", { name: /^Files/ })).toHaveAttribute("aria-current", "page");
     expect(await within(rail).findByText("3 open conflicts")).toBeInTheDocument();
+    // A fixed strong red: the white number stays readable in dark mode too.
+    expect(within(rail).getByText("3 open conflicts").parentElement?.className).toContain("bg-rail-badge");
   });
 
   it("shows the Files views with the account switcher on top", async () => {
@@ -266,6 +268,38 @@ describe("rail and panel", () => {
     await userEvent.click(within(dialog).getByRole("link", { name: "CleanSync home" }));
     await waitFor(() => expect(screen.getAllByTestId("location")[0].textContent).toBe("/"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps Tab inside the views sheet while it is open", async () => {
+    shell("/recent");
+    await userEvent.click(screen.getByRole("button", { name: "Show views" }));
+    const dialog = screen.getByRole("dialog", { name: "Views" });
+    const all = Array.from(dialog.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input, [tabindex]:not([tabindex='-1'])"));
+    expect(all.length).toBeGreaterThan(1);
+    all[all.length - 1].focus();
+    await userEvent.tab();
+    expect(all[0]).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(all[all.length - 1]).toHaveFocus();
+    dialog.focus(); // the sheet itself has focus right after it opens
+    await userEvent.tab({ shift: true });
+    expect(all[all.length - 1]).toHaveFocus();
+  });
+
+  it("shows a white focus ring on the indigo rail and bottom bar", () => {
+    shell("/recent");
+    for (const name of ["Sections", "Sections at the bottom"]) {
+      const links = within(screen.getByRole("navigation", { name })).getAllByRole("link");
+      for (const link of links) expect(link.className, `${name}: ${link.textContent}`).toContain("focus-visible:outline-rail-mark");
+    }
+  });
+
+  it("keeps the bottom bar clear of the phone's home bar, and the content clear of the bar", () => {
+    shell("/recent");
+    const bar = screen.getByRole("navigation", { name: "Sections at the bottom" });
+    expect(bar.className).toContain("pb-[env(safe-area-inset-bottom)]");
+    expect(bar.className).toContain("h-[calc(4rem+env(safe-area-inset-bottom))]");
+    expect(screen.getByRole("main").parentElement?.className).toContain("pb-[calc(4rem+env(safe-area-inset-bottom))]");
   });
 
   it("has a bottom bar with every section for phones", () => {

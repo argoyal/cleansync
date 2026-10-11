@@ -26,7 +26,7 @@ export function UploadTray() {
   return (
     <section
       aria-label="Uploads"
-      className="fixed bottom-4 right-4 z-40 w-[min(360px,calc(100vw-2rem))] rounded-card border border-line bg-surface shadow-float"
+      className="fixed bottom-20 md:bottom-4 right-4 z-40 w-[min(360px,calc(100vw-2rem))] rounded-card border border-line bg-surface shadow-float"
     >
       <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
         <h2 aria-live="polite" className="flex-1 font-semibold">

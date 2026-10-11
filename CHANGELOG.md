@@ -3,6 +3,8 @@
 ## 0.2.0 — not released yet
 
 - DriveSync is now called CleanSync. The data folder, `.drivesync-volume` and the environment variables keep their names, so an existing installation upgrades in place. The image is `ghcr.io/argoyal/cleansync`.
+- Upgrading: the example compose service is renamed from `drivesync` to `cleansync`. Run `docker compose up -d --remove-orphans` once when you upgrade, so the old `drivesync` container goes away.
+- The + New button and uploads are hidden in 0.2.0 (one switch; the code stays and comes back later). "Sync a Drive folder…" moved to the Files panel.
 
 ## 0.1.0 — 2026-10-09
 - Backend core: login, Google account connection, sync pairs, first-sync preview and confirmation, scheduled and watched two-way sync with deletion limit, conflicts, history, logs and live events.

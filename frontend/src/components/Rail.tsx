@@ -11,7 +11,7 @@ import { Mark } from "./Mark";
 export function RailBadge({ section, n }: { section: SectionId; n?: number }) {
   if (!n) return null;
   return (
-    <span className="absolute right-2 top-1 min-w-[18px] rounded-full bg-err px-1 text-center text-[11px] font-bold leading-[18px] text-rail-mark tabular">
+    <span className="absolute right-2 top-1 min-w-[18px] rounded-full bg-rail-badge px-1 text-center text-[11px] font-bold leading-[18px] text-rail-mark tabular">
       <span aria-hidden="true">{n}</span>
       <span className="sr-only">{BADGE_TEXT[section]?.(n)}</span>
     </span>
@@ -23,7 +23,7 @@ function RailItem({ s, active, badge }: { s: Section; active: boolean; badge?: n
     <Link
       to={s.to}
       aria-current={active ? "page" : undefined}
-      className={`relative flex w-[68px] flex-col items-center gap-1 rounded-card py-2.5 text-meta ${active ? `${SECTION_STYLE[s.id].tile} font-bold` : "hover:bg-rail-ink/10"}`}
+      className={`relative flex w-[68px] focus-visible:outline-rail-mark  flex-col items-center gap-1 rounded-card py-2.5 text-meta ${active ? `${SECTION_STYLE[s.id].tile} font-bold` : "hover:bg-rail-ink/10"}`}
     >
       <Icon name={s.icon} className="text-[22px]" />
       {s.label}
@@ -42,7 +42,7 @@ export function Rail({ section, badges }: { section: SectionId; badges: Badges }
   const settings = SECTIONS[SECTIONS.length - 1];
   return (
     <nav aria-label="Sections" className="hidden w-[84px] shrink-0 flex-col items-center gap-2 bg-rail py-4 text-rail-ink md:flex">
-      <Link to="/" aria-label={`${name} home`} className="mb-3 rounded-[11px]">
+      <Link to="/" aria-label={`${name} home`} className="mb-3 rounded-[11px] focus-visible:outline-rail-mark">
         <Mark />
       </Link>
       {SECTIONS.slice(0, -1).map((s) => (

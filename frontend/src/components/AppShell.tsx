@@ -13,6 +13,24 @@ import { Rail } from "./Rail";
 import { SectionPanel } from "./SectionPanel";
 import { Notice } from "./ui";
 
+const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex='-1'])";
+
+/** The sheet is modal: Tab past its last control comes back to its first, and Shift+Tab back. */
+function keepTabInside(e: KeyboardEvent, box: HTMLElement) {
+  const items = Array.from(box.querySelectorAll<HTMLElement>(FOCUSABLE));
+  if (items.length === 0) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  const at = document.activeElement;
+  if (e.shiftKey && (at === first || at === box || !box.contains(at))) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (at === last || !box.contains(at))) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 /** Spec §9, draft B: icon rail, section panel, content (a bottom bar and a sheet on phones). */
 export function AppShell({ newButton }: { newButton?: ReactNode }) {
   useLiveEvents();
@@ -32,6 +50,7 @@ export function AppShell({ newButton }: { newButton?: ReactNode }) {
     sheetBox.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setSheet(false);
+      if (e.key === "Tab" && sheetBox.current) keepTabInside(e, sheetBox.current);
     };
     document.addEventListener("keydown", onKey);
     return () => {
@@ -69,7 +88,7 @@ export function AppShell({ newButton }: { newButton?: ReactNode }) {
           </aside>
         </div>
       )}
-      <div className="flex min-w-0 flex-1 flex-col pb-16 md:pb-0">
+      <div className="flex min-w-0 flex-1 flex-col pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0">
         <ContentBar section={section} onViews={() => setSheet(true)} />
         {stopped && (
           <div className="px-3 pt-3 sm:px-6">

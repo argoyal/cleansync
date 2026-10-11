@@ -117,4 +117,20 @@ describe("theme", () => {
     expect(block(":root {")).toContain("--bg: 245 246 250;");
     expect(block(":root {")).toContain("--sec-mail: 242 163 107;");
   });
+
+  it("the rail badge keeps one strong red in every theme, so its white number stays readable", () => {
+    const block = (start: string) => css.slice(css.indexOf(start), css.indexOf("}", css.indexOf(start)));
+    for (const start of [":root {", ':root:not([data-theme="light"])', ':root[data-theme="dark"]']) {
+      expect(block(start), start).toContain("--rail-badge: 194 54 47;");
+    }
+    expect(read("../../tailwind.config.ts")).toContain('"rail-badge": token("rail-badge")');
+  });
+
+  it("on phones, toasts and the upload tray sit above the bottom bar", () => {
+    for (const file of ["../components/Toasts.tsx", "../components/UploadTray.tsx"]) {
+      const src = read(file);
+      expect(src, file).toContain("bottom-20 md:bottom-4");
+      expect(src, file).not.toMatch(/fixed bottom-4/);
+    }
+  });
 });

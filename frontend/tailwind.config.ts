@@ -27,6 +27,7 @@ export default {
         rail: token("rail"),
         "rail-ink": token("rail-ink"),
         "rail-mark": token("rail-mark"),
+        "rail-badge": token("rail-badge"),
         panel: token("panel"),
         ...Object.fromEntries(
           ["files", "mail", "activity", "recovery", "settings"].flatMap((s) => [

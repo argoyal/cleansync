@@ -8,9 +8,9 @@ CleanSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 
 ## What it does
 - Connect one or more Google accounts. Each syncs into its own folder: `storage/<email>/`.
-- A web app that looks and works like Google Drive: browse, open files in a new tab (video can seek), download files and whole folders, upload files and folders of any size, new folders, rename, move, delete, blank Office files and new Google Docs/Sheets/Slides, each item marked synced, syncing, waiting or in conflict.
+- A web app that looks and works like Google Drive: browse, open files in a new tab (video can seek), download files and whole folders, rename, move and delete, each item marked synced, syncing, waiting or in conflict.
 - Deleted items first go to a Recovery folder on the server, then to Drive's trash at the next sync.
-- Start syncing any Drive folder from + New, or any local folder from its right-click menu; synced and not-synced folders are marked.
+- Start syncing any Drive folder from "Sync a Drive folder…" in the Files panel, or any local folder from its right-click menu; synced and not-synced folders are marked.
 - Two-way sync on a schedule (every 1–60 minutes), when local files change, or when you click Sync now.
 - **Before the first sync**, shows what is only local, only on Drive, and different on both, and waits for you to type a confirmation.
 - **Before every sync**, does a dry run. If it would delete more files than your limit (default 10), it stops and shows you the list.
@@ -19,7 +19,7 @@ CleanSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 - **One place for Files and Mail:** a rail on the left picks Files, Mail, Activity, Recovery or Settings; the panel beside it has the account switcher and that section's views. On a phone the rail is a bar along the bottom.
 - **Offload:** keep files on the server and remove them from Google Drive (into Drive's trash) to free Drive space. Only when you ask, checked file by file before and after. Right-click, or pick many at once on the Offloaded page. Google Docs, Sheets and Slides stay on Drive. Restore to Drive any time.
 - **Recovery:** every copy CleanSync kept, with where it came from and when it is cleaned up. Restore one or many (never overwrites), or download them.
-- New files and uploads only go into synced folders.
+- In 0.2.0 the + New button (new folders, uploads, blank Office files, Google Docs/Sheets/Slides) is hidden while Files and Mail settle into one app. Its code stays, and it comes back in a later release.
 
 ## Quick start
 1. Create a Google OAuth client: [docs/google-oauth-setup.md](docs/google-oauth-setup.md).
@@ -27,6 +27,7 @@ CleanSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 3. Make the data folder owned by user 1000: `sudo mkdir -p /srv/drivesync && sudo chown 1000:1000 /srv/drivesync`.
 4. While the image is private, log in to the registry once: `docker login ghcr.io` (a GitHub token with `read:packages`).
 5. `docker compose -f compose.yml pull && docker compose -f compose.yml up -d`. Run the same two commands again to update to the newest `latest` image.
+   Upgrading from 0.1.0: the example compose service is now called `cleansync` (it was `drivesync`). Copy the new example over your `compose.yml` and run `docker compose -f compose.yml up -d --remove-orphans` once, so the old `drivesync` container is removed.
 6. Log in and change the password. If you left `ADMIN_PASSWORD` empty, the first password is in `app/data/secrets/initial-admin-password`.
 
 Open `PUBLIC_URL`, log in, choose your own password, and the setup wizard walks you through connecting Google, choosing the folders, checking the preview and starting the first sync. The REST API is described at `PUBLIC_URL/api/docs` (logged-in sessions only).
