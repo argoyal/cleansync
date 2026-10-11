@@ -1,3 +1,4 @@
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -95,3 +96,41 @@ async def test_the_pacer_lets_a_burst_through_then_waits():
     assert waits == [pytest.approx(20)]
     await p.wait("gd_bob", 60)  # each mailbox has its own pace
     assert len(waits) == 1
+
+
+def test_a_failed_read_on_a_new_day_does_not_carry_the_old_days_units_over(session_factory, db):
+    clock = Clock()
+    fail = [False]
+
+    def flaky():
+        if fail[0]:
+            fail[0] = False
+            raise RuntimeError("database is locked")
+        return session_factory()
+
+    b = ApiBudget(flaky, budget=lambda: 1000, clock=clock)
+    b.spend(50)
+    clock.now += timedelta(hours=2)  # a new UTC day
+    fail[0] = True
+    with pytest.raises(RuntimeError):
+        b.used_today()
+    assert b.used_today() == 0  # tried again, and the old day's 50 are not counted today
+    b.spend(1)
+    b.flush()
+    assert db.get(ApiUsage, ("2026-10-10", "counted")).units == 50
+    assert db.get(ApiUsage, ("2026-10-11", "counted")).units == 1
+
+
+def test_many_threads_spending_at_once_lose_nothing(session_factory):
+    b = ApiBudget(session_factory, budget=lambda: 1_000_000, clock=Clock())
+
+    def work():
+        for _ in range(1000):
+            b.spend(1)
+
+    threads = [threading.Thread(target=work) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert b.used_today() == 8000

@@ -100,11 +100,14 @@ class ApiBudget:
             return
         if self._day is not None:
             self._save()
-        self._day = today
+        loaded = {COUNTED: 0, DRIVE_ESTIMATE: 0}
         with self.sf() as db:
-            for bucket in self._used:
+            for bucket in loaded:
                 row = db.get(ApiUsage, (today, bucket))
-                self._used[bucket] = row.units if row is not None else 0
+                loaded[bucket] = row.units if row is not None else 0
+        # Only after the read worked: a failed read leaves the old day in place, to retry.
+        self._used = loaded
+        self._day = today
         self._unsaved = 0
 
     def _save(self) -> None:
