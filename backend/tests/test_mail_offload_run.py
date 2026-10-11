@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 from datetime import UTC, datetime, timedelta
 
 from app.models import MailJob, MailOffload, MailOffloadItem
@@ -13,10 +14,17 @@ from app.models.enums import (
 from app.services.accounts.services import service_state
 from app.services.app_settings import set_settings
 from app.services.google.quota import ApiBudget
+from app.services.mail import offload as offload_mod
 from app.services.mail.index import sync_state
-from app.services.mail.offload import BACKUP_CHECKING_MSG
+from app.services.mail.offload import (
+    BACKUP_CHECKING_MSG,
+    OFFLOAD_SLOW_MSG,
+    SKIP_GONE,
+    SKIP_TOO_NEW,
+)
 from app.services.mail.queue import MailQueue
 from app.services.mail.store import eml_path
+from app.services.queue import MISSING_DISK_MSG
 from tests.mail_helpers import fake_adapter
 from tests.test_mail_api import OneAdapter
 
@@ -27,6 +35,27 @@ def _start(client, acc, confirm, **body):
     return client.post(
         "/api/mail/offloads", json={"account_id": acc.id, "confirm": confirm, **body}
     )
+
+
+class AfterTrash:
+    """The real adapter, with something done right after each trash call."""
+
+    def __init__(self, inner, after):
+        self.inner, self.after, self.trashed = inner, after, []
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    async def trash(self, id):
+        await self.inner.trash(id)
+        self.trashed.append(id)
+        self.after(id, len(self.trashed))
+
+
+def _wrap(box, after):
+    adapter = AfterTrash(box.mail.adapters.adapter, after)
+    box.mail.adapters = OneAdapter(adapter)
+    return adapter
 
 
 def _trash_calls(box):
@@ -230,8 +259,6 @@ async def test_a_stop_during_the_run_fails_it_and_leaves_the_rest_in_gmail(
     box = offload_box
     await box.backup()
     _start(auth_client, box.acc, 3, q="older_than:1y")
-    from app.services.queue import MISSING_DISK_MSG
-
     app.state.queue.disabled_reason = MISSING_DISK_MSG
     await box.run_queued()
     off = db.query(MailOffload).one()
@@ -282,3 +309,122 @@ async def test_a_failing_tick_hook_does_not_stop_the_tick(offload_box):
     box.mail.tick_hooks.append(lambda: seen.append("after"))
     await box.mail.tick()
     assert seen == ["after"]
+
+
+async def test_a_disk_gone_mid_run_fails_the_offload_and_skips_nothing(
+    auth_client, offload_box, db
+):
+    box = offload_box
+    await box.backup()
+    assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
+    root = box.app.state.layout.mail_root
+    _wrap(box, lambda pid, n: shutil.rmtree(root) if n == 1 else None)
+    await box.run_queued()
+    off = db.query(MailOffload).one()
+    assert off.state == MailOffloadState.FAILED and off.reason == MISSING_DISK_MSG
+    assert off.done == 1 and off.skipped == 0
+    results = [i.result for i in db.query(MailOffloadItem).order_by(MailOffloadItem.id)]
+    assert results == [MailItemResult.OFFLOADED, MailItemResult.PENDING, MailItemResult.PENDING]
+    assert len(_trash_calls(box)) == 1
+
+
+async def test_a_mail_a_check_marked_deleted_after_our_trash_is_claimed_on_resume(
+    auth_client, offload_box, session_factory, db
+):
+    box = offload_box
+    await box.backup()
+    assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
+    day = {"now": datetime.now(UTC)}
+    budget = ApiBudget(session_factory, budget=lambda: 30, clock=lambda: day["now"])
+    box.mail.adapters = OneAdapter(fake_adapter(box.fake, budget=budget))
+    box.mail.budget = budget
+    await box.run_queued()  # the second mail is trashed, then the budget stops its check
+    off = db.query(MailOffload).one()
+    assert off.state == MailOffloadState.WAITING and off.done == 1
+    second = box.row("Old photos")
+    assert "TRASH" in box.fake.messages[second.provider_id].labels
+    day["now"] += timedelta(days=1)
+    box.mail.budget = ApiBudget(session_factory, budget=lambda: 10_000, clock=lambda: day["now"])
+    box.mail.adapters = OneAdapter(fake_adapter(box.fake))
+    await box.backup()  # a check sees it in Gmail's trash first
+    assert box.row("Old photos").state == MailState.DELETED
+    await box.mail.tick()
+    await box.run_queued()
+    db.refresh(off)
+    assert off.state == MailOffloadState.DONE and off.done == 3 and off.skipped == 0
+    row = box.row("Old photos")
+    assert row.state == MailState.OFFLOADED and row.offload_id == off.id
+
+
+async def test_the_minimum_age_is_read_for_each_mail(auth_client, offload_box, db):
+    box = offload_box
+    await box.backup()
+    assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
+    # Oldest first: Ancient note (900 days), Old photos (500), Old statement (400).
+    _wrap(box, lambda pid, n: set_settings(db, {"mail_min_age_days": 450}) if n == 1 else None)
+    await box.run_queued()
+    assert box.row("Old photos").state == MailState.OFFLOADED
+    assert box.row("Old statement").state == MailState.IN_MAIL
+    item = db.query(MailOffloadItem).filter_by(message_id=box.row("Old statement").id).one()
+    assert item.reason == SKIP_TOO_NEW.format(days=450)
+
+
+async def test_a_mail_gmail_loses_right_after_the_trash_call_says_so(auth_client, offload_box, db):
+    box = offload_box
+    await box.backup()
+    assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
+    _wrap(box, lambda pid, n: box.fake.remove(pid) if n == 1 else None)
+    await box.run_queued()
+    off = db.query(MailOffload).one()
+    assert off.done == 2 and off.skipped == 1
+    item = db.query(MailOffloadItem).filter_by(result=MailItemResult.SKIPPED).one()
+    assert item.reason == SKIP_GONE == "Gmail no longer has this mail. The copy here is kept."
+
+
+async def test_refusals_in_a_row_stop_the_run(auth_client, offload_box, db, monkeypatch):
+    box = offload_box
+    await box.backup()
+    monkeypatch.setattr(offload_mod, "REFUSED_IN_A_ROW", 2)
+    assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
+    box.fake.fail("POST", r"/trash$", 400, times=10)
+    await box.run_queued()
+    off = db.query(MailOffload).one()
+    assert off.state == MailOffloadState.FAILED and off.reason.startswith("Gmail refused 2 mails")
+    assert off.skipped == 2 and off.done == 0
+    detail = auth_client.get(f"/api/mail/offloads/{off.id}").json()
+    assert detail["not_done"] == 1
+    assert {box.row(s).state for s in OLD} == {MailState.IN_MAIL}
+
+
+async def test_a_rate_limit_waits_and_goes_on(auth_client, offload_box, db):
+    box = offload_box
+    await box.backup()
+    assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
+    box.fake.fail("POST", r"/trash$", 429, times=8)  # every try Google's client makes
+    await box.run_queued()
+    off = db.query(MailOffload).one()
+    assert off.state == MailOffloadState.WAITING and off.reason == OFFLOAD_SLOW_MSG
+    assert off.done == 0 and off.skipped == 0 and off.finished_at is None
+    assert {box.row(s).state for s in OLD} == {MailState.IN_MAIL}
+    await box.mail.tick()
+    await box.run_queued()
+    db.refresh(off)
+    assert off.state == MailOffloadState.DONE and off.done == 3
+
+
+async def test_an_offload_whose_job_cannot_start_ends_failed(
+    auth_client, offload_box, db, monkeypatch
+):
+    box = offload_box
+    await box.backup()
+    assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
+
+    def broken(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(offload_mod, "start_mail_job", broken)
+    await box.run_queued()
+    off = db.query(MailOffload).one()
+    db.refresh(off)
+    assert off.state == MailOffloadState.FAILED and "disk full" in off.reason
+    assert _trash_calls(box) == []

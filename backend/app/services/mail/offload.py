@@ -28,6 +28,7 @@ from app.services.events.bus import record_event
 from app.services.google.client import RateLimited
 from app.services.google.quota import BudgetReached
 from app.services.mail.adapter import (
+    GONE,
     IN_TRASH,
     MailApiError,
     MailAuthError,
@@ -59,7 +60,10 @@ COUNT_CHANGED_MSG = (
 SKIP_NOT_IN_GMAIL = "It was no longer in Gmail."
 SKIP_TOO_NEW = "It is newer than {days} days, so it stayed in Gmail."
 SKIP_BAD_COPY = "The copy on this server didn't check out ({problem}), so it stayed in Gmail."
-SKIP_GONE = "Gmail no longer has this mail."
+SKIP_GONE = "Gmail no longer has this mail. The copy here is kept."
+SKIP_OUTSIDE_TRASH = (
+    "Gmail shows it outside its trash (maybe in Spam), so CleanSync left it as it is."
+)
 SKIP_REFUSED = "Gmail didn't move it to the trash ({error}), so it stayed in Gmail."
 SKIP_UNCHECKED = (
     "CleanSync couldn't check that it reached Gmail's trash ({error}). It shows as Deleted "
@@ -73,6 +77,13 @@ OFFLOAD_MAIL_OFF_MSG = f"Mail backup isn't on for this account any more. {REST_S
 OFFLOAD_TROUBLE_MSG = (
     "CleanSync couldn't reach Gmail ({error}). " + REST_STAYED + " Start a new offload to go on."
 )
+OFFLOAD_SLOW_MSG = (
+    "Gmail asked CleanSync to slow down. The offload goes on by itself in a minute or so."
+)
+OFFLOAD_REFUSED_MSG = (
+    "Gmail refused {n} mails in a row ({error}). " + REST_STAYED + " Start a new offload to go on."
+)
+REFUSED_IN_A_ROW = 5  # this many refusals in a row are Gmail's trouble, not those mails'
 
 
 def human_size(n: int) -> str:
@@ -118,6 +129,10 @@ def offload_out(db: Session, off: MailOffload, now: datetime) -> dict:
 def summary(off: MailOffload) -> str:
     text = f"Offloaded {off.done:,} of {off.total:,} mails ({human_size(off.bytes)})"
     return text + (f"; {off.skipped:,} skipped" if off.skipped else "")
+
+
+class _Refusing(Exception):
+    """Gmail refused several mails in a row: stop the run instead of skipping the list."""
 
 
 class MailOffloads:
@@ -220,25 +235,58 @@ class MailOffloads:
             db.commit()
         job_log(log_path, f"skipped mail {item_id}: {reason}")
 
+    async def _copy_problem(self, path, size: int, sha: str) -> str | None:
+        """Why the copy here can't be trusted, or None. A missing disk is not the mail's
+        fault: it stops the whole run (the mails not reached stay pending), never a skip."""
+        problem = await asyncio.to_thread(check_eml, path, size, sha)
+        if problem and (
+            await self.mail.stopped() or not await asyncio.to_thread(self.layout.mail_root.is_dir)
+        ):
+            raise Paused(self.mail.stop_message() or MISSING_DISK_MSG)
+        return problem
+
+    def _mark_offloaded(self, off_id: int, item_id: int, msg_id: int) -> None:
+        with self.sf() as db:
+            row = db.get(MailMessage, msg_id)
+            row.state, row.offload_id = MailState.OFFLOADED, off_id
+            db.get(MailOffloadItem, item_id).result = MailItemResult.OFFLOADED
+            off = db.get(MailOffload, off_id)
+            off.done += 1
+            off.bytes += row.size
+            db.commit()
+
     async def _offload_one(
-        self, acc: Account, adapter, off_id: int, item_id: int, min_age: int, log_path
-    ) -> None:
+        self, acc: Account, adapter, off_id: int, item_id: int, log_path
+    ) -> str | None:
         """Spec 5.3, in this order: 1. the copy here checks out; 2. trash in Gmail; 3. Gmail
         shows it in the trash, then it is marked offloaded. A failed step skips this mail
-        only. Trouble that is not this mail's (login, budget, Gmail unreachable) is raised."""
-        cutoff = self.clock() - timedelta(days=min_age)
+        only. Trouble that is not this mail's (login, budget, Gmail unreachable, the disk) is
+        raised. Returns Gmail's error when it refused to trash the mail."""
         with self.sf() as db:
+            min_age = self._min_age(db)  # as set now: the owner may change it during a run
             item = db.get(MailOffloadItem, item_id)
             row = db.get(MailMessage, item.message_id)
-            # Checked again now: the preview may be minutes or days old.
-            if row is None or row.account_id != acc.id or row.state != MailState.IN_MAIL:
+            if row is None or row.account_id != acc.id:
                 return self._skip(off_id, item_id, SKIP_NOT_IN_GMAIL, log_path)
-            if as_utc(row.date) > cutoff:
-                return self._skip(off_id, item_id, SKIP_TOO_NEW.format(days=min_age), log_path)
             path = eml_path(self.layout, acc.email, row.file_path)
+            state, date = row.state, row.date
             size, sha, pid, msg_id = row.file_size, row.sha256, row.provider_id, row.id
+        if state == MailState.DELETED:
+            # Trashed by this offload before a pause, and a check saw it in Gmail's trash
+            # before this offload could: claim it, once the copy here checks out.
+            problem = await self._copy_problem(path, size, sha)
+            if problem:
+                return self._skip(off_id, item_id, SKIP_BAD_COPY.format(problem=problem), log_path)
+            return await self._check_trashed(
+                adapter, off_id, item_id, msg_id, pid, log_path, outside=SKIP_OUTSIDE_TRASH
+            )
+        # Checked again now: the preview may be minutes or days old.
+        if state != MailState.IN_MAIL:
+            return self._skip(off_id, item_id, SKIP_NOT_IN_GMAIL, log_path)
+        if as_utc(date) > self.clock() - timedelta(days=min_age):
+            return self._skip(off_id, item_id, SKIP_TOO_NEW.format(days=min_age), log_path)
         # 1. Only a copy here that is whole and unchanged lets anything change in Gmail.
-        problem = await asyncio.to_thread(check_eml, path, size, sha)
+        problem = await self._copy_problem(path, size, sha)
         if problem:
             return self._skip(off_id, item_id, SKIP_BAD_COPY.format(problem=problem), log_path)
         try:
@@ -248,23 +296,33 @@ class MailOffloads:
         except (MailAuthError, MailSetupProblem, MailUnreachable):
             raise
         except MailApiError as e:
-            return self._skip(off_id, item_id, SKIP_REFUSED.format(error=e), log_path)
+            self._skip(off_id, item_id, SKIP_REFUSED.format(error=e), log_path)
+            return str(e)
+        return await self._check_trashed(adapter, off_id, item_id, msg_id, pid, log_path)
+
+    async def _check_trashed(
+        self,
+        adapter,
+        off_id: int,
+        item_id: int,
+        msg_id: int,
+        pid: str,
+        log_path,
+        outside: str = SKIP_NOT_TRASHED,
+    ) -> None:
         try:
             st = await adapter.state(pid)  # 3.
+        except MailNotFound:
+            return self._skip(off_id, item_id, SKIP_GONE, log_path)
         except (MailAuthError, MailSetupProblem, MailUnreachable):
             raise
         except MailApiError as e:
             return self._skip(off_id, item_id, SKIP_UNCHECKED.format(error=e), log_path)
+        if st.where == GONE:
+            return self._skip(off_id, item_id, SKIP_GONE, log_path)
         if st.where != IN_TRASH:
-            return self._skip(off_id, item_id, SKIP_NOT_TRASHED, log_path)
-        with self.sf() as db:
-            row = db.get(MailMessage, msg_id)
-            row.state, row.offload_id = MailState.OFFLOADED, off_id
-            db.get(MailOffloadItem, item_id).result = MailItemResult.OFFLOADED
-            off = db.get(MailOffload, off_id)
-            off.done += 1
-            off.bytes += row.size
-            db.commit()
+            return self._skip(off_id, item_id, outside, log_path)
+        self._mark_offloaded(off_id, item_id, msg_id)
         job_log(log_path, f"offloaded {pid}")
 
     # ---- the job -------------------------------------------------------------------------
@@ -311,15 +369,18 @@ class MailOffloads:
             off = db.get(MailOffload, off_id)
             off.state, off.reason = MailOffloadState.RUNNING, None
             db.commit()
-            batch = int(get_setting(db, "mail_batch_size"))  # type: ignore[arg-type]
-            min_age = self._min_age(db)
-            job = start_mail_job(
-                db, self.layout, self.bus, account_id, MailJobKind.OFFLOAD, trigger, total=off.total
-            )
         self._changed(account_id, off_id)
+        job = None
         state, reason = MailOffloadState.DONE, None
         try:
+            with self.sf() as db:
+                batch = int(get_setting(db, "mail_batch_size"))  # type: ignore[arg-type]
+                total = db.get(MailOffload, off_id).total
+                job = start_mail_job(
+                    db, self.layout, self.bus, account_id, MailJobKind.OFFLOAD, trigger, total
+                )
             adapter = self.mail.adapter_for(acc)
+            refused: list[str] = []  # Gmail's refusals in a row
             while True:
                 with self.sf() as db:
                     items = list(
@@ -338,14 +399,19 @@ class MailOffloads:
                 if await self.mail.stopped():  # before every batch (spec 3.4)
                     raise Paused(self.mail.stop_message() or MISSING_DISK_MSG)
                 for item_id in items:
-                    await self._offload_one(acc, adapter, off_id, item_id, min_age, job.log_path)
+                    error = await self._offload_one(acc, adapter, off_id, item_id, job.log_path)
+                    refused = [*refused, error] if error else []
+                    if len(refused) >= REFUSED_IN_A_ROW:
+                        raise _Refusing(OFFLOAD_REFUSED_MSG.format(n=len(refused), error=error))
                 with self.sf() as db:
                     off = db.get(MailOffload, off_id)
                     update_mail_job(db, job.id, done=off.done, bytes_=off.bytes)
                 self._changed(account_id, off_id)  # one "mail" event per batch
-        except (BudgetReached, RateLimited) as e:
-            state, reason = MailOffloadState.WAITING, str(e)  # goes on by itself later
-        except Paused as e:
+        except BudgetReached as e:
+            state, reason = MailOffloadState.WAITING, str(e)  # goes on the next UTC day
+        except RateLimited:
+            state, reason = MailOffloadState.WAITING, OFFLOAD_SLOW_MSG  # the next minute
+        except (Paused, _Refusing) as e:
             state, reason = MailOffloadState.FAILED, str(e)
         except MailAuthError as e:
             await self.mail._auth_lost(account_id, e)
@@ -357,6 +423,16 @@ class MailOffloads:
         except Exception as e:
             log.exception("mail offload %s failed", off_id)
             state, reason = MailOffloadState.FAILED, f"Something went wrong: {e}"
+        try:
+            self._finish(account_id, email, off_id, job, state, reason)
+        except Exception:
+            # Never leave it RUNNING. (The mail queue closes a job row left RUNNING.)
+            log.exception("could not close mail offload %s", off_id)
+            self._never_running(off_id)
+        self._changed(account_id, off_id)
+        self.mail.budget.flush()
+
+    def _finish(self, account_id: int, email: str, off_id: int, job, state, reason) -> None:
         with self.sf() as db:
             off = db.get(MailOffload, off_id)
             if state == MailOffloadState.DONE and off.skipped:
@@ -372,9 +448,10 @@ class MailOffloads:
                 MailOffloadState.WAITING: JobState.PAUSED,
             }.get(state, JobState.FAILED)
             message = f"{text}. {reason}" if reason else text
-            finish_mail_job(
-                db, self.bus, job.id, job_state, message, done=off.done, bytes_=off.bytes
-            )
+            if job is not None:
+                finish_mail_job(
+                    db, self.bus, job.id, job_state, message, done=off.done, bytes_=off.bytes
+                )
             level = {JobState.SUCCESS: "info", JobState.PAUSED: "warning"}.get(job_state, "error")
             record_event(
                 db,
@@ -385,5 +462,15 @@ class MailOffloads:
                 account_id=account_id,
                 data={"mail_offload_id": off_id},
             )
-        self._changed(account_id, off_id)
-        self.mail.budget.flush()
+
+    def _never_running(self, off_id: int) -> None:
+        try:
+            with self.sf() as db:
+                off = db.get(MailOffload, off_id)
+                if off is not None and off.state == MailOffloadState.RUNNING:
+                    off.state = MailOffloadState.FAILED
+                    off.reason = "Something went wrong while closing this offload. " + REST_STAYED
+                    off.finished_at = self.clock()
+                    db.commit()
+        except Exception:
+            log.exception("could not mark mail offload %s as failed", off_id)
