@@ -31,7 +31,7 @@ PDF_CSP = "frame-ancestors 'none'"
 NO_SANDBOX_TYPES = ("application/pdf",)
 
 
-def _csp_for(served: str) -> str:
+def csp_for(served: str) -> str:
     if served in NO_SANDBOX_TYPES or served.startswith(("video/", "audio/")):
         return PDF_CSP
     return FILE_CSP
@@ -64,7 +64,7 @@ def serve_file(
     served, inline_ok = serve_policy(guess_mime(target.name))
     kind = "inline" if inline_ok and not download else "attachment"
     headers = {
-        "Content-Security-Policy": _csp_for(served),
+        "Content-Security-Policy": csp_for(served),
         "Cache-Control": "private, no-cache",
         "Content-Disposition": content_disposition(kind, target.name),
     }

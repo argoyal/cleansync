@@ -93,3 +93,37 @@ class LabelCountOut(BaseModel):
 class MailCountsOut(BaseModel):
     views: dict[str, int]
     labels: list[LabelCountOut]
+
+
+class LabelOut(BaseModel):
+    id: str
+    name: str
+
+
+class AttachmentOut(BaseModel):
+    index: int
+    name: str
+    type: str
+    size: int
+    preview: bool
+
+
+class MessageOut(BaseModel):
+    id: int
+    account_id: int
+    provider_id: str
+    thread_id: str
+    from_addr: str
+    to_addrs: str
+    cc_addrs: str
+    subject: str
+    date: UtcDatetime
+    size: int
+    file_size: int
+    labels: list[LabelOut]
+    state: str
+    offload_id: int | None
+    attachments: list[AttachmentOut]
+    has_remote_images: bool
+    gmail_url: str | None
+    file_missing: bool

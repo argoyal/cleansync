@@ -4,14 +4,29 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.serve import content_disposition, csp_for
 from app.auth.deps import AuthContext, get_db, require_user
 from app.core.clock import utcnow
 from app.models import Account, MailMessage
-from app.schemas.mail import MailCountsOut, ThreadOut, ThreadPageOut
+from app.models.enums import MailState
+from app.schemas.mail import AttachmentOut, MailCountsOut, MessageOut, ThreadOut, ThreadPageOut
+from app.services.files.mimes import serve_policy
+from app.services.mail.gmail import valid_mail_id
 from app.services.mail.listing import label_counts, list_threads, totals, view_counts
-from app.services.mail.reader import MailFileMissing, body_csp, read_eml_of, render_body
+from app.services.mail.reader import (
+    MailFileMissing,
+    attachment_of,
+    body_csp,
+    can_preview,
+    gmail_url,
+    has_remote_images,
+    label_names,
+    read_eml_of,
+    render_body,
+)
 from app.services.mail.search import SearchError, mail_conditions
 
 MAX_QUERY_CHARS = 1000
@@ -97,6 +112,128 @@ def body(
         headers={
             "Content-Security-Policy": body_csp(images),
             "X-Frame-Options": "SAMEORIGIN",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+def message_out(request: Request, db: Session, row: MailMessage, account: Account) -> MessageOut:
+    try:
+        raw: bytes | None = read_eml_of(request.app.state.layout, account.email, row)
+    except MailFileMissing:
+        raw = None
+    attachments = (
+        [
+            AttachmentOut(
+                index=i,
+                name=a["name"],
+                type=a["type"],
+                size=a["size"],
+                preview=can_preview(a["type"]),
+            )
+            for i, a in enumerate(row.attachments or [])
+        ]
+        if raw is not None
+        else []
+    )
+    return MessageOut(
+        id=row.id,
+        account_id=row.account_id,
+        provider_id=row.provider_id,
+        thread_id=row.thread_id,
+        from_addr=row.from_addr,
+        to_addrs=row.to_addrs,
+        cc_addrs=row.cc_addrs,
+        subject=row.subject,
+        date=row.date,
+        size=row.size,
+        file_size=row.file_size,
+        labels=label_names(db, row.account_id, list(row.labels or [])),
+        state=row.state,
+        offload_id=row.offload_id,
+        attachments=attachments,
+        has_remote_images=raw is not None and has_remote_images(raw),
+        gmail_url=gmail_url(account.email, row.provider_id)
+        if row.state == MailState.IN_MAIL
+        else None,
+        file_missing=raw is None,
+    )
+
+
+@router.get("/messages/{message_id}", response_model=MessageOut)
+def message(
+    message_id: int,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    row, account = message_or_404(db, message_id)
+    return message_out(request, db, row, account)
+
+
+@router.get("/threads/{thread_id}", response_model=list[MessageOut])
+def thread(
+    thread_id: str,
+    account_id: int,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    account = account_or_404(db, account_id)
+    if valid_mail_id(thread_id) is None:
+        raise HTTPException(404, "thread not found")
+    rows = db.scalars(
+        select(MailMessage)
+        .where(MailMessage.account_id == account_id, MailMessage.thread_id == thread_id)
+        .order_by(MailMessage.date, MailMessage.id)
+    )
+    return [message_out(request, db, r, account) for r in rows]
+
+
+@router.get("/messages/{message_id}/attachments/{index}")
+def attachment(
+    message_id: int,
+    index: int,
+    request: Request,
+    download: bool = False,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    row, account = message_or_404(db, message_id)
+    try:
+        name, ctype, data = attachment_of(eml_bytes(request, account, row), index)
+    except IndexError:
+        raise HTTPException(404, "attachment not found") from None
+    served, inline_ok = serve_policy(ctype)
+    show = inline_ok and can_preview(ctype) and not download
+    return Response(
+        data,
+        media_type=served,
+        headers={
+            "Content-Security-Policy": csp_for(served),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": content_disposition("inline" if show else "attachment", name),
+        },
+    )
+
+
+@router.get("/messages/{message_id}/eml")
+def eml(
+    message_id: int,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    row, account = message_or_404(db, message_id)
+    name = "".join(c for c in (row.subject or "mail") if c not in '/\\:*?"<>|' and c.isprintable())
+    name = name.strip()[:80] or "mail"
+    return Response(
+        eml_bytes(request, account, row),
+        media_type="message/rfc822",
+        headers={
+            "Content-Disposition": content_disposition("attachment", f"{name}.eml"),
+            "X-Content-Type-Options": "nosniff",
             "Cache-Control": "private, no-store",
         },
     )

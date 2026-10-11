@@ -5,11 +5,15 @@ import base64
 import html as html_lib
 import logging
 from email.message import EmailMessage
+from urllib.parse import quote
 
-from app.models import MailMessage
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models import MailLabel, MailMessage
 from app.paths import Layout
 from app.services.mail.sanitize import INLINE_LIMIT, Cleaned, cid_refs, sanitize_html
-from app.services.mail.store import eml_path, read_message
+from app.services.mail.store import attachment_parts, eml_path, part_filename, read_message
 
 log = logging.getLogger(__name__)
 MISSING_FILE_MSG = "This mail's file is missing on the storage disk."
@@ -75,7 +79,8 @@ def _text_of(part: EmailMessage) -> str:
         return data.decode("utf-8", errors="replace") if isinstance(data, bytes) else ""
 
 
-def render_body(raw: bytes) -> Rendered:
+def render_body(raw: bytes, *, inline: bool = True) -> Rendered:
+    """`inline=False` skips reading the inline images out (to only count remote ones)."""
     try:
         msg = read_message(raw)
         part = msg.get_body(preferencelist=("html", "plain"))
@@ -86,7 +91,7 @@ def render_body(raw: bytes) -> Rendered:
     if not isinstance(content, str):
         content = ""
     if part is not None and part.get_content_type() == "text/html":
-        cleaned = sanitize_html(content, inline_images(msg, cid_refs(content)))
+        cleaned = sanitize_html(content, inline_images(msg, cid_refs(content)) if inline else {})
         return Rendered(_document(cleaned.html), cleaned.remote_images)
     return Rendered(_document(f"<pre>{html_lib.escape(content)}</pre>"), 0)
 
@@ -107,3 +112,51 @@ def body_csp(images: bool) -> str:
             "frame-ancestors 'self'",
         ]
     )
+
+
+PREVIEW_TYPES = ("application/pdf", "text/plain")
+
+
+def can_preview(content_type: str) -> bool:
+    """What the browser can show by itself (spec 6.2): PDF, images, plain text. SVG can carry
+    script, so it is only ever downloaded."""
+    if content_type == "image/svg+xml":
+        return False
+    return content_type in PREVIEW_TYPES or content_type.startswith("image/")
+
+
+def attachment_of(raw: bytes, index: int) -> tuple[str, str, bytes]:
+    parts = attachment_parts(read_message(raw))
+    if index < 0 or index >= len(parts):
+        raise IndexError(index)
+    part = parts[index]
+    try:
+        data = part.get_payload(decode=True) or b""
+    except Exception:
+        data = b""
+    return part_filename(part) or "attachment", part.get_content_type(), data
+
+
+def gmail_url(email: str, provider_id: str) -> str:
+    return (
+        f"https://mail.google.com/mail/u/{quote(email, safe='')}/#all/{quote(provider_id, safe='')}"
+    )
+
+
+def label_names(db: Session, account_id: int, ids: list[str]) -> list[dict]:
+    """User labels of a mail, by name (system labels are what the views show)."""
+    rows = db.scalars(
+        select(MailLabel).where(
+            MailLabel.account_id == account_id,
+            MailLabel.type == "user",
+            MailLabel.provider_label_id.in_(ids),
+        )
+    )
+    return sorted(
+        ({"id": r.provider_label_id, "name": r.name} for r in rows), key=lambda x: x["name"].lower()
+    )
+
+
+def has_remote_images(raw: bytes) -> bool:
+    """One cleaning pass that doesn't read the inline images out, so it costs little."""
+    return render_body(raw, inline=False).remote_images > 0
