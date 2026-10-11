@@ -120,6 +120,25 @@ def test_mail_setup_on_a_pretend_account_needs_no_google(auth_client, app, setti
     assert auth_client.get("/api/accounts").json()[0]["mail_permission"] is True
 
 
+def test_mail_setup_when_gmail_is_already_allowed_needs_no_google(auth_client, app, make_account):
+    acc = _account(app, make_account)
+    with app.state.session_factory() as db:
+        db.get(type(acc), acc.id).scopes = f"{DRIVE_SCOPE} {GMAIL_SCOPE}"
+        db.commit()
+    r = auth_client.post(f"/api/accounts/{acc.id}/mail/setup")
+    assert r.status_code == 200 and r.json() == {"auth_url": None}
+    assert _mail_state(app, acc) == ServiceState.SETTING_UP
+
+
+def test_mail_setup_without_gmail_allowed_yet_asks_google(auth_client, app, make_account):
+    acc = _account(app, make_account)
+    with app.state.session_factory() as db:
+        db.get(type(acc), acc.id).scopes = DRIVE_SCOPE
+        db.commit()
+    _setup_state(auth_client, acc)  # a Google sign-in link with Gmail in it
+    assert _mail_state(app, acc) == ServiceState.NOT_SET_UP
+
+
 def test_mail_setup_for_an_unknown_account_is_404(auth_client):
     assert auth_client.post("/api/accounts/999/mail/setup").status_code == 404
 

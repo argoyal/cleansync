@@ -143,7 +143,8 @@ class AccountService:
         """Ask Google again, now with Gmail too (spec §3.1). Drive keeps syncing meanwhile.
 
         A pretend local account has no Google behind it: it goes straight to "setting up"
-        (Plan 2 gives it a fake Gmail) and None is returned."""
+        (Plan 2 gives it a fake Gmail) and None is returned. So does an account whose
+        sign-in already allows Gmail."""
         with self.session_factory() as db:
             acc = db.get(Account, account_id)
             if acc is None:
@@ -154,6 +155,10 @@ class AccountService:
                 row = get_service(db, acc.id, ServiceKind.MAIL)
                 if row is None or row.state == ServiceState.NOT_SET_UP:
                     set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.SETTING_UP)
+                return None
+            if has_scope(acc.scopes, GMAIL_SCOPE):
+                # Google already allows Gmail for this account: no need to ask again.
+                self._follow_mail_permission(db, acc, "mail")
                 return None
         return self.start_connect(account_id, purpose="mail")
 
