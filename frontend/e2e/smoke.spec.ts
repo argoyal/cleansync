@@ -387,7 +387,7 @@ test("mail backup of the pretend account, with its job on Sync activity", async 
 });
 
 async function openMailNamed(page: Page, subject: string) {
-  await page.getByRole("list", { name: "Mail" }).getByRole("link", { name: new RegExp(subject) }).first().click();
+  await page.getByRole("list", { name: "Mail" }).getByRole("link", { name: new RegExp(subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) }).first().click();
   return page.frameLocator(`iframe[title="Mail: ${subject}"]`);
 }
 
@@ -399,12 +399,26 @@ test("read mail safely: threads, a hostile mail, images on request, attachments,
   // a blocked one fails with a "csp" error; one that was allowed goes out to the network.
   const remoteImageRequests: string[] = [];
   const blockedByPolicy: string[] = [];
+  const allowedImages: string[] = []; // answered by the network (or failed for a reason other than the policy)
+  const bodyPolicies: string[] = [];
   page.on("pageerror", (e) => problems.push(e.message));
+  page.on("dialog", (d) => {
+    problems.push(`a mail ran script: ${d.type()} "${d.message()}"`);
+    void d.dismiss();
+  });
+  page.on("response", (r) => {
+    if (/\/api\/mail\/messages\/\d+\/body/.test(r.url())) bodyPolicies.push(r.headers()["content-security-policy"] ?? "");
+  });
+  page.on("requestfinished", (r) => {
+    if (new URL(r.url()).hostname === "images.example.com") allowedImages.push(r.url());
+  });
   page.on("request", (r) => {
     if (new URL(r.url()).hostname === "images.example.com") remoteImageRequests.push(r.url());
   });
   page.on("requestfailed", (r) => {
-    if (new URL(r.url()).hostname === "images.example.com" && /csp/i.test(r.failure()?.errorText ?? "")) blockedByPolicy.push(r.url());
+    if (new URL(r.url()).hostname !== "images.example.com") return;
+    if (/csp/i.test(r.failure()?.errorText ?? "")) blockedByPolicy.push(r.url());
+    else allowedImages.push(r.url()); // e.g. the pretend host doesn't exist: it got past the policy and failed on the network
   });
   await ready(page);
   await setUpMail(page);
@@ -418,6 +432,8 @@ test("read mail safely: threads, a hostile mail, images on request, attachments,
   await expect(hostile.getByText("News")).toBeVisible();
   expect(await hostile.locator("script").count()).toBe(0);
   expect(await hostile.locator("[onclick]").count()).toBe(0);
+  await hostile.getByText("More").click(); // had an onclick in the mail; nothing runs (a dialog or page error would land in problems)
+  expect(bodyPolicies.at(-1)).toContain("default-src 'none'");
   // The frame is sandboxed with no scripts and no access to CleanSync itself.
   const sandbox = (await page.locator('iframe[title="Mail: Weekly digest #52"]').getAttribute("sandbox")) ?? "";
   expect(sandbox).not.toContain("allow-scripts");
@@ -426,12 +442,18 @@ test("read mail safely: threads, a hostile mail, images on request, attachments,
   // A tracking image waits for "Show images".
   await openMailNamed(page, "Your order has shipped");
   await expect(page.getByText("Images from the internet are hidden, so the sender can't tell you opened this mail.")).toBeVisible();
-  // Every attempt so far was stopped by the frame's policy: nothing reached the sender's server.
-  await expect.poll(() => blockedByPolicy.length).toBe(remoteImageRequests.length);
+  // The sender's server is asked for the image only after the click: first the frame's policy
+  // must have stopped at least one attempt, and nothing at all may have got past it.
+  await expect.poll(() => blockedByPolicy.length).toBeGreaterThan(0);
+  expect(allowedImages).toEqual([]);
+  expect(remoteImageRequests.length).toBe(blockedByPolicy.length);
+  const attemptsBefore = remoteImageRequests.length;
   await page.getByRole("button", { name: "Show images" }).click();
   await expect(page.locator('iframe[title="Mail: Your order has shipped"]')).toHaveAttribute("src", /images=1$/);
-  // Now the browser asks for it, and the policy lets the request out.
-  await expect.poll(() => remoteImageRequests.length).toBeGreaterThan(blockedByPolicy.length);
+  // Now there is a new request, and the policy lets it out.
+  await expect.poll(() => allowedImages.length).toBeGreaterThan(0);
+  expect(remoteImageRequests.length).toBeGreaterThan(attemptsBefore);
+  expect(bodyPolicies.at(-1)).toContain("img-src data: https: http:");
 
   // An inline image comes from the mail itself.
   const photos = await openMailNamed(page, "Trip photos");
@@ -476,12 +498,10 @@ test("on a phone, opening a mail hides the list and Back returns to it", async (
   await page.setViewportSize({ width: 390, height: 844 });
   await ready(page);
   await setUpMail(page);
-  await page.goto("/mail");
   const list = page.getByRole("list", { name: "Mail" });
   await expect(list).toBeVisible();
   await openMailNamed(page, "Trip photos");
   await expect(list).toBeHidden();
   await page.getByRole("link", { name: "Back" }).first().click();
   await expect(list).toBeVisible();
-  await page.setViewportSize({ width: 1280, height: 720 });
 });
