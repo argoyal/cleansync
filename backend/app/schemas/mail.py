@@ -61,3 +61,35 @@ class ActivityJobOut(BaseModel):
     completed_at: UtcDatetime | None
     message: str | None
     log_url: str
+
+
+class ThreadOut(BaseModel):
+    thread_id: str
+    count: int
+    last_date: UtcDatetime
+    message_id: int
+    from_addr: str
+    subject: str
+    snippet: str
+    has_attachments: bool
+    unread: bool
+    offloaded: bool
+    deleted: bool
+
+
+class ThreadPageOut(BaseModel):
+    threads: list[ThreadOut]
+    next_cursor: str | None
+    total: int | None  # mails in this view or search (first page only)
+    total_bytes: int | None
+
+
+class LabelCountOut(BaseModel):
+    id: str
+    name: str
+    count: int
+
+
+class MailCountsOut(BaseModel):
+    views: dict[str, int]
+    labels: list[LabelCountOut]
