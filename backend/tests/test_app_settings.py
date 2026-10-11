@@ -13,6 +13,11 @@ def test_defaults_match_spec(db):
         "max_parallel_pairs": 2,
         "session_idle_hours": 12,
         "log_retention_days": 30,
+        "mail_check_interval_s": 300,
+        "mail_min_age_days": 30,
+        "mail_batch_size": 100,
+        "mail_disk_floor_gb": 2,
+        "google_daily_budget_units": 10_000_000,
     }
     assert get_setting(db, "max_parallel_pairs") == 2
 
@@ -50,6 +55,12 @@ def test_invalid_values_rejected(db, bad):
         {"max_parallel_pairs": 9},
         {"default_max_deletions": 1_000_001},
         {"log_retention_days": 3651},
+        {"mail_check_interval_s": 42},
+        {"mail_batch_size": 0},
+        {"mail_batch_size": 1001},
+        {"mail_min_age_days": 3651},
+        {"mail_disk_floor_gb": 10_001},
+        {"google_daily_budget_units": 80_000_001},
     ],
 )
 def test_non_int_and_oversized_rejected(db, bad):
