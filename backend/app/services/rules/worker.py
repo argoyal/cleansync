@@ -107,6 +107,18 @@ class SortingWorker:
                     job.state = RuleJobState.PREVIEWED
         db.delete(todo)
 
+    def _own_todo(
+        self, db: Session, account_id: int, message_id: int, job_id: int | None
+    ) -> RuleTodo | None:
+        """The mail's to-do row, if it still belongs to the job the mail was being decided for.
+        A new run of rules may have taken the mail over meanwhile (start_preview stops the old
+        preview and queues the mail again under the new job): its row is then left alone for the
+        next pass, and whatever was decided for the old job is thrown away."""
+        todo = db.get(RuleTodo, (account_id, message_id))
+        if todo is None or todo.job_id != job_id:
+            return None
+        return todo
+
     def _give_up(self, db: Session, todo: RuleTodo, reason: str) -> None:
         row = db.get(MailMessage, todo.message_id)
         db.add(
@@ -168,13 +180,13 @@ class SortingWorker:
         for message_id, job_id in keys:
             try:
                 done, did_change, stop = await self._sort_one(
-                    account_id, email, message_id, job_id, chooser, now, sorting_on
+                    account_id, email, message_id, chooser, now, sorting_on
                 )
             except Exception:
                 log.exception("sorting mail %s failed", message_id)
                 done, did_change, stop = 0, True, False
                 with self.sf() as db:
-                    todo = db.get(RuleTodo, (account_id, message_id))
+                    todo = self._own_todo(db, account_id, message_id, job_id)
                     if todo is not None:
                         if todo.attempts + 1 >= GIVE_UP_AFTER:
                             self._give_up(db, todo, GAVE_UP)
@@ -191,14 +203,17 @@ class SortingWorker:
         return handled
 
     async def _sort_one(
-        self, account_id, email, message_id, job_id, chooser, now, sorting_on
+        self, account_id, email, message_id, chooser, now, sorting_on
     ) -> tuple[int, bool, bool]:
-        """Decide one to-do mail. Returns (mails finished, anything changed, stop the batch)."""
+        """Decide one to-do mail. Returns (mails finished, anything changed, stop the batch).
+        The job comes from the to-do row read here, and every later write first checks the row
+        still belongs to that job (see _own_todo)."""
         with self.sf() as db:
             todo = db.get(RuleTodo, (account_id, message_id))
             row = db.get(MailMessage, message_id)
             if todo is None:
                 return 0, False, False
+            job_id = todo.job_id
             if (
                 (job_id is None and not sorting_on)
                 or row is None
@@ -214,7 +229,7 @@ class SortingWorker:
         except CopyUnreadable as e:
             reason = f"The copy here can't be read ({e})."
             with self.sf() as db:
-                todo = db.get(RuleTodo, (account_id, message_id))
+                todo = self._own_todo(db, account_id, message_id, job_id)
                 if todo is None:
                     return 0, False, False
                 if todo.attempts + 1 >= GIVE_UP_AFTER:
@@ -233,7 +248,7 @@ class SortingWorker:
             verdict = await decide(rules, mail, remembered=remembered, chooser=chooser, hints=hints)
         except AiError as e:
             with self.sf() as db:
-                todo = db.get(RuleTodo, (account_id, message_id))
+                todo = self._own_todo(db, account_id, message_id, job_id)
                 if todo is not None:
                     self._wait(db, todo, str(e))
                 ra = _account(db, account_id)
@@ -242,6 +257,9 @@ class SortingWorker:
                 db.commit()
             return 0, True, True  # the model is down: the rest would fail the same way
         with self.sf() as db:
+            todo = self._own_todo(db, account_id, message_id, job_id)
+            if todo is None:
+                return 0, False, False
             status = (
                 DecisionStatus.NO_RULE
                 if verdict.rule is None
@@ -266,9 +284,7 @@ class SortingWorker:
                 job_id=job_id,
             )
             db.add(d)
-            todo = db.get(RuleTodo, (account_id, message_id))
-            if todo is not None:
-                self._finish(db, todo)
+            self._finish(db, todo)
             ra = _account(db, account_id)
             ra.failing_since, ra.last_error, ra.last_ok_at = None, None, self.clock()
             db.commit()

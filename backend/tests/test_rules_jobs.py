@@ -1,8 +1,11 @@
+import asyncio
+
 import pytest
 from sqlalchemy import select, update
 
 from app.models import MailMessage, RuleDecision, RuleJob, RuleTodo
-from app.models.enums import RuleJobState
+from app.models.enums import DecisionStatus, RuleJobState
+from app.services.ai.client import AiUnreachable
 from app.services.rules.jobs import RuleJobProblem, RuleJobs
 from app.services.rules.match import Choice
 from app.services.rules.store import RuleIn, create_rule, update_rule
@@ -348,3 +351,142 @@ async def test_applying_a_planned_change_withdraws_older_suggestions(gbox):
     with gbox.sf() as db:
         d = db.get(RuleDecision, old_id)
         assert d.status == "withdrawn" and d.reason == "A run of rules changed this mail."
+
+
+# ---- a new run started while the worker is still deciding the old preview ---------------
+def _job_state(gbox, jid):
+    with gbox.sf() as db:
+        j = db.get(RuleJob, jid)
+        return j.decided, j.total, j.state
+
+
+def _one_try_left(gbox, message_id):
+    with gbox.sf() as db:
+        db.get(RuleTodo, (gbox.acc.id, message_id)).attempts = 9  # the next failure gives up
+        db.commit()
+
+
+def _decisions_of(gbox, jid):
+    with gbox.sf() as db:
+        return list(db.scalars(select(RuleDecision).where(RuleDecision.job_id == jid)))
+
+
+async def test_a_new_run_keeps_the_mail_the_worker_was_deciding_for_the_old_preview(gbox):
+    with gbox.sf() as db:
+        create_rule(db, gbox.acc.id, ARCHIVE, "a")
+    m = gbox.add("M")
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Held:
+        async def choose(self, rules, mail, hints):
+            if not release.is_set():
+                entered.set()
+                await release.wait()
+            return Choice(rules[0].id, "fits")
+
+    worker = SortingWorker(
+        session_factory=gbox.sf, layout=gbox.layout, chooser=lambda: Held(), applier=gbox.applier
+    )
+    jobs = RuleJobs(gbox.sf, gbox.applier, worker)
+    old = jobs.start_preview(gbox.acc.id, view="inbox")
+    deciding = asyncio.ensure_future(worker.run_once(gbox.acc.id))
+    await entered.wait()
+    new = jobs.start_preview(gbox.acc.id, view="inbox")  # the old preview's dialog was closed
+    release.set()
+    await deciding
+    assert _decisions_of(gbox, old) == []  # nothing is written for the stopped job
+    while await worker.run_once(gbox.acc.id):
+        pass
+    assert _job_state(gbox, new) == (1, 1, RuleJobState.PREVIEWED)
+    (d,) = _decisions_of(gbox, new)
+    assert d.message_id == m.id and d.status == DecisionStatus.PLANNED
+    assert jobs.preview(gbox.acc.id, new).planned == 1
+
+
+async def test_a_give_up_for_the_old_preview_leaves_the_new_runs_mail_alone(gbox, monkeypatch):
+    from app.services.rules import worker as worker_mod
+    from app.services.rules.mailview import CopyUnreadable
+
+    with gbox.sf() as db:
+        create_rule(db, gbox.acc.id, ARCHIVE, "a")
+    m = gbox.add("M")
+    worker, jobs = setup(gbox)
+    old = jobs.start_preview(gbox.acc.id, view="inbox")
+    _one_try_left(gbox, m.id)
+    real, started = worker_mod.mail_for_model, []
+
+    def unreadable_once(*a, **kw):
+        if not started:  # while the copy is being read, a new run takes the mail over
+            started.append(jobs.start_preview(gbox.acc.id, view="inbox"))
+            _one_try_left(gbox, m.id)
+            raise CopyUnreadable("gone")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(worker_mod, "mail_for_model", unreadable_once)
+    assert await worker.run_once(gbox.acc.id) == 0
+    (new,) = started
+    assert _decisions_of(gbox, old) == [] and _decisions_of(gbox, new) == []
+    with gbox.sf() as db:
+        todo = db.get(RuleTodo, (gbox.acc.id, m.id))
+        assert todo.job_id == new and todo.attempts == 9 and todo.last_error is None
+    assert _job_state(gbox, new) == (0, 1, RuleJobState.PREVIEWING)
+    while await worker.run_once(gbox.acc.id):
+        pass
+    assert _job_state(gbox, new) == (1, 1, RuleJobState.PREVIEWED)
+    assert [d.status for d in _decisions_of(gbox, new)] == [DecisionStatus.PLANNED]
+
+
+async def test_an_unreachable_model_for_the_old_preview_leaves_the_new_runs_mail_alone(gbox):
+    with gbox.sf() as db:
+        create_rule(db, gbox.acc.id, ARCHIVE, "a")
+    m = gbox.add("M")
+    started = []
+
+    class DownAfterNewRun:
+        async def choose(self, rules, mail, hints):
+            started.append(jobs.start_preview(gbox.acc.id, view="inbox"))
+            raise AiUnreachable("down")
+
+    worker = SortingWorker(
+        session_factory=gbox.sf,
+        layout=gbox.layout,
+        chooser=lambda: DownAfterNewRun(),
+        applier=gbox.applier,
+    )
+    jobs = RuleJobs(gbox.sf, gbox.applier, worker)
+    jobs.start_preview(gbox.acc.id, view="inbox")
+    await worker.run_once(gbox.acc.id)
+    (new,) = started
+    with gbox.sf() as db:
+        todo = db.get(RuleTodo, (gbox.acc.id, m.id))
+        assert todo.job_id == new and todo.attempts == 0 and todo.last_error is None
+
+
+async def test_an_error_for_the_old_preview_does_not_give_up_the_new_runs_mail(gbox):
+    with gbox.sf() as db:
+        create_rule(db, gbox.acc.id, ARCHIVE, "a")
+    m = gbox.add("M")
+    started = []
+
+    class BoomAfterNewRun:
+        async def choose(self, rules, mail, hints):
+            started.append(jobs.start_preview(gbox.acc.id, view="inbox"))
+            _one_try_left(gbox, m.id)
+            raise RuntimeError("boom")
+
+    worker = SortingWorker(
+        session_factory=gbox.sf,
+        layout=gbox.layout,
+        chooser=lambda: BoomAfterNewRun(),
+        applier=gbox.applier,
+    )
+    jobs = RuleJobs(gbox.sf, gbox.applier, worker)
+    old = jobs.start_preview(gbox.acc.id, view="inbox")
+    _one_try_left(gbox, m.id)
+    await worker.run_once(gbox.acc.id)
+    (new,) = started
+    assert _decisions_of(gbox, old) == [] and _decisions_of(gbox, new) == []
+    with gbox.sf() as db:
+        todo = db.get(RuleTodo, (gbox.acc.id, m.id))
+        assert todo.job_id == new and todo.attempts == 9 and todo.last_error is None
+    assert _job_state(gbox, new) == (0, 1, RuleJobState.PREVIEWING)
