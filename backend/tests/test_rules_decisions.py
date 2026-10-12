@@ -1,9 +1,12 @@
+import pytest
 from sqlalchemy import select
 
 from app.models import RuleCorrection, RuleDecision, RuleSender
 from app.models.enums import DecisionHow, DecisionStatus
+from app.services.mail.adapter import MailUnreachable
 from app.services.mail.index import apply_labels
 from app.services.rules.decisions import (
+    DecisionProblem,
     Decisions,
     hints_for,
     remembered_senders,
@@ -132,3 +135,119 @@ async def test_ids_of_another_mailbox_are_ignored(gbox, make_account):
     other = make_account("bob@example.com")
     counts = await Decisions(gbox.sf, gbox.applier).approve(other.id, [did])
     assert counts == {}
+
+
+async def test_stale_inbox_from_before_cleansync_archived_is_not_moved_back(gbox):
+    from datetime import timedelta
+
+    (news,) = rules(gbox, ARCHIVE)
+    row = gbox.add("Digest")
+    did = suggest(gbox, row, news)
+    await Decisions(gbox.sf, gbox.applier).approve(gbox.acc.id, [did])
+    with gbox.sf() as db:
+        applied = db.get(RuleDecision, did).applied_at
+        apply_labels(
+            db, gbox.acc.id, row.provider_id, ["INBOX"], seen_at=applied - timedelta(seconds=5)
+        )
+        assert db.get(RuleDecision, did).moved_back_at is None
+        apply_labels(db, gbox.acc.id, row.provider_id, [], seen_at=applied + timedelta(seconds=5))
+        apply_labels(
+            db, gbox.acc.id, row.provider_id, ["INBOX"], seen_at=applied + timedelta(seconds=5)
+        )
+        assert db.get(RuleDecision, did).moved_back_at is not None
+
+
+async def test_old_archive_is_not_a_suggestion_withdrawal_after_seen_at(gbox):
+    from datetime import timedelta
+
+    (news,) = rules(gbox, ARCHIVE)
+    row = gbox.add("Digest")
+    done = suggest(gbox, row, news)
+    await Decisions(gbox.sf, gbox.applier).approve(gbox.acc.id, [done])
+    with gbox.sf() as db:
+        applied = db.get(RuleDecision, done).applied_at
+    other = suggest(gbox, row, news)
+    with gbox.sf() as db:
+        apply_labels(db, gbox.acc.id, row.provider_id, [], seen_at=applied - timedelta(seconds=5))
+        assert db.get(RuleDecision, other).status == "suggested"
+
+
+async def test_every_applied_decision_is_checked_for_moved_back(gbox):
+    (news,) = rules(gbox, ARCHIVE)
+    row = gbox.add("Digest")
+    first = suggest(gbox, row, news)
+    dec = Decisions(gbox.sf, gbox.applier)
+    await dec.approve(gbox.acc.id, [first])
+    with gbox.sf() as db:  # a later applied decision that did not touch the inbox
+        db.add(
+            RuleDecision(
+                account_id=gbox.acc.id,
+                message_id=row.id,
+                rule_id=news.id,
+                rule_version=1,
+                rule_name="News",
+                how=DecisionHow.AI,
+                actions=[],
+                labels_seen=[],
+                status=DecisionStatus.APPLIED,
+                changes={"add": ["X"]},
+            )
+        )
+        db.commit()
+        apply_labels(db, gbox.acc.id, row.provider_id, ["INBOX"])
+        assert db.get(RuleDecision, first).moved_back_at is not None
+
+
+async def test_owner_trashing_withdraws_a_suggestion(gbox):
+    (news,) = rules(gbox, ARCHIVE)
+    row = gbox.add("Digest")
+    did = suggest(gbox, row, news)
+    with gbox.sf() as db:
+        apply_labels(db, gbox.acc.id, row.provider_id, ["TRASH"])
+        assert db.get(RuleDecision, did).status == "withdrawn"
+
+
+async def test_correct_stops_when_the_undo_fails(gbox):
+    news, important = rules(gbox, ARCHIVE, STAR)
+    row = gbox.add("Gone", sender="friend@example.com")
+    dec = Decisions(gbox.sf, gbox.applier)
+    did = suggest(gbox, row, news)
+    await dec.approve(gbox.acc.id, [did])
+    gbox.fake.remove(row.provider_id)
+    with pytest.raises(DecisionProblem, match="Couldn't undo the first change"):
+        await dec.correct(gbox.acc.id, did, important.id)
+    with gbox.sf() as db:
+        assert db.scalar(select(RuleCorrection)) is None
+        assert (
+            db.scalars(select(RuleDecision).where(RuleDecision.rule_id == important.id)).first()
+            is None
+        )
+
+
+async def test_approve_counts_waiting_and_undo_continues(gbox, monkeypatch):
+    (news,) = rules(gbox, ARCHIVE)
+    dec = Decisions(gbox.sf, gbox.applier)
+    ids = [suggest(gbox, gbox.add(f"D{i}"), news) for i in range(2)]
+
+    async def boom(_id):
+        raise MailUnreachable("down")
+
+    monkeypatch.setattr(gbox.applier, "apply", boom)
+    assert await dec.approve(gbox.acc.id, ids) == {"waiting": 2}
+    monkeypatch.setattr(gbox.applier, "undo", boom)
+    results = await dec.undo(gbox.acc.id, ids)
+    assert [r.status for r in results] == ["waiting", "waiting"]
+
+
+async def test_correct_swallows_a_wait_on_the_new_decision(gbox, monkeypatch):
+    news, important = rules(gbox, ARCHIVE, STAR)
+    row = gbox.add("Hi", sender="friend@example.com")
+    did = suggest(gbox, row, news)
+
+    async def boom(_id):
+        raise MailUnreachable("down")
+
+    monkeypatch.setattr(gbox.applier, "apply", boom)
+    new_id = await Decisions(gbox.sf, gbox.applier).correct(gbox.acc.id, did, important.id)
+    with gbox.sf() as db:
+        assert db.get(RuleDecision, new_id).status == "suggested"

@@ -147,7 +147,11 @@ class Decisions:
                 else None
             )
         if status == DecisionStatus.APPLIED:
-            await self.applier.undo(decision_id)
+            result = await self.applier.undo(decision_id)
+            if result.status != DecisionStatus.UNDONE:
+                with self.sf() as db:
+                    reason = db.get(RuleDecision, decision_id).reason or "Try again."
+                raise DecisionProblem(f"Couldn't undo the first change: {reason}")
         elif status in (DecisionStatus.SUGGESTED, DecisionStatus.PLANNED):
             with self.sf() as db:
                 x = db.get(RuleDecision, decision_id)
@@ -187,10 +191,19 @@ class Decisions:
                 learn(db, account_id, rid, sender, self.clock())
             db.commit()
         if new_id is not None:
-            await self.applier.apply(new_id)
+            try:
+                await self.applier.apply(new_id)
+            except WAIT_ERRORS:
+                pass  # the decision keeps its waiting reason and is tried again
         return new_id
 
     async def undo(self, account_id: int, ids: list[int]) -> list[UndoResult]:
         with self.sf() as db:
             todo = [d.id for d in self._mine(db, account_id, ids)]
-        return [await self.applier.undo(did) for did in todo]
+        results: list[UndoResult] = []
+        for did in todo:
+            try:
+                results.append(await self.applier.undo(did))
+            except WAIT_ERRORS:
+                results.append(UndoResult("waiting", []))
+        return results

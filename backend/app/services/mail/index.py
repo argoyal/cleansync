@@ -273,7 +273,11 @@ GONE_LABELS = frozenset({"TRASH", "SPAM"})
 
 
 def apply_labels(
-    db: Session, account_id: int, provider_id: str, labels: Iterable[str]
+    db: Session,
+    account_id: int,
+    provider_id: str,
+    labels: Iterable[str],
+    seen_at: datetime | None = None,
 ) -> MailMessage | None:
     """Gmail says these are the mail's labels now (spec §4.4)."""
     row = by_provider_id(db, account_id, provider_id)
@@ -303,7 +307,7 @@ def apply_labels(
         # label change.
         row.state, row.offload_id = MailState.IN_MAIL, None
         set_flags(row, labels)
-    note_label_change(db, row, before, set(labels), utcnow())
+    note_label_change(db, row, before, set(labels), utcnow(), seen_at=seen_at)
     db.commit()
     return row
 

@@ -8,6 +8,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.clock import as_utc
 from app.models import MailMessage, RuleDecision
 from app.models.enums import DecisionStatus
 
@@ -15,28 +16,34 @@ MOVED_YOURSELF = "You moved this mail yourself before it was approved."
 
 
 def note_label_change(
-    db: Session, row: MailMessage, before: set[str], after: set[str], now: datetime
+    db: Session,
+    row: MailMessage,
+    before: set[str],
+    after: set[str],
+    now: datetime,
+    seen_at: datetime | None = None,
 ) -> None:
+    """`seen_at` is when Gmail's list of changes was fetched: a decision CleanSync applied
+    after that moment is not something the owner did, so it is not read as one."""
+    seen = as_utc(seen_at)
+    decisions = list(db.scalars(select(RuleDecision).where(RuleDecision.message_id == row.id)))
     if "INBOX" in after and "INBOX" not in before:
-        d = db.scalar(
-            select(RuleDecision)
-            .where(
-                RuleDecision.message_id == row.id,
-                RuleDecision.status == DecisionStatus.APPLIED,
-                RuleDecision.moved_back_at.is_(None),
-            )
-            .order_by(RuleDecision.id.desc())
-        )
-        if d is not None and "INBOX" in ((d.changes or {}).get("remove") or []):
-            d.moved_back_at = now
+        for d in decisions:
+            if (
+                d.status == DecisionStatus.APPLIED
+                and d.moved_back_at is None
+                and "INBOX" in ((d.changes or {}).get("remove") or [])
+                and (seen is None or (d.applied_at is not None and as_utc(d.applied_at) <= seen))
+            ):
+                d.moved_back_at = now
     if ("INBOX" in before and "INBOX" not in after) or ("TRASH" in after - before):
-        for d in db.scalars(
-            select(RuleDecision).where(
-                RuleDecision.message_id == row.id,
-                RuleDecision.status == DecisionStatus.SUGGESTED,
-            )
+        if seen is not None and any(
+            d.applied_at is not None and as_utc(d.applied_at) > seen for d in decisions
         ):
-            d.status, d.reason = DecisionStatus.WITHDRAWN, MOVED_YOURSELF
+            return
+        for d in decisions:
+            if d.status == DecisionStatus.SUGGESTED:
+                d.status, d.reason = DecisionStatus.WITHDRAWN, MOVED_YOURSELF
 
 
 def moved_back(db: Session, message_id: int) -> bool:

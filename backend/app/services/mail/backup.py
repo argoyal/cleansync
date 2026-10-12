@@ -255,6 +255,7 @@ class MailBackup:
                 db.commit()
             return
         await self._check_stopped(r)
+        seen_at = self.clock()  # before asking Gmail: later CleanSync moves are not the owner's
         changes = await r.adapter.changes_since(start)
         if changes is TOO_OLD:
             info = await r.adapter.profile()
@@ -273,12 +274,12 @@ class MailBackup:
                 known = by_provider_id(db, r.account_id, mid) is not None
             if known:
                 with self.sf() as db:
-                    apply_labels(db, r.account_id, mid, labels)
+                    apply_labels(db, r.account_id, mid, labels, seen_at=seen_at)
             elif not (SKIP_LABELS & set(labels)):
                 await self._download(r, mid)
         for mid, labels in changes.labels.items():
             with self.sf() as db:
-                row = apply_labels(db, r.account_id, mid, labels)
+                row = apply_labels(db, r.account_id, mid, labels, seen_at=seen_at)
             if row is None and not (SKIP_LABELS & set(labels)):
                 # Not backed up yet: it was in Spam or Trash and the owner took it out.
                 await self._download(r, mid)
