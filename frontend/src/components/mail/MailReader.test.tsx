@@ -458,6 +458,35 @@ describe("AI rules and the local archive in the reader", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/archive/delete-forever")?.body).toEqual({ account_id: 1, message_ids: [4, 5], confirm: 2 }));
   });
 
+  it("keeps the picks when Delete forever… is cancelled", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", subject: "One" })], next_cursor: null, total: 1, total_bytes: 1 },
+      "GET /api/mail/threads/t1": [msg({ id: 4, state: "local_archive" })],
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive" });
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
+    await userEvent.click(within(screen.getByRole("region", { name: "Picked mail" })).getByRole("button", { name: "Delete forever…" }));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Pick One" })).toBeChecked();
+  });
+
+  it("shows no rule chip in the Local archive, in the list or the reader", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", decision: { ...CHIP, status: "applied" } })], next_cursor: null, total: 1, total_bytes: 1 },
+      "GET /api/mail/threads/t1": [msg({ id: 2, state: "local_archive", gmail_url: null, decision: { ...CHIP, status: "applied" } })],
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive&thread=t1" });
+    const open = await screen.findByRole("region", { name: "Open mail" });
+    expect(await within(open).findByRole("button", { name: "Restore to Gmail" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Your invoice/ })).not.toHaveAccessibleName(/Newsletters/);
+    expect(screen.queryByRole("button", { name: /Newsletters · applied/ })).not.toBeInTheDocument();
+  });
+
   it("deletes the whole archive list forever with the search spelled out", async () => {
     const { calls } = mockApi({
       "GET /api/accounts": [ACTIVE],
@@ -486,6 +515,7 @@ describe("AI rules and the local archive in the reader", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "Pick Two" }));
     await userEvent.click(within(screen.getByRole("region", { name: "Picked mail" })).getByRole("button", { name: "Delete" }));
     const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus(); // not the button that deletes
     expect(dialog).toHaveTextContent("Move 2 threads to Gmail's trash? CleanSync keeps them in the Local archive, where you can restore them or delete them forever.");
     await userEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/delete")?.body).toEqual({ account_id: 1, thread_ids: ["t1", "t2"] }));

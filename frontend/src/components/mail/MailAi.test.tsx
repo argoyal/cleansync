@@ -1,8 +1,9 @@
 import { screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT, mockApi, renderApp } from "../../test/utils";
+import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
 import { DeleteForeverDialog } from "./DeleteForeverDialog";
 import { MakeRuleDialog } from "./MakeRuleDialog";
 import { RuleChip } from "./RuleChip";
@@ -73,5 +74,59 @@ describe("AI in mail", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Run it on older mail…" }));
     expect(await screen.findByText("Deciding… 4 of 10")).toBeInTheDocument();
     expect(calls.find((c) => c.path === "/api/rule-jobs")?.body).toEqual({ account_id: ACCOUNT.id, q: "from:shop@example.com", view: "all" });
+  });
+
+  it("offers Approve only for a suggestion, and Undo only once applied", async () => {
+    mockApi({});
+    const chip = { id: 3, rule_name: "Newsletters", how: "ai", why: "a weekly digest" };
+    const planned = renderApp(<RuleChip accountId={1} chip={{ ...chip, status: "planned" }} />);
+    await userEvent.click(screen.getByRole("button", { name: /Newsletters · planned/ }));
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    planned.unmount();
+    renderApp(<RuleChip accountId={1} chip={{ ...chip, status: "applied" }} />);
+    await userEvent.click(screen.getByRole("button", { name: /Newsletters · applied/ }));
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+  });
+
+  it("stops the job when the dialog was closed before the job had started", async () => {
+    let answer: (r: Response) => void = () => {};
+    const { calls } = mockApi({
+      "POST /api/rule-jobs": () => new Promise<Response>((resolve) => (answer = resolve)),
+      "POST /api/rule-jobs/9/stop": null,
+    });
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return open ? <RunRulesDialog account={ACCOUNT} start={{ q: "", view: "inbox" }} onClose={() => setOpen(false)} /> : <p>closed</p>;
+    }
+    renderApp(<Harness />);
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/rule-jobs")).toBe(true));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("closed")).toBeInTheDocument();
+    answer(json(200, { job_id: 9 }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-jobs/9/stop")?.body).toEqual({ account_id: ACCOUNT.id }));
+  });
+
+  it("runs a rule from several senders on the list the reader showed, never on a view the rules can't use", async () => {
+    const draft = { name: "Shops", description: "Shop mail", conditions: { senders_in: ["a@example.com", "b@example.com"] }, combine: "fixed_then_ai", actions: [{ kind: "archive" }], notes: [] };
+    const routes = {
+      "GET /api/mail/counts": { views: {}, labels: [{ id: "Label_2", name: "My Shops", count: 3 }] },
+      "POST /api/rules/draft-from-mail": draft,
+      "POST /api/rules": { ...draft, id: 8, mode: "suggest", enabled: true, position: 0, version: 1, decided_7d: 0, senders: [] },
+      "POST /api/rule-jobs": { job_id: 9 },
+      "GET /api/rule-jobs/9": { job_id: 9, state: "PREVIEWING", total: 1, decided: 0, planned: 0, no_rule: 0, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [] },
+    };
+    for (const [route, expected] of [
+      ["/mail?label=Label_2&q=older_than%3A1y", { q: 'label:"My Shops" older_than:1y', view: "all" }],
+      ["/mail?view=suggested", { q: "", view: "inbox" }],
+    ] as const) {
+      const { calls } = mockApi(routes);
+      const r = renderApp(<MakeRuleDialog account={ACCOUNT} messageIds={[11]} onClose={() => {}} />, { route });
+      await userEvent.click(await screen.findByRole("button", { name: "Save rule" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Run it on older mail…" }));
+      await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-jobs")?.body, route).toEqual({ account_id: ACCOUNT.id, ...expected }));
+      r.unmount();
+    }
   });
 });

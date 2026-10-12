@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { Account, MailMessageInfo, OffloadStart } from "../../api/types";
 import { useRestoreMail } from "../../hooks/useMailOffload";
 import { useDeleteMail } from "../../hooks/useRules";
+import { runRulesStart } from "../../lib/mail";
 import { useToast } from "../Toasts";
 import { Button, Dialog } from "../ui";
 import { DeleteForeverDialog } from "./DeleteForeverDialog";
@@ -12,8 +13,6 @@ import { RuleChip } from "./RuleChip";
 import { RunRulesDialog, type RunRulesStart } from "./RunRulesDialog";
 
 const RESTORE_VIEWS: Record<string, string> = { all: "", offloaded: "is:offloaded", deleted: "is:deleted" };
-const RUN_RULES_VIEWS = ["all", "inbox"];
-const quoted = (v: string) => (/\s/.test(v) ? `"${v}"` : v);
 
 /** What "Restore these to Gmail" sends for a view and search, or null when the search language
  * can't say the view (a label, Inbox, Sent…): then the button isn't offered at all, rather
@@ -60,12 +59,7 @@ export function MailHeaderActions({
     );
   }
   const restoreQ = restoreQuery(view, label, q);
-  // A label isn't a view the rules know: it goes into the search instead.
-  const rulesStart: RunRulesStart | null = label
-    ? { q: [`label:${quoted(scope ?? label)}`, q].filter(Boolean).join(" "), view: "all" }
-    : RUN_RULES_VIEWS.includes(view)
-      ? { q, view }
-      : null;
+  const rulesStart = runRulesStart(view, label, scope, q);
   return (
     <>
       {restoreQ && (
@@ -121,8 +115,10 @@ export function DeleteMailDialog({
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button tone="danger" data-autofocus disabled={del.isPending} onClick={go}>
+          <Button data-autofocus onClick={onClose}>
+            Cancel
+          </Button>
+          <Button tone="danger" disabled={del.isPending} onClick={go}>
             Move to trash
           </Button>
         </>
@@ -147,7 +143,8 @@ export function MessageMailActions({ account, message }: { account: Account; mes
   const archived = message.state === "local_archive";
   return (
     <>
-      {message.decision && <RuleChip accountId={account.id} chip={message.decision} />}
+      {/* Not in the archive: Undo or Correct… there would change Gmail for mail already deleted. */}
+      {message.decision && !archived && <RuleChip accountId={account.id} chip={message.decision} />}
       {message.state === "in_mail" ? (
         <>
           <Button onClick={() => setOpen("offload")}>Offload</Button>

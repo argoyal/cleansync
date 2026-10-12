@@ -46,6 +46,7 @@ export function MailReader({ account }: { account: Account }) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [pickedAction, setPickedAction] = useState<PickedAction>(null);
   const [forever, setForever] = useState<number[] | null>(null); // the archived mails of the picked threads
+  const [finding, setFinding] = useState(false); // reading which mails those are
   const restore = useRestoreMail();
   const approve = useApprove();
   const qc = useQueryClient();
@@ -54,10 +55,14 @@ export function MailReader({ account }: { account: Account }) {
   const suggestedIds = rows.flatMap((t) => (t.decision?.status === "suggested" ? [t.decision.id] : []));
   const ruleFrom = rows.filter((t) => picked.has(t.thread_id)).map((t) => t.message_id).slice(0, RULE_FROM_AT_MOST);
   // Delete forever takes mails, not threads: read which archived mails the picked threads hold.
-  const pickForever = () =>
+  const pickForever = () => {
+    if (finding) return;
+    setFinding(true);
     Promise.all([...picked].map((id) => qc.fetchQuery(mailThreadQuery(account.id, id, true))))
       .then((threads) => setForever(threads.flat().map((m) => m.id)))
-      .catch((e: unknown) => toast(friendlyError(e), { tone: "error" }));
+      .catch((e: unknown) => toast(friendlyError(e), { tone: "error" }))
+      .finally(() => setFinding(false));
+  };
   // Picks belong to one list: a new view, label or search starts with none.
   useEffect(() => setPicked(new Set()), [view, label, q]);
   const toggle = (id: string) => {
@@ -100,7 +105,9 @@ export function MailReader({ account }: { account: Account }) {
             Restore to Gmail
           </Button>
           {archive ? (
-            <Button onClick={() => void pickForever()}>Delete forever…</Button>
+            <Button disabled={finding} onClick={pickForever}>
+              Delete forever…
+            </Button>
           ) : (
             <>
               <Button onClick={() => setPickedAction("delete")}>Delete</Button>
@@ -122,10 +129,8 @@ export function MailReader({ account }: { account: Account }) {
           account={account}
           start={{ message_ids: forever }}
           count={forever.length}
-          onClose={() => {
-            setForever(null);
-            clearPicks();
-          }}
+          onDone={clearPicks}
+          onClose={() => setForever(null)}
         />
       )}
       <div className="flex min-h-0 flex-1 border-t border-line">

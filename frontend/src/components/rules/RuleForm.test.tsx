@@ -81,4 +81,16 @@ describe("RuleForm", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save rule" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Give the rule a name.");
   });
+
+  it("switches Only the AI to narrowing when the first fixed condition is added, and then leaves the choice alone", async () => {
+    mockApi({});
+    renderApp(<RuleForm accountId={1} initial={{ ...DRAFT, conditions: {}, combine: "ai_only" }} onSaved={() => {}} onCancel={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: "Fixed conditions" }));
+    await userEvent.type(screen.getByLabelText("Not from"), "x");
+    const how = screen.getByLabelText("How these work with the description");
+    expect(how).toHaveValue("fixed_then_ai");
+    await userEvent.selectOptions(how, "ai_only");
+    await userEvent.type(screen.getByLabelText("Subject contains"), "digest");
+    expect(screen.getByLabelText("How these work with the description")).toHaveValue("ai_only");
+  });
 });

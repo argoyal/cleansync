@@ -96,6 +96,14 @@ export function RuleForm({
   const anyCondition = Object.keys(conditions).length > 0;
   const [showConditions, setShowConditions] = useState(Object.keys(c0).length > 0);
   const save = useSaveRule();
+  // The first fixed condition on an "Only the AI" rule would do nothing, so it starts narrowing
+  // instead; the owner can still pick another way.
+  const setConditions = (t: Text, f: Partial<Record<Flag, boolean>>, a: string) => {
+    if (!anyCondition && combine === "ai_only" && Object.keys(conditionsFrom(t, f, a)).length > 0) setCombine("fixed_then_ai");
+    setText(t);
+    setFlags(f);
+    setAddressed(a);
+  };
 
   // Delete stands alone: ticking it clears the others, and ticking another clears it.
   const pickDelete = (on: boolean) => {
@@ -190,7 +198,7 @@ export function RuleForm({
           <div id={`${id}-cond`} className="mt-2 grid gap-3 sm:grid-cols-2">
             {TEXTS.map(([key, label, hint]) => (
               <Field key={key} label={label} hint={hint}>
-                <input className={inputClass} value={text[key]} onChange={(e) => setText({ ...text, [key]: e.target.value })} />
+                <input className={inputClass} value={text[key]} onChange={(e) => setConditions({ ...text, [key]: e.target.value }, flags, addressed)} />
               </Field>
             ))}
             {FLAGS.map(([key, label]) => (
@@ -198,7 +206,7 @@ export function RuleForm({
                 <select
                   className={inputClass}
                   value={flags[key] === undefined ? "" : flags[key] ? "yes" : "no"}
-                  onChange={(e) => setFlags({ ...flags, [key]: e.target.value === "" ? undefined : e.target.value === "yes" })}
+                  onChange={(e) => setConditions(text, { ...flags, [key]: e.target.value === "" ? undefined : e.target.value === "yes" }, addressed)}
                 >
                   <option value="">Doesn't matter</option>
                   <option value="yes">Yes</option>
@@ -207,7 +215,7 @@ export function RuleForm({
               </Field>
             ))}
             <Field label="Sent to me / CC / a list">
-              <select className={inputClass} value={addressed} onChange={(e) => setAddressed(e.target.value)}>
+              <select className={inputClass} value={addressed} onChange={(e) => setConditions(text, flags, e.target.value)}>
                 <option value="">Doesn't matter</option>
                 <option value="direct">Sent to me</option>
                 <option value="cc">CC</option>

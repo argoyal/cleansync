@@ -9,17 +9,20 @@ import { parseTyped } from "./OffloadMailDialog";
 const mails = (n: number) => `${n.toLocaleString()} ${n === 1 ? "mail" : "mails"}`;
 
 /** Removes mail from the Local archive for good: picked mails, or a search in the archive.
- * `count` is how many that is; the person types it to go ahead, and the server checks it again. */
+ * `count` is how many that is; the person types it to go ahead, and the server checks it again.
+ * `onDone` runs only when mail was deleted; `onClose` runs on any close. */
 export function DeleteForeverDialog({
   account,
   start,
   count,
   onClose,
+  onDone,
 }: {
   account: Account;
   start: { message_ids?: number[]; q?: string };
   count: number;
   onClose: () => void;
+  onDone?: () => void;
 }) {
   const [typed, setTyped] = useState("");
   const forever = useDeleteForever();
@@ -31,6 +34,7 @@ export function DeleteForeverDialog({
       {
         onSuccess: ({ deleted }) => {
           toast(`Deleted ${mails(deleted)} forever.`);
+          onDone?.();
           onClose();
         },
         onError: () => setTyped(""),

@@ -58,7 +58,7 @@ export function RuleChip({
           >
             {chip.why && <p className="text-table text-ink-2">{chip.why}</p>}
             <div className="flex flex-wrap gap-2">
-              {chip.status !== "applied" && (
+              {chip.status === "suggested" && (
                 <Button
                   tone="primary"
                   disabled={approve.isPending}

@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { friendlyError } from "../../api/client";
+import { useMailCounts } from "../../api/queries";
 import type { Rule } from "../../api/rules";
 import type { Account } from "../../api/types";
 import { useDraftFromMail } from "../../hooks/useRules";
+import { runRulesStart } from "../../lib/mail";
 import { RuleForm } from "../rules/RuleForm";
 import { Button, Dialog, Notice } from "../ui";
 import { RunRulesDialog, type RunRulesStart } from "./RunRulesDialog";
@@ -13,6 +15,8 @@ import { RunRulesDialog, type RunRulesStart } from "./RunRulesDialog";
  * it, then may run it on older mail. Nothing is saved until Save rule. */
 export function MakeRuleDialog({ account, messageIds, onClose }: { account: Account; messageIds: number[]; onClose: () => void }) {
   const [params] = useSearchParams();
+  const label = params.get("label") ?? "";
+  const labelName = useMailCounts(account.id, label !== "").data?.labels.find((l) => l.id === label)?.name;
   const draft = useDraftFromMail();
   const [saved, setSaved] = useState<Rule | null>(null);
   const [run, setRun] = useState<RunRulesStart | null>(null);
@@ -29,8 +33,13 @@ export function MakeRuleDialog({ account, messageIds, onClose }: { account: Acco
 
   if (saved) {
     const senders = draft.data?.conditions.senders_in ?? [];
-    // One sender: its older mail. Otherwise the search the list was showing.
-    const start: RunRulesStart = senders.length === 1 ? { q: `from:${senders[0]}`, view: "all" } : { q: params.get("q") ?? "", view: params.get("view") ?? "all" };
+    // One sender: its older mail. Otherwise the list on screen, as "Run rules on…" would take it;
+    // a view the rules can't take (Suggested, the archive…) falls back to the inbox.
+    const q = params.get("q") ?? "";
+    const start: RunRulesStart =
+      senders.length === 1
+        ? { q: `from:${senders[0]}`, view: "all" }
+        : (runRulesStart(params.get("view") ?? "all", label, labelName, q) ?? { q, view: "inbox" });
     return (
       <Dialog
         title="Rule saved"

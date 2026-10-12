@@ -37,6 +37,17 @@ export function mailHref(p: { view?: string; label?: string; q?: string; thread?
   return s ? `/mail?${s}` : "/mail";
 }
 
+const quoted = (v: string) => (/\s/.test(v) ? `"${v}"` : v);
+const RUN_RULES_VIEWS = ["all", "inbox"];
+
+/** What "Run rules on…" starts from for the list on screen, or null for a view the rules can't
+ * take (Sent, Suggested, the Local archive…). A label isn't a view the rules know: it goes into
+ * the search, with the view "all". `labelName` is the label's name when known. */
+export function runRulesStart(view: string, label: string, labelName: string | null | undefined, q: string): { q: string; view: string } | null {
+  if (label) return { q: [`label:${quoted(labelName ?? label)}`, q].filter(Boolean).join(" "), view: "all" };
+  return RUN_RULES_VIEWS.includes(view) ? { q, view } : null;
+}
+
 export const OFFLOAD_STATE_TEXT: Record<string, string> = {
   WAITING: "Waiting",
   RUNNING: "Offloading",

@@ -54,10 +54,17 @@ export function RunRulesDialog({ account, start, onClose }: { account: Account; 
   const [jobId, setJobId] = useState<number | null>(null);
   const [typed, setTyped] = useState("");
   const asked = useRef(false); // one job per opening, even when an effect runs twice
+  const closed = useRef(false); // closed before the job had started: stop it once it has an id
   useEffect(() => {
     if (asked.current) return;
     asked.current = true;
-    begin.mutate({ accountId: account.id, q: start.q, view: start.view, messageIds: start.message_ids }, { onSuccess: ({ job_id }) => setJobId(job_id) });
+    begin
+      .mutateAsync({ accountId: account.id, q: start.q, view: start.view, messageIds: start.message_ids })
+      .then(({ job_id }) => {
+        if (closed.current) stop.mutate({ accountId: account.id, jobId: job_id });
+        else setJobId(job_id);
+      })
+      .catch(() => undefined); // the hook shows the error
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when the dialog opens
   }, []);
   const job = useRuleJob(account.id, jobId).data;
@@ -69,7 +76,8 @@ export function RunRulesDialog({ account, start, onClose }: { account: Account; 
   const changed = job ? job.applied + job.skipped + job.failed : 0;
   const stopJob = () => jobId !== null && stop.mutate({ accountId: account.id, jobId });
   const cancel = () => {
-    if (state === "PREVIEWING") stopJob();
+    closed.current = true;
+    if (state === "PREVIEWING" || (jobId !== null && !job)) stopJob();
     onClose();
   };
   return (

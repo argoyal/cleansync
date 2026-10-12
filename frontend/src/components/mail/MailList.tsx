@@ -20,6 +20,7 @@ function Mark({ children }: { children: string }) {
 
 function Row({
   accountId,
+  chips,
   t,
   href,
   open,
@@ -27,6 +28,8 @@ function Row({
   onToggle,
 }: {
   accountId: number;
+  /** Off in the Local archive: a chip's Undo or Correct… there would change Gmail. */
+  chips: boolean;
   t: ThreadRow;
   href: string;
   open: boolean;
@@ -40,7 +43,8 @@ function Row({
   if (t.has_attachments) parts.push("has attachments");
   if (t.offloaded) parts.push("offloaded");
   if (t.deleted) parts.push("deleted in Gmail");
-  if (t.decision) parts.push(`${t.decision.status}: ${t.decision.rule_name}`);
+  const chip = chips ? t.decision : null;
+  if (chip) parts.push(`${chip.status}: ${chip.rule_name}`);
   parts.push(formatWhen(t.last_date));
   const label = parts.join(", ");
   return (
@@ -73,10 +77,10 @@ function Row({
           {formatWhen(t.last_date)}
         </span>
       </Link>
-      {t.decision && (
+      {chip && (
         // Beside the link too: the chip is a button, and a button inside a link is not valid HTML.
         <div className="flex shrink-0 items-center pr-3">
-          <RuleChip accountId={accountId} chip={t.decision} />
+          <RuleChip accountId={accountId} chip={chip} />
         </div>
       )}
     </li>
@@ -113,6 +117,7 @@ export function MailList({
           <Row
             key={t.thread_id}
             accountId={accountId}
+            chips={view !== "archive"}
             t={t}
             open={t.thread_id === thread}
             href={mailHref({ view, label, q, thread: t.thread_id })}
