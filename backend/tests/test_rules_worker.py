@@ -424,3 +424,27 @@ async def test_job_mail_that_keeps_raising_is_given_up_and_counted(gbox):
     (d,) = decisions(gbox)
     assert d.status == DecisionStatus.FAILED and d.reason == GAVE_UP
     assert todos(gbox) == [] and _job(gbox, jid) == (1, 1, RuleJobState.PREVIEWED)
+
+
+async def test_the_mail_file_is_read_off_the_event_loop(gbox, monkeypatch):
+    from app.services.rules import worker as worker_mod
+
+    with gbox.sf() as db:
+        create_rule(
+            db, gbox.acc.id, RuleIn(name="N", description="d", actions=[{"kind": "star"}]), "a"
+        )
+    row = gbox.add("Hi")
+    queue(gbox, row)
+    real, on_loop = worker_mod.mail_for_model, []
+
+    def spy(*a, **kw):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(worker_mod, "mail_for_model", spy)
+    assert await worker(gbox, Pick()).run_once(gbox.acc.id) == 1
+    assert on_loop == [False]

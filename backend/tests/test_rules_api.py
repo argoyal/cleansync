@@ -309,3 +309,60 @@ def test_another_mailbox_cannot_touch_this_ones_objects(auth_client, acc, make_a
     assert db.get(RuleDecision, did).status == "suggested"
     assert db.get(RuleJob, jid).state == "PREVIEWING"
     assert db.scalars(select(RuleDecision)).all() == [db.get(RuleDecision, did)]
+
+
+def test_try_it_with_an_empty_search_looks_at_the_inbox(auth_client, acc, db, layout):
+    from app.devtools.fake_gmail import make_mail
+    from tests.rules_helpers import keep
+
+    keep(db, layout, acc, make_mail("In the inbox"))
+    keep(db, layout, acc, make_mail("Archived already"), labels=())
+    rule = {**RULE, "combine": "fixed_only", "conditions": {"subject_contains": ["a"]}}
+    out = auth_client.post("/api/rules/try", json={"account_id": acc.id, "rule": rule}).json()
+    assert [r["subject"] for r in out] == ["In the inbox"]
+    out = auth_client.post(
+        "/api/rules/try", json={"account_id": acc.id, "rule": rule, "q": "archived"}
+    ).json()
+    assert [r["subject"] for r in out] == ["Archived already"]
+
+
+def test_try_and_draft_read_mail_files_off_the_event_loop(
+    auth_client, acc, db, layout, monkeypatch
+):
+    import asyncio
+
+    from app.api import rules as rules_api
+    from app.devtools.fake_gmail import make_mail
+    from tests.rules_helpers import keep
+
+    row = keep(db, layout, acc, make_mail("Hello"))
+    real, on_loop = rules_api.mail_for_model, []
+
+    def spy(*a, **kw):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(rules_api, "mail_for_model", spy)
+    B = {"account_id": acc.id, "message_ids": [row.id]}
+    auth_client.post("/api/rules/try", json={**B, "rule": RULE})
+    auth_client.post("/api/rules/draft-from-mail", json=B)
+    assert on_loop == [False, False]
+
+
+def test_the_open_run_of_rules_can_be_found_again(auth_client, acc, db, layout):
+    from app.devtools.fake_gmail import make_mail
+    from tests.rules_helpers import keep
+
+    B = {"account_id": acc.id}
+    r = auth_client.get("/api/rule-jobs/open", params=B)
+    assert r.status_code == 200 and r.json() is None
+    keep(db, layout, acc, make_mail("Old one"))
+    jid = auth_client.post("/api/rule-jobs", json={**B, "q": "", "view": "inbox"}).json()["job_id"]
+    p = auth_client.get("/api/rule-jobs/open", params=B).json()
+    assert p["job_id"] == jid and p["state"] == "PREVIEWING" and p["total"] == 1
+    auth_client.post(f"/api/rule-jobs/{jid}/stop", json=B)
+    assert auth_client.get("/api/rule-jobs/open", params=B).json() is None

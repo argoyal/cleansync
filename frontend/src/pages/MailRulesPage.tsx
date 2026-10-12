@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { friendlyError } from "../api/client";
-import { describeAction, rulesExportUrl, type Sorting, useRules, useSorting, useStarters } from "../api/rules";
+import { describeAction, rulesExportUrl, type Sorting, useOpenRuleJob, useRules, useSorting, useStarters } from "../api/rules";
 import type { Account } from "../api/types";
 import { RunRulesDialog } from "../components/mail/RunRulesDialog";
 import { RuleList } from "../components/rules/RuleList";
@@ -174,6 +174,31 @@ function Footer({ account }: { account: Account }) {
   );
 }
 
+/** A run of rules whose dialog was closed: say so, and open it again. */
+function OpenRun({ account }: { account: Account }) {
+  const job = useOpenRuleJob(account.id).data;
+  const [open, setOpen] = useState(false);
+  if (!job) return null;
+  const changed = job.applied + job.skipped + job.failed;
+  const text =
+    job.state === "PREVIEWED"
+      ? "A run of rules is waiting for you to confirm."
+      : job.state === "RUNNING"
+        ? `A run of rules is going on (${changed.toLocaleString()} of ${(changed + job.planned).toLocaleString()} changed).`
+        : `A run of rules is going on (${job.decided.toLocaleString()} of ${job.total.toLocaleString()} decided).`;
+  return (
+    <>
+      <Notice tone="run">
+        <span className="flex flex-wrap items-center justify-between gap-2">
+          {text}
+          <Button onClick={() => setOpen(true)}>Open</Button>
+        </span>
+      </Notice>
+      {open && <RunRulesDialog account={account} jobId={job.job_id} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
 /** Mail → Rules (AI rules spec §8): rules for the mailbox picked in the account switcher. */
 export function MailRulesPage() {
   const { account } = useCurrentAccount();
@@ -201,6 +226,7 @@ export function MailRulesPage() {
           </Link>
         </Notice>
       )}
+      <OpenRun key={`run-${account.id}`} account={account} />
       <SentenceBox key={`sentence-${account.id}`} accountId={account.id} />
       {rules.isPending && <p className="text-ink-2">Loading rules…</p>}
       {rules.isError && <Notice tone="err">{friendlyError(rules.error)}</Notice>}

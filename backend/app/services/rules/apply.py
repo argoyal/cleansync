@@ -30,6 +30,7 @@ from app.services.mail.store import check_eml, eml_path
 BUDGET_WAIT = "Google's daily budget is used up; this is applied when it resets."
 GONE_MSG = "It's no longer in Gmail."
 NOT_IN_MAIL_MSG = "It's no longer in Gmail, so nothing was changed."
+NOT_UNDONE_MSG = "It's no longer in Gmail, so nothing was undone."
 UNREACHABLE_WAIT = "Gmail couldn't be reached; this is tried again later."
 RECONNECT_WAIT = "Reconnect this Google account; this is tried again after that."
 WAITING_REASONS = (BUDGET_WAIT, UNREACHABLE_WAIT, RECONNECT_WAIT)
@@ -240,16 +241,17 @@ class Applier:
             changes = dict(d.changes or {})
             labels_now, state, pid = set(row.labels or []), row.state, row.provider_id
             seen = list(d.labels_seen or [])
+            # A trash is undone from the local archive; a label change only while it's in Gmail.
+            if state != (MailState.LOCAL_ARCHIVE if changes.get("trash") else MailState.IN_MAIL):
+                d.reason = NOT_UNDONE_MSG
+                db.commit()
+                return UndoResult(DecisionStatus.APPLIED, [])
         adapter = self.adapter_for(acc)
         left: list[str] = []
         try:
             if changes.get("trash"):
-                if state == MailState.LOCAL_ARCHIVE:
-                    await adapter.untrash(pid)
-                    new_labels, new_state = seen, MailState.IN_MAIL
-                else:
-                    left.append("TRASH")
-                    new_labels, new_state = list(labels_now), state
+                await adapter.untrash(pid)
+                new_labels, new_state = seen, MailState.IN_MAIL
             else:
                 back = [x for x in changes.get("remove") or [] if x not in labels_now]
                 drop = [x for x in changes.get("add") or [] if x in labels_now]

@@ -121,6 +121,28 @@ describe("AI in mail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-jobs/9/stop")?.body).toEqual({ account_id: ACCOUNT.id }));
   });
 
+  it("closing a preview stops it, so it never blocks the next run; a running job keeps going", async () => {
+    const previewed = { job_id: 9, state: "PREVIEWED", total: 2, decided: 2, planned: 1, no_rule: 1, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [] };
+    const { calls } = mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": previewed, "POST /api/rule-jobs/9/stop": null });
+    const closed = renderApp(<RunRulesDialog account={ACCOUNT} start={{ q: "", view: "inbox" }} onClose={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-jobs/9/stop")?.body).toEqual({ account_id: ACCOUNT.id }));
+    closed.unmount();
+    const running = mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": { ...previewed, state: "RUNNING" }, "POST /api/rule-jobs/9/stop": null });
+    renderApp(<RunRulesDialog account={ACCOUNT} start={{ q: "", view: "inbox" }} onClose={() => {}} />);
+    expect(await screen.findByText("It keeps going if you close this.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(running.calls.some((c) => c.path === "/api/rule-jobs/9/stop")).toBe(false);
+  });
+
+  it("reopens a run that is already there instead of starting another", async () => {
+    const previewed = { job_id: 9, state: "PREVIEWED", total: 2, decided: 2, planned: 1, no_rule: 1, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [] };
+    const { calls } = mockApi({ "GET /api/rule-jobs/9": previewed });
+    renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+    expect(await screen.findByLabelText("Type 1 to make these changes")).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
   it("runs a rule from several senders on the list the reader showed, never on a view the rules can't use", async () => {
     const draft = { name: "Shops", description: "Shop mail", conditions: { senders_in: ["a@example.com", "b@example.com"] }, combine: "fixed_then_ai", actions: [{ kind: "archive" }], notes: [] };
     const routes = {

@@ -1,6 +1,7 @@
 # backend/app/api/rules.py
 """Rules, decisions, sorting and rule jobs for one mailbox (AI rules spec §5, §6, §8)."""
 
+import asyncio
 from dataclasses import asdict
 from datetime import datetime, time, timedelta
 
@@ -342,17 +343,30 @@ def _writer(request: Request):
     return request.app.state.ai.target(AiTaskName.WRITING_RULES)
 
 
-def _mails(db: Session, layout, acc, ids: list[int]):
-    rows = db.scalars(
-        select(MailMessage).where(MailMessage.account_id == acc.id, MailMessage.id.in_(ids))
-    )
+def _read_mails(session_factory, layout, account_id: int, email: str, ids: list[int]):
+    """Runs in a worker thread, with its own database session: it reads mail files."""
+    with session_factory() as db:
+        rows = list(
+            db.scalars(
+                select(MailMessage).where(
+                    MailMessage.account_id == account_id, MailMessage.id.in_(ids)
+                )
+            )
+        )
     out = []
     for r in rows:
         try:
-            out.append(mail_for_model(layout, acc.email, r))
+            out.append(mail_for_model(layout, email, r))
         except CopyUnreadable:
             continue  # a broken copy is simply left out of drafts and tries
     return out
+
+
+async def _mails(request: Request, acc, ids: list[int]):
+    state = request.app.state
+    return await asyncio.to_thread(
+        _read_mails, state.session_factory, state.layout, acc.id, acc.email, ids
+    )
 
 
 @router.post("/api/rules/draft", response_model=DraftOut)
@@ -380,7 +394,7 @@ async def draft_from_mail(
     db: Session = Depends(get_db),
 ):
     acc = account_or_404(db, body.account_id)
-    mails = _mails(db, request.app.state.layout, acc, body.message_ids)
+    mails = await _mails(request, acc, body.message_ids)
     if not mails:
         raise HTTPException(400, "None of those mails can be read here.")
     try:
@@ -402,7 +416,9 @@ async def try_rule(
         ids = body.message_ids
     else:
         try:
-            conds = mail_conditions(db, acc.id, q=body.q, now=utcnow())
+            # An empty search tries the rule on the inbox, as the page says.
+            look_in = "all" if body.q.strip() else "inbox"
+            conds = mail_conditions(db, acc.id, view=look_in, q=body.q, now=utcnow())
         except SearchError as e:
             raise HTTPException(422, str(e)) from e
         ids = list(
@@ -426,11 +442,12 @@ async def try_rule(
     )
     existing = store.rule_views(db, acc.id)
     remembered = {s: r for s, r in remembered_senders(db, acc.id).items() if r != view.id}
+    mails = await _mails(request, acc, ids)
     try:
         results = await drafting.try_rule(
             view,
             existing,
-            _mails(db, request.app.state.layout, acc, ids),
+            mails,
             request.app.state.sorting_chooser(),
             remembered,
             lambda s: hints_for(db, acc.id, s),
@@ -566,6 +583,21 @@ def start_job(
     except PROBLEMS as e:
         raise _problem(e) from e
     return {"job_id": jid}
+
+
+# Declared before /api/rule-jobs/{job_id}, so "open" isn't read as a job id.
+@router.get("/api/rule-jobs/open", response_model=JobPreviewOut | None)
+def open_job(
+    account_id: int,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """The mailbox's unfinished run of rules, so the page can show it again; null if none."""
+    account_or_404(db, account_id)
+    jobs = request.app.state.rule_jobs
+    jid = jobs.open_job(account_id)
+    return None if jid is None else JobPreviewOut(**asdict(jobs.preview(account_id, jid)))
 
 
 @router.get("/api/rule-jobs/{job_id}", response_model=JobPreviewOut)

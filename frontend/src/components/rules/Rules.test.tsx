@@ -58,4 +58,26 @@ describe("Rules section", () => {
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.search === "?account_id=1")).toBe(true));
   });
+  it("shows a run of rules left open and opens it again", async () => {
+    const job = { job_id: 9, state: "PREVIEWING", total: 40, decided: 12, planned: 0, no_rule: 0, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [] };
+    const { calls } = mockApi({ ...ACCOUNTS, "GET /api/rules": [RULE], "GET /api/rules/sorting": SORTING, "GET /api/rule-jobs/open": job, "GET /api/rule-jobs/9": job });
+    renderApp(<MailRulesPage />, { withAccount: true });
+    expect(await screen.findByText("A run of rules is going on (12 of 40 decided).")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(await screen.findByText("Deciding… 12 of 40")).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "POST" && c.path === "/api/rule-jobs")).toBe(false);
+  });
+
+  it("says when a run of rules waits for the typed count, and says nothing when there is none", async () => {
+    const job = { job_id: 9, state: "PREVIEWED", total: 4, decided: 4, planned: 2, no_rule: 2, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [] };
+    mockApi({ ...ACCOUNTS, "GET /api/rules": [RULE], "GET /api/rules/sorting": SORTING, "GET /api/rule-jobs/open": job });
+    const r = renderApp(<MailRulesPage />, { withAccount: true });
+    expect(await screen.findByText("A run of rules is waiting for you to confirm.")).toBeInTheDocument();
+    r.unmount();
+    const { calls } = mockApi({ ...ACCOUNTS, "GET /api/rules": [RULE], "GET /api/rules/sorting": SORTING, "GET /api/rule-jobs/open": null });
+    renderApp(<MailRulesPage />, { withAccount: true });
+    await screen.findByText("Receipts and invoices");
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/rule-jobs/open")).toBe(true));
+    expect(screen.queryByText(/A run of rules/)).not.toBeInTheDocument();
+  });
 });

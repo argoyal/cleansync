@@ -288,3 +288,23 @@ async def test_missing_mail_row_fails_plainly(gbox):
     # the decision goes with the row (cascade) on databases that enforce it; either way no crash
     result = await gbox.applier.apply(did)
     assert result in ("failed",)
+
+
+@pytest.mark.parametrize(
+    ("actions", "later"),
+    [([{"kind": "archive"}], MailState.OFFLOADED), ([{"kind": "delete"}], MailState.DELETED)],
+)
+async def test_undo_of_mail_no_longer_in_gmail_changes_nothing(gbox, actions, later):
+    row = gbox.add("Old")
+    did = decision(gbox, row, actions)
+    await gbox.applier.apply(did)
+    with gbox.sf() as db:  # later offloaded, or deleted forever from the archive
+        db.get(MailMessage, row.id).state = later
+        db.commit()
+    labels_before = list(gbox.fake.messages[row.provider_id].labels)
+    res = await gbox.applier.undo(did)
+    assert (res.status, res.left) == ("applied", [])
+    d = get(gbox, RuleDecision, did)
+    assert d.status == "applied" and d.reason == "It's no longer in Gmail, so nothing was undone."
+    assert get(gbox, MailMessage, row.id).state == later
+    assert gbox.fake.messages[row.provider_id].labels == labels_before

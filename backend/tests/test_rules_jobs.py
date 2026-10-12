@@ -1,7 +1,7 @@
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from app.models import MailMessage, RuleDecision
+from app.models import MailMessage, RuleDecision, RuleJob, RuleTodo
 from app.models.enums import RuleJobState
 from app.services.rules.jobs import RuleJobProblem, RuleJobs
 from app.services.rules.match import Choice
@@ -140,12 +140,59 @@ async def test_run_waits_when_gmail_is_unreachable_then_goes_on(gbox, monkeypatc
     assert "INBOX" not in gbox.fake.messages[r.provider_id].labels
 
 
-async def test_second_preview_is_refused_while_one_is_unfinished(gbox):
+async def test_a_new_preview_stops_an_unfinished_preview(gbox):
+    with gbox.sf() as db:
+        create_rule(db, gbox.acc.id, ARCHIVE, "a")
     gbox.add("x")
     worker, jobs = setup(gbox)
-    jobs.start_preview(gbox.acc.id, view="inbox")
+    old, p = await preview(gbox, worker, jobs, view="inbox")
+    assert p.state == RuleJobState.PREVIEWED and p.planned == 1
+    new = jobs.start_preview(gbox.acc.id, view="inbox")
+    old_p = jobs.preview(gbox.acc.id, old)
+    assert old_p.state == RuleJobState.STOPPED and old_p.planned == 0 and old_p.skipped == 1
+    assert jobs.preview(gbox.acc.id, new).state == RuleJobState.PREVIEWING
+    with gbox.sf() as db:
+        reasons = set(db.scalars(select(RuleDecision.reason).where(RuleDecision.job_id == old)))
+    assert reasons == {"The run was stopped."}
+
+
+async def test_a_new_preview_stops_a_job_still_deciding(gbox):
+    gbox.add("x")
+    worker, jobs = setup(gbox)
+    old = jobs.start_preview(gbox.acc.id, view="inbox")
+    new = jobs.start_preview(gbox.acc.id, view="inbox")
+    assert jobs.preview(gbox.acc.id, old).state == RuleJobState.STOPPED
+    with gbox.sf() as db:
+        todo_jobs = set(db.scalars(select(RuleTodo.job_id)))
+    assert todo_jobs == {new}
+
+
+async def test_second_preview_is_refused_while_a_job_is_running(gbox):
+    from app.models import RuleJob
+
+    gbox.add("x")
+    worker, jobs = setup(gbox)
+    jid = jobs.start_preview(gbox.acc.id, view="inbox")
+    with gbox.sf() as db:
+        db.get(RuleJob, jid).state = RuleJobState.RUNNING
+        db.commit()
     with pytest.raises(RuleJobProblem, match="isn't finished"):
         jobs.start_preview(gbox.acc.id, view="inbox")
+
+
+async def test_planned_change_shows_a_chip_only_while_its_job_is_open(gbox):
+    from app.services.mail.listing import decision_chips
+
+    with gbox.sf() as db:
+        create_rule(db, gbox.acc.id, ARCHIVE, "a")
+    m = gbox.add("x")
+    worker, jobs = setup(gbox)
+    jid, _ = await preview(gbox, worker, jobs, view="inbox")
+    with gbox.sf() as db:
+        assert decision_chips(db, [m.id])[m.id]["status"] == "planned"
+        db.execute(update(RuleJob).where(RuleJob.id == jid).values(state=RuleJobState.STOPPED))
+        db.commit()  # stopped without touching its decisions: the chip must still go
+        assert decision_chips(db, [m.id]) == {}
 
 
 async def test_mail_already_waiting_as_new_mail_is_left_out_of_the_job(gbox):
@@ -275,3 +322,29 @@ async def test_resume_restarts_a_running_job(gbox):
     await jobs.wait(jid)
     p = jobs.preview(gbox.acc.id, jid)
     assert p.state == RuleJobState.DONE and p.applied == 2
+
+
+async def test_applying_a_planned_change_withdraws_older_suggestions(gbox):
+    from app.models.enums import DecisionHow
+
+    rid, rows, jobs, jid = await _ready(gbox, 1)
+    with gbox.sf() as db:  # sorting had suggested something for the same mail earlier
+        old = RuleDecision(
+            account_id=gbox.acc.id,
+            message_id=rows[0].id,
+            rule_id=rid,
+            rule_name="News",
+            how=DecisionHow.AI,
+            actions=[{"kind": "archive"}],
+            labels_seen=["INBOX"],
+            status="suggested",
+        )
+        db.add(old)
+        db.commit()
+        old_id = old.id
+    jobs.run(gbox.acc.id, jid, 1)
+    await jobs.wait(jid)
+    assert jobs.preview(gbox.acc.id, jid).applied == 1
+    with gbox.sf() as db:
+        d = db.get(RuleDecision, old_id)
+        assert d.status == "withdrawn" and d.reason == "A run of rules changed this mail."

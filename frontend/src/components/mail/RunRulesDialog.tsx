@@ -43,18 +43,21 @@ function Preview({ job }: { job: JobPreview }) {
   );
 }
 
+type Props = { account: Account; onClose: () => void } & ({ start: RunRulesStart; jobId?: undefined } | { jobId: number; start?: undefined });
+
 /** "Run rules on…" (AI rules spec §6): the rules decide for each mail first (a preview that
- * changes nothing), then the person types the count and the changes are made. */
-export function RunRulesDialog({ account, start, onClose }: { account: Account; start: RunRulesStart; onClose: () => void }) {
+ * changes nothing), then the person types the count and the changes are made.
+ * With `jobId` it shows a run that is already there instead of starting one. */
+export function RunRulesDialog({ account, start, jobId: existing, onClose }: Props) {
   const begin = useStartRuleJob();
   const runJob = useRunRuleJob();
   const stop = useStopRuleJob();
-  const [jobId, setJobId] = useState<number | null>(null);
+  const [jobId, setJobId] = useState<number | null>(existing ?? null);
   const [typed, setTyped] = useState("");
   const asked = useRef(false); // one job per opening, even when an effect runs twice
   const closed = useRef(false); // closed before the job had started: stop it once it has an id
   useEffect(() => {
-    if (asked.current) return;
+    if (asked.current || !start) return;
     asked.current = true;
     begin
       .mutateAsync({ accountId: account.id, q: start.q, view: start.view, messageIds: start.message_ids })
@@ -75,7 +78,8 @@ export function RunRulesDialog({ account, start, onClose }: { account: Account; 
   const stopJob = () => jobId !== null && stop.mutate({ accountId: account.id, jobId });
   const cancel = () => {
     closed.current = true;
-    if (state === "PREVIEWING" || (jobId !== null && !job)) stopJob();
+    // Only a run that is making changes keeps going: a preview left open would block the next run.
+    if (state === "PREVIEWING" || state === "PREVIEWED" || (jobId !== null && !job && existing === undefined)) stopJob();
     onClose();
   };
   return (

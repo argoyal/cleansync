@@ -208,10 +208,15 @@ class SortingWorker:
                 self._finish(db, todo)
                 db.commit()
                 return 1, True, False
-            try:
-                mail = mail_for_model(self.layout, email, row)
-            except CopyUnreadable as e:
-                reason = f"The copy here can't be read ({e})."
+        # The mail file is read off the event loop, with no database session held open.
+        try:
+            mail = await asyncio.to_thread(mail_for_model, self.layout, email, row)
+        except CopyUnreadable as e:
+            reason = f"The copy here can't be read ({e})."
+            with self.sf() as db:
+                todo = db.get(RuleTodo, (account_id, message_id))
+                if todo is None:
+                    return 0, False, False
                 if todo.attempts + 1 >= GIVE_UP_AFTER:
                     self._give_up(db, todo, reason)
                     db.commit()
@@ -219,6 +224,7 @@ class SortingWorker:
                 self._wait(db, todo, reason)
                 db.commit()
                 return 0, True, False
+        with self.sf() as db:
             rules = rule_views(db, account_id)
             remembered = remembered_senders(db, account_id)
             hints = hints_for(db, account_id, mail.sender)

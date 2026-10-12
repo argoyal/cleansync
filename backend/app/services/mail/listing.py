@@ -11,8 +11,8 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.core.clock import as_utc
-from app.models import MailLabel, MailMessage, RuleDecision
-from app.models.enums import DecisionStatus, MailState
+from app.models import MailLabel, MailMessage, RuleDecision, RuleJob
+from app.models.enums import DecisionStatus, MailState, RuleJobState
 from app.services.mail.gmail import valid_mail_id
 from app.services.mail.search import SearchError
 
@@ -35,7 +35,9 @@ class ThreadRow:
     decision: dict | None = None
 
 
-CHIP_STATUSES = (DecisionStatus.SUGGESTED, DecisionStatus.APPLIED, DecisionStatus.PLANNED)
+CHIP_STATUSES = (DecisionStatus.SUGGESTED, DecisionStatus.APPLIED)
+# A planned change is shown only while its run of rules can still make it.
+OPEN_JOB_STATES = (RuleJobState.PREVIEWING, RuleJobState.PREVIEWED, RuleJobState.RUNNING)
 
 
 def decision_chips(db: Session, message_ids: list[int]) -> dict[int, dict]:
@@ -45,7 +47,17 @@ def decision_chips(db: Session, message_ids: list[int]) -> dict[int, dict]:
     out: dict[int, dict] = {}
     for d in db.scalars(
         select(RuleDecision)
-        .where(RuleDecision.message_id.in_(message_ids), RuleDecision.status.in_(CHIP_STATUSES))
+        .outerjoin(RuleJob, RuleJob.id == RuleDecision.job_id)
+        .where(
+            RuleDecision.message_id.in_(message_ids),
+            or_(
+                RuleDecision.status.in_(CHIP_STATUSES),
+                and_(
+                    RuleDecision.status == DecisionStatus.PLANNED,
+                    RuleJob.state.in_(OPEN_JOB_STATES),
+                ),
+            ),
+        )
         .order_by(RuleDecision.id)
     ):
         out[d.message_id] = {

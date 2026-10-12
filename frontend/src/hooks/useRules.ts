@@ -17,7 +17,7 @@ import type {
 } from "../api/rules";
 import { useToast } from "../components/Toasts";
 
-export const RULE_KEYS = ["rules", "rules-sorting", "rule-decisions", "rule-job"];
+export const RULE_KEYS = ["rules", "rules-sorting", "rule-decisions", "rule-job", "rule-job-open"];
 const MAIL = ["mail-threads", "mail-counts", "mail-thread", "mail-message"];
 
 /**

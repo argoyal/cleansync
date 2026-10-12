@@ -24,7 +24,9 @@ WAIT_SECONDS = 60
 CHANGED_MSG = "It changed since the preview, so it was left as it is."
 APPLY_FAILED_MSG = "Something went wrong applying this change."
 STOPPED_MSG = "The run was stopped."
+RUN_CHANGED_MSG = "A run of rules changed this mail."
 RULE_CHANGED_MSG = "Its rule changed since the preview, so it was left as it is."
+OPEN_STATES = (RuleJobState.PREVIEWING, RuleJobState.PREVIEWED, RuleJobState.RUNNING)
 
 
 class RuleJobProblem(ValueError):
@@ -80,18 +82,20 @@ class RuleJobs:
                     base = base.where(*mail_conditions(db, account_id, view=view, q=q, now=now))
                 except SearchError as e:
                     raise RuleJobProblem(str(e)) from None
-            busy = db.scalar(
-                select(RuleJob.id).where(
-                    RuleJob.account_id == account_id,
-                    RuleJob.state.in_(
-                        [RuleJobState.PREVIEWING, RuleJobState.PREVIEWED, RuleJobState.RUNNING]
-                    ),
+            open_jobs = list(
+                db.scalars(
+                    select(RuleJob).where(
+                        RuleJob.account_id == account_id, RuleJob.state.in_(OPEN_STATES)
+                    )
                 )
             )
-            if busy is not None:
+            if any(j.state == RuleJobState.RUNNING for j in open_jobs):
                 raise RuleJobProblem(
                     "Another run of rules for this mailbox isn't finished. Run or stop it first."
                 )
+            # A preview nobody went on with (its dialog was closed) gives way to the new one.
+            for j in open_jobs:
+                self._stop_in(db, j)
             found = list(db.scalars(base.limit(MAX_JOB + 1)))
             if len(found) > MAX_JOB:
                 raise RuleJobProblem(
@@ -274,6 +278,7 @@ class RuleJobs:
                     job.reason = None
                     if status == DecisionStatus.APPLIED:
                         job.applied += 1
+                        self._withdraw_suggestions(db, did)
                     else:
                         job.failed += 1
                     db.commit()
@@ -289,19 +294,47 @@ class RuleJobs:
                     job.finished_at = self.clock()
                     db.commit()
 
+    def _withdraw_suggestions(self, db, decision_id: int) -> None:
+        """The run changed this mail: older suggestions for it no longer fit."""
+        d = db.get(RuleDecision, decision_id)
+        db.execute(
+            update(RuleDecision)
+            .where(
+                RuleDecision.account_id == d.account_id,
+                RuleDecision.message_id == d.message_id,
+                RuleDecision.id != decision_id,
+                RuleDecision.status == DecisionStatus.SUGGESTED,
+            )
+            .values(status=DecisionStatus.WITHDRAWN, reason=RUN_CHANGED_MSG)
+            .execution_options(synchronize_session=False)
+        )
+
+    def _stop_in(self, db, job: RuleJob) -> None:
+        """Drop the job's to-do rows, skip its planned changes and mark it stopped (no commit)."""
+        db.execute(delete(RuleTodo).where(RuleTodo.job_id == job.id))
+        left = db.execute(
+            update(RuleDecision)
+            .where(RuleDecision.job_id == job.id, RuleDecision.status == DecisionStatus.PLANNED)
+            .values(status=DecisionStatus.SKIPPED, reason=STOPPED_MSG)
+            .execution_options(synchronize_session=False)
+        ).rowcount
+        job.skipped += left
+        if job.state in OPEN_STATES:
+            job.state, job.finished_at = RuleJobState.STOPPED, self.clock()
+
+    def open_job(self, account_id: int) -> int | None:
+        """The mailbox's unfinished run of rules, if there is one."""
+        with self.sf() as db:
+            return db.scalar(
+                select(RuleJob.id)
+                .where(RuleJob.account_id == account_id, RuleJob.state.in_(OPEN_STATES))
+                .order_by(RuleJob.id.desc())
+                .limit(1)
+            )
+
     def stop(self, account_id: int, job_id: int) -> None:
         with self.sf() as db:
-            job = self._job(db, account_id, job_id)
-            db.execute(delete(RuleTodo).where(RuleTodo.job_id == job_id))
-            left = db.execute(
-                update(RuleDecision)
-                .where(RuleDecision.job_id == job_id, RuleDecision.status == DecisionStatus.PLANNED)
-                .values(status=DecisionStatus.SKIPPED, reason=STOPPED_MSG)
-                .execution_options(synchronize_session=False)
-            ).rowcount
-            job.skipped += left
-            if job.state in (RuleJobState.PREVIEWING, RuleJobState.PREVIEWED, RuleJobState.RUNNING):
-                job.state, job.finished_at = RuleJobState.STOPPED, self.clock()
+            self._stop_in(db, self._job(db, account_id, job_id))
             db.commit()
         task = self._tasks.pop(job_id, None)
         if task is not None:

@@ -128,6 +128,16 @@ export const useRuleJob = (accountId: number, jobId: number | null) =>
     refetchInterval: (q) => (q.state.data && JOB_DONE.includes(q.state.data.state) ? false : 2000),
   });
 
+const JOB_BUSY: JobState[] = ["PREVIEWING", "RUNNING"];
+/** The mailbox's unfinished run of rules (null when there is none), so a closed dialog can be found again. */
+export const useOpenRuleJob = (accountId: number | null) =>
+  useQuery({
+    queryKey: ["rule-job-open", accountId],
+    queryFn: () => api<JobPreview | null>(`/api/rule-jobs/open${query({ account_id: accountId })}`),
+    enabled: accountId !== null,
+    refetchInterval: (q) => (q.state.data && JOB_BUSY.includes(q.state.data.state) ? 3000 : false),
+  });
+
 export const useStarters = () =>
   useQuery({ queryKey: ["rule-starters"], queryFn: () => api<Starter[]>("/api/rules/starters"), staleTime: Infinity });
 
