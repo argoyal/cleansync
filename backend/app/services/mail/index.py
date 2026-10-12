@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
-from app.core.clock import as_utc
+from app.core.clock import as_utc, utcnow
 from app.models import (
     MailFailure,
     MailLabel,
@@ -19,6 +19,7 @@ from app.models import (
 from app.models.enums import MailItemResult, MailPhase, MailState
 from app.services.mail.adapter import MailMeta, ProviderLabel
 from app.services.mail.store import ParsedMail
+from app.services.rules.feedback import note_label_change
 
 CHUNK = 500
 FAIL_SHOWN_AFTER = 3
@@ -279,6 +280,7 @@ def apply_labels(
     if row is None:
         return None
     labels = list(labels)
+    before = set(row.labels or [])
     gone = bool(GONE_LABELS & set(labels))
     if row.state == MailState.LOCAL_ARCHIVE and gone:
         return row  # deleted by CleanSync into its local archive: in Gmail's trash is expected
@@ -301,6 +303,7 @@ def apply_labels(
         # label change.
         row.state, row.offload_id = MailState.IN_MAIL, None
         set_flags(row, labels)
+    note_label_change(db, row, before, set(labels), utcnow())
     db.commit()
     return row
 
