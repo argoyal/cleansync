@@ -218,6 +218,15 @@ class FakeGmail:
                     "historyId": str(self.history_id),
                 },
             )
+        if rest == "/labels" and request.method == "POST":
+            name = str(json.loads(request.content or b"{}").get("name") or "").strip()
+            taken = {v.lower() for v in self.user_labels.values()} | {
+                x.lower() for x in SYSTEM_LABELS
+            }
+            if not name or name.lower() in taken:
+                return self._error(409, "duplicate")
+            lid = self.add_label(name)
+            return httpx.Response(200, json={"id": lid, "name": name, "type": "user"})
         if rest == "/labels":
             labels = [{"id": x, "name": x, "type": "system"} for x in SYSTEM_LABELS]
             labels += [{"id": k, "name": v, "type": "user"} for k, v in self.user_labels.items()]
@@ -226,7 +235,7 @@ class FakeGmail:
             return self._list(request)
         if rest == "/history":
             return self._history(request)
-        m = re.fullmatch(r"/messages/([^/]+)(/trash|/untrash)?", rest)
+        m = re.fullmatch(r"/messages/([^/]+)(/trash|/untrash|/modify)?", rest)
         if m is None:
             return self._error(404)
         msg = self.messages.get(m.group(1))
@@ -245,6 +254,16 @@ class FakeGmail:
         if m.group(2) == "/untrash":
             back = [x for x in msg.labels if x != "TRASH"]
             self.set_labels(msg.id, back if "INBOX" in back or "SENT" in back else ["INBOX", *back])
+            return httpx.Response(200, json={"id": msg.id, "labelIds": msg.labels})
+        if m.group(2) == "/modify" and request.method == "POST":
+            body = json.loads(request.content or b"{}")
+            add = [str(x) for x in body.get("addLabelIds") or []]
+            remove = {str(x) for x in body.get("removeLabelIds") or []}
+            self.set_labels(
+                msg.id,
+                [x for x in msg.labels if x not in remove]
+                + [x for x in add if x not in msg.labels],
+            )
             return httpx.Response(200, json={"id": msg.id, "labelIds": msg.labels})
         return self._error(404)
 

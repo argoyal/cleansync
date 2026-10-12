@@ -300,6 +300,30 @@ class GmailAdapter:
     async def untrash(self, id: str) -> None:
         await self._call("gmail.messages.untrash", "POST", f"/messages/{_mail_id(id)}/untrash")
 
+    async def modify(self, id: str, add: list[str], remove: list[str]) -> tuple[str, ...]:
+        """Add and remove labels on one mail (AI rules spec §6); the labels it has now."""
+        resp = await self._call(
+            "gmail.messages.modify",
+            "POST",
+            f"/messages/{_mail_id(id)}/modify",
+            json={"addLabelIds": list(add), "removeLabelIds": list(remove)},
+        )
+        return tuple(str(x) for x in _json(resp).get("labelIds") or ())
+
+    async def create_label(self, name: str) -> ProviderLabel:
+        resp = await self._call(
+            "gmail.labels.create",
+            "POST",
+            "/labels",
+            json={
+                "name": name,
+                "labelListVisibility": "labelShow",
+                "messageListVisibility": "show",
+            },
+        )
+        data = _json(resp)
+        return ProviderLabel(str(data["id"]), str(data.get("name") or name), "user")
+
     async def state(self, id: str) -> ProviderState:
         try:
             resp = await self._call(
