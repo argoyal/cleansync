@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend dev-seed templates test lint format build fe-install fe-build e2e e2e-new
+.PHONY: dev dev-backend dev-frontend dev-seed fake-model templates test lint format build fe-install fe-build e2e e2e-new
 
 # Keep this path short: rclone's bisync lock file name contains both folder paths.
 DEV_ROOT := $(CURDIR)/drivesync-data
@@ -16,6 +16,10 @@ dev-frontend:
 
 dev-seed:
 	cd backend && $(DEV_ENV) DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 uv run python -m app.devtools.seed_local_account alice@example.com --sample-files --sample-mail
+
+# A pretend AI model for trying mail rules without a real one: http://127.0.0.1:11999/v1, model "fake-sorter".
+fake-model:
+	cd backend && uv run python -m app.devtools.fake_model --port 11999
 
 templates:
 	cd backend && uv run python scripts/make_office_templates.py app/resources/office
@@ -41,6 +45,7 @@ fe-build:
 	cd frontend && npm run build
 
 # Optional: E2E_CONTAINER=<name of the running container> lets the mail test check the fake Gmail's trash.
+# The rules test needs the pretend model where the server can reach it (make fake-model, or E2E_FAKE_MODEL_URL).
 e2e:
 	cd frontend && E2E_CONTAINER=$(E2E_CONTAINER) E2E_BASE_URL=http://localhost:8080 E2E_ADMIN_PASSWORD=dev-password-change-me npx playwright test
 

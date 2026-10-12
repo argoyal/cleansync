@@ -1,69 +1,19 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { expect, type Page, test } from "@playwright/test";
 
+import { choosePassword, fakeGmailTrash, firstSync, logIn, ready, setUpMail, START_PASSWORD } from "./helpers";
+
 // The tests share one container, so they run one after another. Each one can also run on its
 // own: ready() does the first-run steps (new password, first sync) when they haven't happened.
 test.describe.configure({ mode: "serial" });
 
-const START_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "ci-smoke-password";
-const NEW_PASSWORD = "a much better passphrase for e2e";
-const PHRASE = "I understand and want to start synchronization.";
 const PRETEND_NATIVE_MSG = "Google Docs, Sheets and Slides need a real Google account.";
 const NOT_SYNCED_NOTE = "This folder isn't synced with Google Drive. Open a synced folder to add files.";
 const IN_OFFLOADED_NOTE =
   "This folder is offloaded: it's kept only on this server and doesn't sync with Google Drive. Restore it to Drive to add files here.";
-
-async function logIn(page: Page, password: string) {
-  await page.goto("/");
-  await expect(page).toHaveURL(/\/login$/);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Log in" }).click();
-  await expect(page).not.toHaveURL(/\/login$/); // logged in before going anywhere else
-}
-
-/** Change the starting password: a new installation asks for that first. */
-async function choosePassword(page: Page) {
-  await expect(page.getByRole("heading", { name: "Choose your own password" })).toBeVisible();
-  await page.getByLabel("Current password").fill(START_PASSWORD);
-  await page.getByLabel(/^New password(?! again)/).fill(NEW_PASSWORD);
-  await page.getByLabel("New password again").fill(NEW_PASSWORD);
-  await page.getByRole("button", { name: "Save password" }).click();
-}
-
-/** The wizard's first sync of the seeded pretend account, from "Choose what to sync" to "Synced". */
-async function firstSync(page: Page) {
-  await expect(page.getByRole("heading", { name: "Choose what to sync" })).toBeVisible();
-  await page.getByRole("button", { name: "Create and preview" }).click();
-  await page.getByRole("button", { name: "Compare the folders" }).click();
-  await expect(page.getByText("Only on Drive (download)")).toBeVisible({ timeout: 60_000 });
-  await page.getByLabel(/To start, type/).fill(PHRASE);
-  await page.getByRole("button", { name: "Start the first sync" }).click();
-  await expect(page.getByRole("heading", { name: "Synced" })).toBeVisible({ timeout: 120_000 });
-}
-
-/** Logged in, with the first sync done, whichever tests ran before. */
-async function ready(page: Page) {
-  const tryNew = await page.request.post("/api/auth/login", { data: { username: "admin", password: NEW_PASSWORD } });
-  if (!tryNew.ok()) {
-    // A new installation: the starting password, then the wizard.
-    await logIn(page, START_PASSWORD);
-    await choosePassword(page);
-    await firstSync(page);
-  } else {
-    const pairs = await page.request.get("/api/sync-pairs");
-    expect(pairs.ok(), await pairs.text()).toBe(true);
-    if (!((await pairs.json()) as { initialized: boolean }[]).some((p) => p.initialized)) {
-      await page.goto("/setup");
-      await firstSync(page);
-    }
-  }
-  await page.goto("/drive");
-  await expect(page.getByRole("button", { name: "Welcome.txt", exact: true })).toBeVisible();
-}
 
 async function accountId(page: Page, email: string): Promise<number> {
   const accounts = (await (await page.request.get("/api/accounts")).json()) as { id: number; email: string }[];
@@ -89,20 +39,6 @@ async function uploadViaApi(page: Page, accountId: number, name: string, body: s
     data: Buffer.from(body),
   });
   expect(r.status(), await r.text()).toBe(200);
-}
-
-/** Mail set up for alice and its first backup done (the sample mailbox: 24 kept of 26). */
-async function setUpMail(page: Page) {
-  await page.goto("/mail");
-  const status = page.getByText(/^24 mails · .* · checked/);
-  const setUp = page.getByRole("button", { name: "Set up mail backup" }).first();
-  await expect(status.or(setUp)).toBeVisible(); // wait for the page to settle before choosing
-  if (await status.isVisible()) return;
-  await setUp.click();
-  await expect(page.getByRole("heading", { name: "Start mail backup" })).toBeVisible();
-  await expect(page.getByText("About 26 mails. The first backup takes a few hours. Nothing in Gmail changes.")).toBeVisible();
-  await page.getByRole("button", { name: "Start", exact: true }).click();
-  await expect(status).toBeVisible({ timeout: 120_000 });
 }
 
 const SHOW_NEW = process.env.E2E_SHOW_NEW === "1";
@@ -506,38 +442,6 @@ test("on a phone, opening a mail hides the list and Back returns to it", async (
   await page.getByRole("link", { name: "Back" }).first().click();
   await expect(list).toBeVisible();
 });
-
-/** Subjects of the mails the pretend Gmail holds in its trash. Needs E2E_CONTAINER (the container's
- * name) to look inside; without it this returns null and the test skips that check. */
-function fakeGmailTrash(): string[] | null {
-  const name = process.env.E2E_CONTAINER;
-  if (!name) {
-    // In CI a missing name would silently skip the trash checks, so fail instead.
-    if (process.env.CI) throw new Error("E2E_CONTAINER must name the container in CI, or the trash checks are skipped");
-    return null;
-  }
-  const json = execFileSync(
-    "docker",
-    [
-      "exec",
-      name,
-      "cat",
-      "/drivesync/app/data/fake-gmail/alice@example.com.json",
-    ],
-    { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
-  );
-  const data = JSON.parse(json) as {
-    messages: { labels: string[]; raw: string }[];
-  };
-  return data.messages
-    .filter((m) => m.labels.includes("TRASH"))
-    .map(
-      (m) =>
-        /^Subject: (.*)$/m
-          .exec(Buffer.from(m.raw, "base64").toString("utf8"))?.[1]
-          ?.trim() ?? "",
-    );
-}
 
 test("offload old mail by filter, restore one, and a filter that finds only recent mail offloads nothing", async ({
   page,

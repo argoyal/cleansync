@@ -1,7 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // Runs against an already running CleanSync (CI: the built container with a seeded
-// local "pretend Google" account). Set E2E_BASE_URL and E2E_ADMIN_PASSWORD.
+// local "pretend Google" account). Set E2E_BASE_URL and E2E_ADMIN_PASSWORD. The rules test also
+// needs the pretend model (python -m app.devtools.fake_model) where the server can reach it;
+// E2E_FAKE_MODEL_URL says where, by default http://127.0.0.1:11999/v1.
 export default defineConfig({
   testDir: "./e2e",
   timeout: 180_000,
@@ -16,5 +18,9 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", testMatch: "smoke.spec.ts", use: { ...devices["Desktop Chrome"] } },
+    // After the smoke tests: the rules test changes the sample mailbox they count.
+    { name: "rules", testMatch: "rules.spec.ts", dependencies: ["chromium"], use: { ...devices["Desktop Chrome"] } },
+  ],
 });
