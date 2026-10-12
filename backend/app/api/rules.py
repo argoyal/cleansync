@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.mail_reader import account_or_404
 from app.auth.deps import AuthContext, get_db, require_user
-from app.core.clock import utcnow
+from app.core.clock import as_utc, utcnow
 from app.models import MailMessage, Rule, RuleAccount, RuleDecision, RuleSender, RuleTodo
 from app.models.enums import AiTaskName, DecisionStatus
 from app.schemas.rules import (
@@ -36,6 +36,9 @@ from app.schemas.rules import (
     YamlBody,
 )
 from app.services.ai.client import AiError
+from app.services.google.client import RateLimited
+from app.services.google.quota import BudgetReached
+from app.services.mail.adapter import MailAuthError, MailUnreachable
 from app.services.mail.archive import ArchiveProblem
 from app.services.mail.search import SearchError, mail_conditions
 from app.services.rules import drafting, store
@@ -67,12 +70,16 @@ WAIT_MSG = "Gmail can't be changed right now ({why}). Try again later."
 
 
 def _wait(e: Exception) -> HTTPException:
-    why = {
-        "BudgetReached": "Google's daily limit is reached",
-        "RateLimited": "Google asked us to slow down",
-        "MailUnreachable": "Gmail can't be reached",
-        "MailAuthError": "the mailbox needs to be reconnected",
-    }.get(type(e).__name__, "it is busy")
+    if isinstance(e, BudgetReached):
+        why = "Google's daily limit is reached"
+    elif isinstance(e, RateLimited):
+        why = "Google asked us to slow down"
+    elif isinstance(e, MailAuthError):
+        why = "the mailbox needs to be reconnected"
+    elif isinstance(e, MailUnreachable):
+        why = "Gmail can't be reached"
+    else:
+        why = "it is busy"
     return HTTPException(503, WAIT_MSG.format(why=why))
 
 
@@ -164,13 +171,14 @@ def create_rule(
         raise _problem(e) from e
 
 
+# Declared before /api/rules/{rule_id} on purpose: otherwise PUT /api/rules/sorting is read as a rule id.
 # ---- sorting status ----------------------------------------------------------------------------
 def _sorting_out(db: Session, request: Request, account_id: int) -> SortingOut:
     ra = db.get(RuleAccount, account_id)
     now = utcnow()
     today = datetime.combine(now.date(), time.min, tzinfo=now.tzinfo)
     count = lambda *w: db.scalar(select(func.count()).where(*w)) or 0  # noqa: E731
-    failing = ra.failing_since if ra else None
+    failing = as_utc(ra.failing_since) if ra else None
     return SortingOut(
         enabled=bool(ra and ra.sorting_enabled),
         waiting=count(RuleTodo.account_id == account_id, RuleTodo.job_id.is_(None)),
@@ -322,9 +330,11 @@ def import_rules(
 def copy(body: CopyBody, ctx: AuthContext = Depends(require_user), db: Session = Depends(get_db)):
     account_or_404(db, body.account_id)
     account_or_404(db, body.to_account_id)
-    if body.to_account_id == body.account_id:
-        raise HTTPException(400, "Pick another mailbox to copy the rules to.")
-    return {"copied": store.copy_rules(db, body.account_id, body.to_account_id, ctx.user.username)}
+    try:
+        n = store.copy_rules(db, body.account_id, body.to_account_id, ctx.user.username)
+    except PROBLEMS as e:
+        raise _problem(e) from e
+    return {"copied": n}
 
 
 # ---- drafting and Try it -----------------------------------------------------------------------

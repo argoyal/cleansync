@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 # backend/tests/test_rules_api.py
 import pytest
 from sqlalchemy import select
@@ -138,3 +140,144 @@ def test_correct_waits_become_503_and_changes_are_published(auth_client, acc, ap
     assert "BudgetReached" not in r.text and not seen
     r = auth_client.post("/api/rule-decisions/reject", json={"account_id": acc.id, "ids": [1]})
     assert r.json() == {"rejected": 0} and ("rules", {"account_id": acc.id}) in seen
+
+
+@pytest.mark.parametrize(
+    ("ago", "warn"), [(timedelta(hours=2), True), (timedelta(minutes=30), False)]
+)
+def test_sorting_warning_after_an_hour_of_failing(auth_client, acc, db, ago, warn):
+    from app.core.clock import utcnow
+    from app.services.rules.worker import set_sorting
+
+    ra = set_sorting(db, acc.id, True)
+    ra.failing_since = utcnow() - ago
+    ra.last_error = "Model unreachable"
+    db.commit()
+    db.expire_all()
+    r = auth_client.get("/api/rules/sorting", params={"account_id": acc.id})
+    assert r.status_code == 200 and r.json()["warning"] is warn
+    assert r.json()["failing_since"] is not None
+
+
+def test_try_it_without_a_model_uses_fixed_conditions_only(auth_client, acc, db, layout):
+    from app.devtools.fake_gmail import make_mail
+    from tests.rules_helpers import keep
+
+    keep(db, layout, acc, make_mail("Weekly digest", sender="news@example.com"))
+    keep(db, layout, acc, make_mail("Lunch?", sender="pal@example.com"))
+    rule = {
+        "name": "News",
+        "conditions": {"senders_in": ["news@example.com"]},
+        "combine": "fixed_only",
+        "actions": [{"kind": "archive"}],
+    }
+    out = auth_client.post("/api/rules/try", json={"account_id": acc.id, "rule": rule}).json()
+    by_subject = {r["subject"]: r for r in out}
+    assert by_subject["Weekly digest"]["this_rule"] is True
+    assert by_subject["Lunch?"]["this_rule"] is False
+
+
+def test_undo_through_the_api(auth_client, acc, app, layout, db):
+    from app.devtools.fake_gmail import FakeGmail, make_mail
+    from tests.mail_helpers import fake_adapter
+    from tests.rules_helpers import keep
+    from tests.test_mail_api import OneAdapter
+
+    fake = FakeGmail(acc.email)
+    raw = make_mail("Digest")
+    pid = fake.add(raw)
+    row = keep(db, layout, acc, raw, pid=pid)
+    app.state.mail.adapters = OneAdapter(fake_adapter(fake))
+    rid = auth_client.post("/api/rules", json={"account_id": acc.id, **RULE}).json()["id"]
+    db.add(
+        RuleDecision(
+            account_id=acc.id,
+            message_id=row.id,
+            rule_id=rid,
+            rule_version=1,
+            rule_name="Newsletters",
+            how="ai",
+            actions=RULE["actions"],
+            labels_seen=["INBOX"],
+            status="suggested",
+        )
+    )
+    db.commit()
+    did = db.scalar(select(RuleDecision.id))
+    auth_client.post("/api/rule-decisions/approve", json={"account_id": acc.id, "ids": [did]})
+    assert "INBOX" not in fake.messages[pid].labels
+    out = auth_client.post("/api/rule-decisions/undo", json={"account_id": acc.id, "ids": [did]})
+    assert out.status_code == 200 and out.json()[0]["status"] == "undone"
+    assert "INBOX" in fake.messages[pid].labels
+
+
+def test_another_mailbox_cannot_touch_this_ones_objects(auth_client, acc, make_account, db, layout):
+    from app.devtools.fake_gmail import make_mail
+    from app.models import Rule, RuleJob, RuleSender
+    from tests.rules_helpers import keep
+
+    b = make_account("bob@example.com")
+    row = keep(db, layout, acc, make_mail("Private"))
+    rid = auth_client.post("/api/rules", json={"account_id": acc.id, **RULE}).json()["id"]
+    other_rule = auth_client.post("/api/rules", json={"account_id": b.id, **RULE}).json()["id"]
+    sender = RuleSender(rule_id=rid, account_id=acc.id, sender="a@example.com", approvals=3)
+    dec = RuleDecision(
+        account_id=acc.id,
+        message_id=row.id,
+        rule_id=rid,
+        rule_version=1,
+        rule_name="Newsletters",
+        how="ai",
+        actions=RULE["actions"],
+        labels_seen=["INBOX"],
+        status="suggested",
+    )
+    db.add_all([sender, dec])
+    db.commit()
+    jid = auth_client.post(
+        "/api/rule-jobs", json={"account_id": acc.id, "q": "", "view": "inbox"}
+    ).json()["job_id"]
+    sid, did = sender.id, dec.id
+    B = {"account_id": b.id}
+
+    assert (
+        auth_client.put(f"/api/rules/{rid}", json={**B, **RULE, "name": "Hijacked"}).status_code
+        == 404
+    )
+    assert auth_client.delete(f"/api/rules/{rid}", params=B).status_code == 404
+    assert auth_client.delete(f"/api/rules/{rid}/senders/{sid}", params=B).status_code == 404
+    assert auth_client.post("/api/rule-decisions/approve", json={**B, "ids": [did]}).json() in (
+        {},
+        {"applied": 0},
+    )
+    assert auth_client.post("/api/rule-decisions/reject", json={**B, "ids": [did]}).json() == {
+        "rejected": 0
+    }
+    assert auth_client.post("/api/rule-decisions/undo", json={**B, "ids": [did]}).json() == []
+    assert auth_client.post(
+        f"/api/rule-decisions/{did}/correct", json={**B, "rule_id": None}
+    ).status_code in (400, 404)
+    assert auth_client.post(
+        f"/api/rule-decisions/{did}/correct", json={**B, "rule_id": rid}
+    ).status_code in (400, 404)
+    assert auth_client.get(f"/api/rule-jobs/{jid}", params=B).status_code in (400, 404)
+    assert auth_client.post(f"/api/rule-jobs/{jid}/run", json={**B, "confirm": 1}).status_code in (
+        400,
+        404,
+    )
+    assert auth_client.post(f"/api/rule-jobs/{jid}/stop", json=B).status_code in (400, 404)
+    r = auth_client.post("/api/rules/draft-from-mail", json={**B, "message_ids": [row.id]})
+    assert r.status_code == 400 and "None of those mails" in r.json()["detail"]
+    assert (
+        auth_client.post("/api/rules/try", json={**B, "rule": RULE, "message_ids": [row.id]}).json()
+        == []
+    )
+
+    db.expire_all()
+    assert (
+        db.get(Rule, rid).name == "Newsletters" and db.get(Rule, other_rule).name == "Newsletters"
+    )
+    assert db.get(RuleSender, sid) is not None
+    assert db.get(RuleDecision, did).status == "suggested"
+    assert db.get(RuleJob, jid).state == "PREVIEWING"
+    assert db.scalars(select(RuleDecision)).all() == [db.get(RuleDecision, did)]
