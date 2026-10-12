@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.2.1 — not released yet
+## 0.3.0 — 2026-10-12
+
+- Mail rules: write rules in your own words, and a model you choose (any OpenAI-style server: Ollama, LM Studio, a LiteLLM gateway, OpenRouter…) sorts new inbox mail by them. Set up the model in Settings → Models (with Test); write rules from a sentence or from picked mail in Mail → Rules, with fixed conditions, Try it, starter rules, export/import and copy. Rules suggest first (Suggested view, rule chips with Approve, Correct… and Undo) or act automatically; senders you approve three times are remembered. "Run rules on…" previews a run on older mail and changes it after you type the count. Every change is logged and can be undone. See docs/mail-rules.md.
+- Delete and the Local archive: Delete (by hand or by a rule) checks CleanSync's copy, then moves the mail to Gmail's trash; CleanSync keeps the copy in a Local archive, apart from the other views and search. Restore it to Gmail, or Delete forever… with a typed count.
+- Model API keys and extra headers are kept only as mode-600 files, never returned and redacted in logs. Rejected requests (HTTP 422) no longer repeat the submitted values.
+- Upgrading: Database upgrade 0009 runs by itself on start; it adds the tables for rules and decisions. Mail sorting stays off until you set up a model, add rules and turn on "Sort new inbox mail" for a mailbox.
+- Fix: Delete forever refreshes the "N mails · size" header and its count at once, and is not offered when a label filter is set.
+
+## 0.2.1 — 2026-10-12
 
 - Mail opens quickly on big mailboxes. The list reads only the conversations it shows, label views and counts use a table of their own, and the "N mails · size" total loads separately, so the list doesn't wait for it.
 - A running mail backup no longer freezes the app. Each mail is saved in one short step, away from the part of the server that answers pages.
@@ -18,9 +26,6 @@
 - Mail reader: views, labels, conversations, search with operators, safe display (no scripts, images on request), attachments.
 - Mail offload: by filter or by pick, with a preview and a typed count; each mail is checked here before it goes to Gmail's trash, and Gmail empties its trash after 30 days. Offloads wait while the backup is checking the mailbox. Restore to Gmail takes mail out of Gmail's trash or imports it, and never imports a mail twice, even after Gmail's answer got lost; the one exception is mail with no usable Message-ID (missing, or with characters a Gmail search can't take), which could rarely end up twice. Recovery shows mail too.
 - Cost guard: Google API calls are paced and kept under a daily budget (default 10 million units, at most 40 million; Settings → Google API). Drive is counted but never held back.
-- Mail rules: write rules in your own words, and a model you choose (any OpenAI-style server: Ollama, LM Studio, a LiteLLM gateway, OpenRouter…) sorts new inbox mail by them. Set up the model in Settings → Models (with Test); write rules from a sentence or from picked mail in Mail → Rules, with fixed conditions, Try it, starter rules, export/import and copy. Rules suggest first (Suggested view, rule chips with Approve, Correct… and Undo) or act automatically; senders you approve three times are remembered. "Run rules on…" previews a run on older mail and changes it after you type the count. Every change is logged and can be undone. See docs/mail-rules.md.
-- Delete and the Local archive: Delete (by hand or by a rule) checks CleanSync's copy, then moves the mail to Gmail's trash; CleanSync keeps the copy in a Local archive, apart from the other views and search. Restore it to Gmail, or Delete forever… with a typed count.
-- Model API keys and extra headers are kept only as mode-600 files, never returned and redacted in logs. Rejected requests (HTTP 422) no longer repeat the submitted values.
 - Fix: a sync that fails or is cut off no longer leaves its folder "syncing right now".
 
 ## 0.1.0 — 2026-10-09
