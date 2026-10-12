@@ -7,6 +7,7 @@ import { useAccounts, useAppSettings, useGoogleUsage, useSystem } from "../api/q
 import type { Account, AppSettings } from "../api/types";
 import { Avatar } from "../components/AccountSwitcher";
 import { ACCOUNT_DOT } from "../components/StatusBadge";
+import { ModelsSettings } from "../components/settings/ModelsSettings";
 import { ThemeSwitch } from "../components/ThemeSwitch";
 import { useToast } from "../components/Toasts";
 import { Bar, Button, Dialog, Field, inputClass, Notice } from "../components/ui";
@@ -15,7 +16,7 @@ import { formatBytes, formatRelative, percent } from "../lib/format";
 import { PasswordForm } from "./ChangePasswordPage";
 
 /** The Settings tabs; the section panel lists the same ones. */
-export const TABS = { general: "General", accounts: "Accounts", sync: "Sync defaults", mail: "Mail", google: "Google API", security: "Security", system: "System" } as const;
+export const TABS = { general: "General", accounts: "Accounts", sync: "Sync defaults", mail: "Mail", models: "Models", google: "Google API", security: "Security", system: "System" } as const;
 type Tab = keyof typeof TABS;
 
 export function SettingsPage() {
@@ -42,6 +43,7 @@ export function SettingsPage() {
         {tab === "accounts" && <Accounts />}
         {tab === "sync" && <SyncDefaults />}
         {tab === "mail" && <MailSettings />}
+        {tab === "models" && <ModelsSettings />}
         {tab === "google" && <GoogleApiSettings />}
         {tab === "security" && <Security />}
         {tab === "system" && <System />}
