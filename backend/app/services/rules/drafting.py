@@ -7,11 +7,13 @@ from dataclasses import dataclass, field
 from app.models.enums import RuleCombine
 from app.services.ai.client import AiClient
 from app.services.ai.connections import AiTarget
+from app.services.rules.chooser import fence_safe
 from app.services.rules.mailview import MailForModel, domain_of
 from app.services.rules.match import Chooser, Conditions, RuleView, decide
 from app.services.rules.store import ACTION_KINDS, RuleProblem, clean_actions
 
 TRY_LIMIT = 50
+SAMPLE_CHARS = 300
 NO_MODEL_NOTE = "No model is set up, so fill in the rest yourself."
 DRAFT_SYSTEM = (
     "You turn an email owner's sentence into a sorting rule. Answer only with JSON.\n"
@@ -96,7 +98,9 @@ async def sentence_to_rule(client: AiClient, target: AiTarget | None, sentence: 
     notes: list[str] = []
     if not ans.data:
         notes.append("The model's answer couldn't be read; check every field.")
-    kinds = [str(k).strip().lower() for k in data.get("actions") or [] if str(k).strip()]
+    kinds = list(
+        dict.fromkeys(str(k).strip().lower() for k in data.get("actions") or [] if str(k).strip())
+    )
     unknown = [k for k in kinds if k not in ACTION_KINDS]
     if unknown:
         notes.append(f"Left out actions a rule can't take: {', '.join(unknown)}.")
@@ -141,6 +145,8 @@ def _shared_conditions(mails: list[MailForModel]) -> dict:
 async def rule_from_mails(
     client: AiClient, target: AiTarget | None, mails: list[MailForModel]
 ) -> RuleDraft:
+    if not mails:
+        return RuleDraft("New rule", "", {}, RuleCombine.AI_ONLY, [], ["Pick at least one mail."])
     conditions = _shared_conditions(mails)
     first = (conditions.get("senders_in") or [""])[0]
     name = (domain_of(first) or first).split(".")[0].title() if first else ""
@@ -148,10 +154,13 @@ async def rule_from_mails(
         return RuleDraft(
             name or "New rule", "", conditions, _combine(conditions), [], [NO_MODEL_NOTE]
         )
-    sample = "\n\n".join(
-        f"<<<EMAIL\nFrom: {m.sender}\nSubject: {m.subject}\n{m.text[:300]}\nEMAIL>>>"
-        for m in mails[:10]
-    )
+
+    def one(m: MailForModel) -> str:
+        who = f"{m.sender_name} <{m.sender}>" if m.sender_name else m.sender
+        body = fence_safe(f"From: {who}\nSubject: {m.subject}\n{m.text[:SAMPLE_CHARS]}")
+        return f"<<<EMAIL\n{body}\nEMAIL>>>"
+
+    sample = "\n\n".join(one(m) for m in mails[:10])
     ans = await client.ask(
         target,
         system=DESCRIBE_SYSTEM,

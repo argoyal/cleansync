@@ -27,7 +27,7 @@ _LINE_RE = re.compile(r"^\s*(?:rule\s*[:=#]?\s*)?(\d{1,6})\s*\.?\s*$", re.IGNORE
 OWNER_IN = {"to": "To", "cc": "CC", "other": "neither (a list or a copy)"}
 
 
-def _fence_safe(text: str) -> str:
+def fence_safe(text: str) -> str:
     return text.replace("EMAIL>>>", "EMAIL> > >").replace("<<<EMAIL", "< < <EMAIL")
 
 
@@ -40,21 +40,21 @@ def build_prompt(rules: list[RuleView], mail: MailForModel, hints: list[str]) ->
     lines.append("0. None of these")
     if hints:
         lines += ["", "The owner corrected earlier mail from this sender:"]
-        lines += [f"- {_fence_safe(h)}" for h in hints]
+        lines += [f"- {fence_safe(h)}" for h in hints]
     who = f"{mail.sender_name} <{mail.sender}>" if mail.sender_name else mail.sender
     lines += [
         "",
         "<<<EMAIL",
-        _fence_safe(f"From: {who}"),
-        _fence_safe(f"To: {', '.join(mail.to)}"),
+        fence_safe(f"From: {who}"),
+        fence_safe(f"To: {', '.join(mail.to)}"),
         f"The owner is in: {OWNER_IN.get(mail.owner_in, 'neither')}",
-        _fence_safe(f"Subject: {mail.subject}"),
+        fence_safe(f"Subject: {mail.subject}"),
         f"Date: {mail.date:%Y-%m-%d}",
-        _fence_safe(f"Attachments: {', '.join(mail.attachments) or 'none'}"),
+        fence_safe(f"Attachments: {', '.join(mail.attachments) or 'none'}"),
         f"Has an unsubscribe link: {'yes' if mail.list_unsubscribe else 'no'}",
         f"Is a calendar invite: {'yes' if mail.calendar_invite else 'no'}",
         "Text:",
-        _fence_safe(mail.text),
+        fence_safe(mail.text),
         "EMAIL>>>",
     ]
     return "\n".join(lines)
