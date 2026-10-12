@@ -2,7 +2,7 @@ from datetime import timedelta
 
 # backend/tests/test_rules_api.py
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.models import RuleDecision, RuleTodo
 from app.models.enums import ServiceKind, ServiceState
@@ -121,6 +121,32 @@ def test_rule_job_start_and_refusals(auth_client, acc, db, layout):
     assert p["state"] == "PREVIEWING" and p["total"] == 1
     r = auth_client.post(f"/api/rule-jobs/{jid}/run", json={"account_id": acc.id, "confirm": 1})
     assert r.status_code == 400 and "preview" in r.json()["detail"]
+
+
+def test_a_previewed_job_runs_and_stops_from_the_api(auth_client, acc, db, layout):
+    """The run starts a task on the server's event loop (it once failed with "no current event
+    loop" because the endpoint ran in a worker thread)."""
+    from app.devtools.fake_gmail import make_mail
+    from app.models import RuleJob
+    from app.models.enums import RuleJobState
+    from tests.rules_helpers import keep
+
+    keep(db, layout, acc, make_mail("Old one"))
+    jid = auth_client.post(
+        "/api/rule-jobs", json={"account_id": acc.id, "q": "", "view": "inbox"}
+    ).json()["job_id"]
+    db.execute(delete(RuleTodo))
+    db.get(RuleJob, jid).state = RuleJobState.PREVIEWED  # nothing planned: confirm 0
+    db.commit()
+    r = auth_client.post(f"/api/rule-jobs/{jid}/run", json={"account_id": acc.id, "confirm": 0})
+    assert r.status_code == 202, r.text
+    for _ in range(50):
+        p = auth_client.get(f"/api/rule-jobs/{jid}", params={"account_id": acc.id}).json()
+        if p["state"] == "DONE":
+            break
+    assert p["state"] == "DONE"
+    r = auth_client.post(f"/api/rule-jobs/{jid}/stop", json={"account_id": acc.id})
+    assert r.status_code == 204, r.text
 
 
 def test_correct_waits_become_503_and_changes_are_published(auth_client, acc, app, monkeypatch):

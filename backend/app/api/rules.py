@@ -583,8 +583,9 @@ def job(
         raise _problem(e) from e
 
 
+# Async, so the run's task starts on the server's event loop (a worker thread has none).
 @router.post("/api/rule-jobs/{job_id}/run", status_code=202)
-def run_job(
+async def run_job(
     job_id: int,
     body: JobRunBody,
     request: Request,
@@ -600,7 +601,7 @@ def run_job(
 
 
 @router.post("/api/rule-jobs/{job_id}/stop", status_code=204)
-def stop_job(
+async def stop_job(
     job_id: int,
     body: AccountBody,
     request: Request,
