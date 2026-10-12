@@ -184,9 +184,9 @@ def restorable_labels(db: Session, account_id: int, labels: list[str]) -> list[s
 def restore_targets(
     db: Session, account_id: int, pick: Pick, offload_id: int | None, now: datetime
 ) -> list[int]:
-    """The offloaded and Deleted-in-Gmail mails of a pick (or of one offload): the only ones
+    """The offloaded, Deleted-in-Gmail and local-archive mails of a pick (or of one offload): the only ones
     a restore touches. Mail already in Gmail is never part of it."""
-    restorable = (MailState.OFFLOADED, MailState.DELETED)
+    restorable = (MailState.OFFLOADED, MailState.DELETED, MailState.LOCAL_ARCHIVE)
     if offload_id is None and (pick.message_ids or pick.thread_ids):
         # A picked list can be longer than SQLite takes in one query: asked in chunks.
         column = MailMessage.id if pick.message_ids else MailMessage.thread_id
@@ -200,7 +200,11 @@ def restore_targets(
     if offload_id is not None:
         q = q.where(MailMessage.offload_id == offload_id)
     elif (pick.q or "").strip():
-        q = q.where(*mail_conditions(db, account_id, q=(pick.q or "").strip(), now=now))
+        q = q.where(
+            *mail_conditions(
+                db, account_id, q=(pick.q or "").strip(), now=now, archive=pick.archive
+            )
+        )
     else:
         return []
     return list(db.scalars(q.order_by(MailMessage.date, MailMessage.id)))
@@ -896,7 +900,9 @@ class MailOffloads:
                         select(MailMessage.id).where(
                             MailMessage.account_id == account_id,
                             MailMessage.id.in_(part),
-                            MailMessage.state.in_([MailState.OFFLOADED, MailState.DELETED]),
+                            MailMessage.state.in_(
+                                [MailState.OFFLOADED, MailState.DELETED, MailState.LOCAL_ARCHIVE]
+                            ),
                         )
                     )
                 )

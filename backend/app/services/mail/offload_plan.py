@@ -74,6 +74,7 @@ class Pick:
     q: str | None = None
     message_ids: list[int] | None = None
     thread_ids: list[str] | None = None
+    archive: bool = False
 
     def describe(self, n: int) -> str:
         if self.message_ids or self.thread_ids:
