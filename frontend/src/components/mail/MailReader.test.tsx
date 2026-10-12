@@ -515,6 +515,36 @@ describe("AI rules and the local archive in the reader", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/archive/delete-forever")?.body).toEqual({ account_id: 1, q: "is:archived", confirm: 3 }));
   });
 
+  it("asks for the totals again after Delete forever, so the header and count are not stale", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: null, total_bytes: null },
+      "GET /api/mail/totals": { total: 3, total_bytes: 1 },
+      "POST /api/mail/archive/delete-forever": { deleted: 3, left: 0 },
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive" });
+    await screen.findByText(/3 mails/);
+    const totals = () => calls.filter((c) => c.path === "/api/mail/totals").length;
+    const before = totals();
+    await userEvent.click(screen.getByRole("button", { name: "Delete forever…" }));
+    await userEvent.type(screen.getByLabelText(/Type 3/), "3");
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete forever" }));
+    await waitFor(() => expect(totals()).toBeGreaterThan(before));
+  });
+
+  it("has no Delete forever… for the whole list when a label filter is set", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [{ id: "Label_2", name: "Receipts", count: 3 }] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: null, total_bytes: null },
+      "GET /api/mail/totals": { total: 3, total_bytes: 1 },
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive&label=Label_2" });
+    await screen.findByText(/3 mails/);
+    expect(screen.queryByRole("button", { name: "Delete forever…" })).not.toBeInTheDocument();
+  });
+
   it("deletes picked threads after a plain confirm", async () => {
     const { calls } = mockApi({
       "GET /api/accounts": [ACTIVE],

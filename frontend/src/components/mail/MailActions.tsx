@@ -46,6 +46,8 @@ export function MailHeaderActions({
   const [forever, setForever] = useState(false);
   const restore = useRestoreMail();
   if (view === "archive") {
+    // With a label filter the count includes the label, but the request can't say so; the server would refuse.
+    if (label) return null;
     return (
       <>
         <Button tone="danger" disabled={!total} onClick={() => setForever(true)}>

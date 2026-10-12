@@ -18,7 +18,7 @@ import type {
 import { useToast } from "../components/Toasts";
 
 export const RULE_KEYS = ["rules", "rules-sorting", "rule-decisions", "rule-job", "rule-job-open"];
-const MAIL = ["mail-threads", "mail-counts", "mail-thread", "mail-message"];
+const MAIL = ["mail-threads", "mail-counts", "mail-totals", "mail-thread", "mail-message"];
 
 /**
  * One mutation: on success it refreshes rules and mail lists; on error it shows a toast.
