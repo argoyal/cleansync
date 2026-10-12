@@ -48,6 +48,7 @@ const MAIL_KEYS = [
   "mail-status",
   "mail-overview",
   "mail-counts",
+  "mail-totals",
   "mail-threads",
   "mail-thread",
   "mail-offloads",
