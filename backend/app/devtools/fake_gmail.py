@@ -379,11 +379,17 @@ def make_mail(
     attachments: tuple[tuple[str, str, bytes], ...] = (),
     inline_png_cid: str | None = None,
     reply_to: str | None = None,
+    cc: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> bytes:
     """One mail as it would arrive (CRLF line ends), for tests and the sample mailbox."""
     msg = EmailMessage()
     msg["From"] = sender
     msg["To"] = to
+    if cc:
+        msg["Cc"] = cc
+    for name, value in (headers or {}).items():
+        msg[name] = value
     msg["Subject"] = subject
     msg["Date"] = email.utils.format_datetime(when or datetime.now(UTC))
     msg["Message-ID"] = email.utils.make_msgid(domain="example.com")
