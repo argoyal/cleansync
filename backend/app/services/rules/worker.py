@@ -157,7 +157,7 @@ class SortingWorker:
                 for t in db.scalars(
                     select(RuleTodo)
                     .where(RuleTodo.account_id == account_id, RuleTodo.next_try_at <= now)
-                    .order_by(RuleTodo.added_at)
+                    .order_by(RuleTodo.job_id.is_not(None), RuleTodo.added_at)
                     .limit(self.batch)
                 )
             ]

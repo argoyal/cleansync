@@ -15,7 +15,6 @@ from app.models import MailMessage, Rule, RuleDecision, RuleJob, RuleTodo
 from app.models.enums import DecisionStatus, MailState, RuleJobState
 from app.services.mail.search import SearchError, mail_conditions
 from app.services.rules.apply import WAIT_ERRORS, Applier
-from app.services.rules.feedback import moved_back
 from app.services.rules.worker import SortingWorker
 
 log = logging.getLogger(__name__)
@@ -23,6 +22,8 @@ MAX_JOB = 20000
 EXAMPLES = 5
 WAIT_SECONDS = 60
 CHANGED_MSG = "It changed since the preview, so it was left as it is."
+APPLY_FAILED_MSG = "Something went wrong applying this change."
+STOPPED_MSG = "The run was stopped."
 RULE_CHANGED_MSG = "Its rule changed since the preview, so it was left as it is."
 
 
@@ -79,18 +80,44 @@ class RuleJobs:
                     base = base.where(*mail_conditions(db, account_id, view=view, q=q, now=now))
                 except SearchError as e:
                     raise RuleJobProblem(str(e)) from None
-            ids = [i for i in db.scalars(base.limit(MAX_JOB + 1)) if not moved_back(db, i)]
-            if not ids:
-                raise RuleJobProblem("No mail in Gmail matches this search.")
-            if len(ids) > MAX_JOB:
+            busy = db.scalar(
+                select(RuleJob.id).where(
+                    RuleJob.account_id == account_id,
+                    RuleJob.state.in_(
+                        [RuleJobState.PREVIEWING, RuleJobState.PREVIEWED, RuleJobState.RUNNING]
+                    ),
+                )
+            )
+            if busy is not None:
+                raise RuleJobProblem(
+                    "Another run of rules for this mailbox isn't finished. Run or stop it first."
+                )
+            found = list(db.scalars(base.limit(MAX_JOB + 1)))
+            if len(found) > MAX_JOB:
                 raise RuleJobProblem(
                     f"That's more than {MAX_JOB:,} mails. Please narrow the search."
                 )
+            moved = set(
+                db.scalars(
+                    select(RuleDecision.message_id)
+                    .where(
+                        RuleDecision.account_id == account_id,
+                        RuleDecision.moved_back_at.is_not(None),
+                    )
+                    .distinct()
+                )
+            )
+            queued = set(
+                db.scalars(select(RuleTodo.message_id).where(RuleTodo.account_id == account_id))
+            )
+            ids = [i for i in found if i not in moved and i not in queued]
+            if not ids:
+                raise RuleJobProblem("No mail in Gmail matches this search.")
             job = RuleJob(account_id=account_id, filter_text=q or view, total=len(ids))
             db.add(job)
             db.flush()
             for mid in ids:
-                db.merge(
+                db.add(
                     RuleTodo(
                         account_id=account_id,
                         message_id=mid,
@@ -107,6 +134,11 @@ class RuleJobs:
     def preview(self, account_id: int, job_id: int) -> JobPreview:
         with self.sf() as db:
             job = self._job(db, account_id, job_id)
+            failed = db.scalar(
+                select(func.count()).where(
+                    RuleDecision.job_id == job_id, RuleDecision.status == DecisionStatus.FAILED
+                )
+            )
             counts = dict(
                 db.execute(
                     select(RuleDecision.status, func.count())
@@ -144,7 +176,7 @@ class RuleJobs:
                 no_rule=counts.get(DecisionStatus.NO_RULE, 0),
                 applied=job.applied,
                 skipped=job.skipped,
-                failed=job.failed,
+                failed=failed or 0,
                 reason=job.reason,
             )
 
@@ -164,9 +196,18 @@ class RuleJobs:
                 )
             job.state = RuleJobState.RUNNING
             db.commit()
-        self._start(job_id)
+        try:
+            self._start(job_id)
+        except Exception:
+            with self.sf() as db:
+                db.get(RuleJob, job_id).state = RuleJobState.PREVIEWED
+                db.commit()
+            raise
 
     def _start(self, job_id: int) -> None:
+        live = self._tasks.get(job_id)
+        if live is not None and not live.done():
+            return
         self._tasks[job_id] = asyncio.ensure_future(self._run(job_id))
 
     def _still_same(self, db, d: RuleDecision) -> str | None:
@@ -210,6 +251,8 @@ class RuleJobs:
                     did = d.id
                 try:
                     status = await self.applier.apply(did)
+                except asyncio.CancelledError:
+                    raise
                 except WAIT_ERRORS as e:
                     with self.sf() as db:
                         job = db.get(RuleJob, job_id)
@@ -217,6 +260,14 @@ class RuleJobs:
                         job.reason = (waiting.reason if waiting else None) or str(e)
                         db.commit()
                     await asyncio.sleep(WAIT_SECONDS)
+                    continue
+                except Exception:
+                    log.exception("applying decision %s of rule job %s failed", did, job_id)
+                    with self.sf() as db:
+                        db.get(RuleDecision, did).status = DecisionStatus.FAILED
+                        db.get(RuleDecision, did).reason = APPLY_FAILED_MSG
+                        db.get(RuleJob, job_id).failed += 1
+                        db.commit()
                     continue
                 with self.sf() as db:
                     job = db.get(RuleJob, job_id)
@@ -232,15 +283,24 @@ class RuleJobs:
             log.exception("rule job %s failed", job_id)
             with self.sf() as db:
                 job = db.get(RuleJob, job_id)
-                job.state = RuleJobState.FAILED
-                job.reason = f"Something went wrong: {e}"
-                job.finished_at = self.clock()
-                db.commit()
+                if job is not None:
+                    job.state = RuleJobState.FAILED
+                    job.reason = f"Something went wrong: {e}"
+                    job.finished_at = self.clock()
+                    db.commit()
 
     def stop(self, account_id: int, job_id: int) -> None:
         with self.sf() as db:
             job = self._job(db, account_id, job_id)
             db.execute(delete(RuleTodo).where(RuleTodo.job_id == job_id))
+            left = db.scalars(
+                select(RuleDecision).where(
+                    RuleDecision.job_id == job_id, RuleDecision.status == DecisionStatus.PLANNED
+                )
+            ).all()
+            for d in left:
+                d.status, d.reason = DecisionStatus.SKIPPED, STOPPED_MSG
+            job.skipped += len(left)
             if job.state in (RuleJobState.PREVIEWING, RuleJobState.PREVIEWED, RuleJobState.RUNNING):
                 job.state, job.finished_at = RuleJobState.STOPPED, self.clock()
             db.commit()
