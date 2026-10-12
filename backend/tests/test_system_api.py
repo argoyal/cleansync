@@ -1,6 +1,9 @@
+from tests.test_health import project_version
+
+
 def test_system_info(auth_client):
     body = auth_client.get("/api/system").json()
-    assert body["app_version"] == "0.2.0"
+    assert body["app_version"] == project_version()
     assert body["rclone_version"].startswith("rclone v")
     assert body["python_version"].startswith("3.")
     assert body["watcher"] in ("off", "active", "limited")
