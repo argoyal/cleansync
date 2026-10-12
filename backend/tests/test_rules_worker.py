@@ -478,3 +478,28 @@ async def test_keep_up_to_do_row_goes_in_the_same_transaction_as_the_mail(box):
     with box.sf() as db:
         (todo,) = db.scalars(select(RuleTodo))
         assert db.get(MailMessage, todo.message_id) is not None
+
+
+async def test_an_error_before_the_mail_is_read_counts_a_try_and_is_given_up(gbox, monkeypatch):
+    from app.services.rules import worker as worker_mod
+    from app.services.rules.worker import SOMETHING_WRONG
+
+    def broken(db, message_id):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(worker_mod, "moved_back", broken)
+    _rule(gbox)
+    row = gbox.add("One")
+    jid = _job_with(gbox, row)
+    w = worker(gbox, Pick())
+    assert await w.run_once(gbox.acc.id) == 0
+    (todo,) = todos(gbox)
+    assert (todo.attempts, todo.last_error) == (1, SOMETHING_WRONG)
+    with gbox.sf() as db:
+        db.get(RuleTodo, (gbox.acc.id, row.id)).attempts = 9
+        db.get(RuleTodo, (gbox.acc.id, row.id)).next_try_at = utcnow()
+        db.commit()
+    assert await w.run_once(gbox.acc.id) == 1
+    (d,) = decisions(gbox)
+    assert d.status == DecisionStatus.FAILED and d.reason == GAVE_UP and d.job_id == jid
+    assert todos(gbox) == [] and _job(gbox, jid) == (1, 1, RuleJobState.PREVIEWED)

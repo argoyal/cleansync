@@ -272,10 +272,23 @@ class SortingWorker:
         belongs to it (see _mine)."""
         with self.sf() as db:
             todo = db.get(RuleTodo, (account_id, message_id))
-            row = db.get(MailMessage, message_id)
             if todo is None:
                 return 0, False, False
             job_id = todo.job_id
+        try:
+            return await self._decide_one(
+                account_id, email, message_id, job_id, chooser, now, sorting_on
+            )
+        except Exception:
+            log.exception("sorting mail %s failed", message_id)
+            done, _ = self._failed_try(account_id, message_id, job_id, SOMETHING_WRONG, GAVE_UP)
+            return done, True, False
+
+    async def _decide_one(
+        self, account_id, email, message_id, job_id, chooser, now, sorting_on
+    ) -> tuple[int, bool, bool]:
+        with self.sf() as db:
+            row = db.get(MailMessage, message_id)
             if (
                 (job_id is None and not sorting_on)
                 or row is None
@@ -286,16 +299,6 @@ class SortingWorker:
                     return 0, False, False
                 db.commit()
                 return 1, True, False
-        try:
-            return await self._decide_one(account_id, email, message_id, job_id, row, chooser, now)
-        except Exception:
-            log.exception("sorting mail %s failed", message_id)
-            done, _ = self._failed_try(account_id, message_id, job_id, SOMETHING_WRONG, GAVE_UP)
-            return done, True, False
-
-    async def _decide_one(
-        self, account_id, email, message_id, job_id, row, chooser, now
-    ) -> tuple[int, bool, bool]:
         # The mail file is read off the event loop, with no database session held open.
         try:
             mail = await asyncio.to_thread(mail_for_model, self.layout, email, row)
