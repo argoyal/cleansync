@@ -29,6 +29,10 @@ log = logging.getLogger(__name__)
 
 GIVE_UP_AFTER = 10
 SOMETHING_WRONG = "Something went wrong sorting this mail. CleanSync will try again."
+GAVE_UP = (
+    "Something went wrong sorting this mail 10 times, so CleanSync stopped trying. "
+    "Run rules on it again to retry."
+)
 
 
 def retry_after(attempts: int) -> timedelta:
@@ -172,7 +176,7 @@ class SortingWorker:
                     todo = db.get(RuleTodo, (account_id, message_id))
                     if todo is not None:
                         if todo.attempts + 1 >= GIVE_UP_AFTER:
-                            self._give_up(db, todo, SOMETHING_WRONG)
+                            self._give_up(db, todo, GAVE_UP)
                             done = 1
                         else:
                             self._wait(db, todo, SOMETHING_WRONG)

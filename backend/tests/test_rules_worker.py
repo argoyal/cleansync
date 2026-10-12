@@ -11,7 +11,7 @@ from app.services.mail.store import eml_path
 from app.services.rules.apply import BUDGET_WAIT
 from app.services.rules.match import Choice
 from app.services.rules.store import RuleIn, create_rule
-from app.services.rules.worker import SortingWorker, enqueue_new, retry_after, set_sorting
+from app.services.rules.worker import GAVE_UP, SortingWorker, enqueue_new, retry_after, set_sorting
 
 
 class Pick:
@@ -389,5 +389,5 @@ async def test_job_mail_that_keeps_raising_is_given_up_and_counted(gbox):
         db.commit()
     await worker(gbox, Pick(error=RuntimeError("boom"))).run_once(gbox.acc.id)
     (d,) = decisions(gbox)
-    assert d.status == DecisionStatus.FAILED and d.reason.startswith("Something went wrong")
+    assert d.status == DecisionStatus.FAILED and d.reason == GAVE_UP
     assert todos(gbox) == [] and _job(gbox, jid) == (1, 1, RuleJobState.PREVIEWED)
