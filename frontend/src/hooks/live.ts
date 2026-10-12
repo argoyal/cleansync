@@ -60,6 +60,11 @@ const MAIL_KEYS = [
   "accounts",
 ];
 
+/** A backup's progress events (one per page of Gmail's list) refresh only these; the lists
+ * and counts wait for the job's own events, so a big first backup doesn't keep re-reading
+ * them (issue #16). */
+const MAIL_PROGRESS_KEYS = ["mail-status", "mail-overview", "activity-jobs", "google-usage"];
+
 /** Runs `fn` straight away, and at most once per `ms`: calls in between become one catch-up
  * run at the end of that time, so the last state is always shown. */
 function throttle(fn: () => void, ms: number) {
@@ -100,6 +105,7 @@ export function useLiveEvents(): void {
     const recovery = throttle(() => invalidate(["recovery"]), RECOVERY_REFRESH_MS);
     const refreshRecovery = recovery.call;
     const mail = throttle(() => invalidate(MAIL_KEYS), MAIL_REFRESH_MS);
+    const mailProgress = throttle(() => invalidate(MAIL_PROGRESS_KEYS), MAIL_REFRESH_MS);
     const data = (e: Event): unknown => {
       try {
         return JSON.parse((e as MessageEvent).data as string);
@@ -135,7 +141,11 @@ export function useLiveEvents(): void {
         refreshRecovery();
       });
       // Mail jobs (spec §4): progress, pauses and the end of each job.
-      source.addEventListener("mail", mail.call);
+      source.addEventListener("mail", (e) => {
+        const d = data(e) as { done?: unknown; state?: unknown } | null;
+        if (d && typeof d.done === "number" && d.state === undefined) mailProgress.call();
+        else mail.call();
+      });
       source.addEventListener("pair", () => invalidate(["pairs", "status", "browse"]));
       source.addEventListener("progress", (e) => {
         const p = data(e) as Progress | null;
@@ -162,6 +172,7 @@ export function useLiveEvents(): void {
       window.clearTimeout(timer);
       recovery.stop();
       mail.stop();
+      mailProgress.stop();
       source?.close();
       liveStore.set("connecting");
       progressStore.set({});

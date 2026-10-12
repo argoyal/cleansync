@@ -81,6 +81,17 @@ describe("live updates", () => {
     expect(count("mail-threads")).toBe(3); // quiet for 5 s: straight away again
   });
 
+  it("on a backup progress event refreshes only the progress, and the lists once the job ends", () => {
+    vi.useFakeTimers();
+    const { spy, source } = setup();
+    act(() => source.emit("mail", { account_id: 1, job_id: 3, done: 500, total: 50000 }));
+    expect(keys(spy)).toEqual(expect.arrayContaining(["mail-status", "mail-overview", "activity-jobs"]));
+    for (const k of ["mail-threads", "mail-counts", "mail-totals", "mail-thread"]) expect(keys(spy)).not.toContain(k);
+    spy.mockClear();
+    act(() => source.emit("mail", { account_id: 1, job_id: 3, state: "SUCCESS" }));
+    expect(keys(spy)).toEqual(expect.arrayContaining(["mail-threads", "mail-counts", "mail-totals", "mail-status"]));
+  });
+
   it("refreshes offloads and files on an offload event, also one without a pair", () => {
     const { spy, source } = setup();
     act(() => source.emit("offload", { account_id: 1, pair_id: null }));
