@@ -12,6 +12,7 @@ import type {
   FileItem,
   FolderEntry,
   GoogleUsage,
+  MailTotals,
   Job,
   MailCounts,
   MailMessageInfo,
@@ -232,6 +233,14 @@ export const useMailThreads = (accountId: number, p: { view: string; label: stri
       ),
     initialPageParam: "",
     getNextPageParam: (last) => last.next_cursor ?? undefined,
+    retry: false,
+  });
+
+export const useMailTotals = (accountId: number, p: { view: string; label: string; q: string }) =>
+  useQuery({
+    queryKey: ["mail-totals", accountId, p.view, p.label, p.q],
+    queryFn: () =>
+      api<MailTotals>(`/api/mail/totals${query({ account_id: accountId, view: p.view, label: p.label || undefined, q: p.q || undefined })}`),
     retry: false,
   });
 

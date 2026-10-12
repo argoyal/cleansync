@@ -44,11 +44,12 @@ export const RECOVERY_REFRESH_MS = 5000;
 /** Mail events come in bursts (one per backup or offload batch): the reader's lists refresh
  * at most once every 5 seconds. */
 export const MAIL_REFRESH_MS = 5000;
-const RULES_KEYS = ["rules", "rules-sorting", "rule-decisions", "mail-threads", "mail-counts", "mail-thread", "mail-message"];
+const RULES_KEYS = ["rules", "rules-sorting", "rule-decisions", "mail-threads", "mail-counts", "mail-totals", "mail-thread", "mail-message"];
 const MAIL_KEYS = [
   "mail-status",
   "mail-overview",
   "mail-counts",
+  "mail-totals",
   "mail-threads",
   "mail-thread",
   "mail-offloads",
@@ -59,6 +60,14 @@ const MAIL_KEYS = [
   "google-usage",
   "accounts",
 ];
+
+/** A backup's progress events (one per page of Gmail's list) refresh only these; the lists
+ * and counts wait for the job's own events, so a big first backup doesn't keep re-reading
+ * them (issue #16). */
+const MAIL_PROGRESS_KEYS = ["mail-status", "mail-overview", "activity-jobs", "google-usage"];
+/** While a backup keeps sending progress, the lists and counts still catch up, once a minute. */
+const MAIL_LIST_KEYS = ["mail-threads", "mail-counts", "mail-totals"];
+export const MAIL_LIST_CATCH_UP_MS = 60_000;
 
 /** Runs `fn` straight away, and at most once per `ms`: calls in between become one catch-up
  * run at the end of that time, so the last state is always shown. */
@@ -102,6 +111,16 @@ export function useLiveEvents(): void {
     const mail = throttle(() => invalidate(MAIL_KEYS), MAIL_REFRESH_MS);
     // Rule changes and sorting come in bursts too: same pace as mail.
     const rules = throttle(() => invalidate(RULES_KEYS), MAIL_REFRESH_MS);
+    const mailProgress = throttle(() => invalidate(MAIL_PROGRESS_KEYS), MAIL_REFRESH_MS);
+    // One refresh a minute after progress first comes in, then again only if more came.
+    let listCatchUp: number | undefined;
+    const catchUpLists = () => {
+      if (listCatchUp !== undefined) return;
+      listCatchUp = window.setTimeout(() => {
+        listCatchUp = undefined;
+        invalidate(MAIL_LIST_KEYS);
+      }, MAIL_LIST_CATCH_UP_MS);
+    };
     const data = (e: Event): unknown => {
       try {
         return JSON.parse((e as MessageEvent).data as string);
@@ -137,7 +156,14 @@ export function useLiveEvents(): void {
         refreshRecovery();
       });
       // Mail jobs (spec §4): progress, pauses and the end of each job.
-      source.addEventListener("mail", mail.call);
+      source.addEventListener("mail", (e) => {
+        const d = data(e) as { done?: unknown; state?: unknown } | null;
+        if (d && typeof d.done === "number" && d.state === undefined) {
+          mailProgress.call();
+          catchUpLists();
+        }
+        else mail.call();
+      });
       source.addEventListener("rules", rules.call);
       source.addEventListener("pair", () => invalidate(["pairs", "status", "browse"]));
       source.addEventListener("progress", (e) => {
@@ -166,6 +192,8 @@ export function useLiveEvents(): void {
       recovery.stop();
       mail.stop();
       rules.stop();
+      mailProgress.stop();
+      window.clearTimeout(listCatchUp);
       source?.close();
       liveStore.set("connecting");
       progressStore.set({});

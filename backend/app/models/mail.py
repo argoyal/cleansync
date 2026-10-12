@@ -25,9 +25,19 @@ class MailMessage(Base):
     __tablename__ = "mail_messages"
     __table_args__ = (
         UniqueConstraint("account_id", "provider_id"),
-        Index("ix_mail_messages_account_date", "account_id", "date"),
+        # The list walks mails newest first; the counts, totals and status read sizes and
+        # states. Both are covering, so none of them reads the rows (issue #16).
+        Index("ix_mail_messages_account_date_thread", "account_id", "date", "thread_id"),
         Index("ix_mail_messages_account_thread", "account_id", "thread_id"),
-        Index("ix_mail_messages_account_state", "account_id", "state"),
+        Index(
+            "ix_mail_messages_account_state_cover",
+            "account_id",
+            "state",
+            "date",
+            "thread_id",
+            "size",
+            "file_size",
+        ),
         # Ids are the search table's row ids; never reuse one.
         {"sqlite_autoincrement": True},
     )
@@ -64,6 +74,20 @@ class MailMessage(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+class MailMessageLabel(Base):
+    """One label of one mail, for the label views and counts (issue #16).
+    SQLite triggers on mail_messages fill it and keep it up to date (migration 0008); never
+    write it from Python."""
+
+    __tablename__ = "mail_message_labels"
+    __table_args__ = (Index("ix_mail_message_labels_lookup", "account_id", "label_id"),)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("mail_messages.id", ondelete="CASCADE"), primary_key=True
+    )
+    label_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    account_id: Mapped[int] = mapped_column(Integer)
 
 
 class MailLabel(Base):

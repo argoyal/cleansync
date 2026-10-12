@@ -87,12 +87,42 @@ describe("live updates", () => {
     const count = (k: string) => keys(spy).filter((x) => x === k).length;
     act(() => source.emit("rules", { account_id: 1 }));
     expect(keys(spy)).toEqual(
-      expect.arrayContaining(["rules", "rules-sorting", "rule-decisions", "mail-threads", "mail-counts", "mail-thread", "mail-message"]),
+      expect.arrayContaining(["rules", "rules-sorting", "rule-decisions", "mail-threads", "mail-counts", "mail-totals", "mail-thread", "mail-message"]),
     );
     for (let i = 0; i < 20; i++) act(() => source.emit("rules", { account_id: 1 }));
     expect(count("rules")).toBe(1); // held back
     act(() => vi.advanceTimersByTime(5000));
     expect(count("rules")).toBe(2); // one catch-up
+  });
+
+  it("on a backup progress event refreshes only the progress, and the lists once the job ends", () => {
+    vi.useFakeTimers();
+    const { spy, source } = setup();
+    act(() => source.emit("mail", { account_id: 1, job_id: 3, done: 500, total: 50000 }));
+    expect(keys(spy)).toEqual(expect.arrayContaining(["mail-status", "mail-overview", "activity-jobs"]));
+    for (const k of ["mail-threads", "mail-counts", "mail-totals", "mail-thread"]) expect(keys(spy)).not.toContain(k);
+    spy.mockClear();
+    act(() => source.emit("mail", { account_id: 1, job_id: 3, state: "SUCCESS" }));
+    expect(keys(spy)).toEqual(expect.arrayContaining(["mail-threads", "mail-counts", "mail-totals", "mail-status"]));
+  });
+
+  it("during a long backup the lists catch up once a minute, not on every progress event", () => {
+    vi.useFakeTimers();
+    const { spy, source } = setup();
+    const count = (k: string) => keys(spy).filter((x) => x === k).length;
+    const progress = () => act(() => source.emit("mail", { account_id: 1, job_id: 3, done: 500, total: 50000 }));
+    progress();
+    expect(count("mail-threads")).toBe(0);
+    act(() => vi.advanceTimersByTime(30_000));
+    progress();
+    act(() => vi.advanceTimersByTime(29_999));
+    expect(count("mail-threads")).toBe(0);
+    act(() => vi.advanceTimersByTime(1));
+    expect(count("mail-threads")).toBe(1); // a minute after the first progress
+    expect(count("mail-counts")).toBe(1);
+    expect(count("mail-totals")).toBe(1);
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(count("mail-threads")).toBe(1); // no progress since: nothing more
   });
 
   it("refreshes offloads and files on an offload event, also one without a pair", () => {

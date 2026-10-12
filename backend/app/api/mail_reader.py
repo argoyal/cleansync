@@ -13,7 +13,14 @@ from app.auth.deps import AuthContext, get_db, require_user
 from app.core.clock import utcnow
 from app.models import Account, MailMessage
 from app.models.enums import MailState
-from app.schemas.mail import AttachmentOut, MailCountsOut, MessageOut, ThreadOut, ThreadPageOut
+from app.schemas.mail import (
+    AttachmentOut,
+    MailCountsOut,
+    MailTotalsOut,
+    MessageOut,
+    ThreadOut,
+    ThreadPageOut,
+)
 from app.services.mail.gmail import valid_mail_id
 from app.services.mail.listing import decision_chips, list_threads, mail_counts, totals
 from app.services.mail.reader import (
@@ -71,13 +78,36 @@ def threads(
         rows, nxt = list_threads(db, conds, cursor=cursor, limit=max(1, min(limit, 200)))
     except SearchError as e:
         raise HTTPException(422, str(e)) from e
-    total, size = totals(db, conds) if not cursor else (None, None)
     return ThreadPageOut(
         threads=[ThreadOut(**asdict(r)) for r in rows],
         next_cursor=nxt,
-        total=total,
-        total_bytes=size,
+        total=None,
+        total_bytes=None,
     )
+
+
+@router.get("/totals", response_model=MailTotalsOut)
+def mail_totals(
+    account_id: int,
+    view: str = "all",
+    label: str | None = None,
+    q: str = "",
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """How many mails match and how big they are. Its own request, so the list shows
+    without waiting for it (issue #16)."""
+    account_or_404(db, account_id)
+    if len(q) > MAX_QUERY_CHARS:
+        raise HTTPException(
+            400, f"That search is too long. Keep it under {MAX_QUERY_CHARS:,} characters."
+        )
+    try:
+        conds = mail_conditions(db, account_id, view=view, label=label or None, q=q, now=utcnow())
+    except SearchError as e:
+        raise HTTPException(422, str(e)) from e
+    total, size = totals(db, conds)
+    return MailTotalsOut(total=total, total_bytes=size)
 
 
 @router.get("/counts", response_model=MailCountsOut)

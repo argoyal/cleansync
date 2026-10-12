@@ -360,6 +360,8 @@ export type ThreadRow = {
   decision: DecisionChip | null;
 };
 export type ThreadPage = { threads: ThreadRow[]; next_cursor: string | null; total: number | null; total_bytes: number | null };
+/** How many mails a view or search has, and how big they are (its own request, issue #16). */
+export type MailTotals = { total: number; total_bytes: number };
 export type MailAttachment = { index: number; name: string; type: string; size: number; preview: boolean };
 export type MailMessageInfo = {
   id: number;

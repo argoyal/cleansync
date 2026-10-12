@@ -78,8 +78,10 @@ def add_message(
     sha256: str,
     now: datetime,
     extra: Callable[[Session, MailMessage], None] | None = None,
+    commit: bool = True,
 ) -> MailMessage:
-    """Called only after the .eml is complete on disk (spec §4.3)."""
+    """Called only after the .eml is complete on disk (spec §4.3). With commit=False the
+    caller commits, so the row can be saved together with other changes."""
     row = MailMessage(
         account_id=account_id,
         provider_id=meta.id,
@@ -119,7 +121,8 @@ def add_message(
     )
     if extra is not None:
         extra(db, row)  # e.g. the sorting to-do row, in the same transaction
-    db.commit()
+    if commit:
+        db.commit()
     return row
 
 
@@ -234,13 +237,14 @@ def record_failure(
     return f
 
 
-def clear_failure(db: Session, account_id: int, provider_id: str) -> None:
+def clear_failure(db: Session, account_id: int, provider_id: str, commit: bool = True) -> None:
     db.execute(
         delete(MailFailure).where(
             MailFailure.account_id == account_id, MailFailure.provider_id == provider_id
         )
     )
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def waiting_failures(db: Session, account_id: int, ids: Iterable[str], now: datetime) -> set[str]:

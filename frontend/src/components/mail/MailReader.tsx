@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { friendlyError } from "../../api/client";
-import { mailThreadQuery, useMailCounts, useMailThreads } from "../../api/queries";
+import { mailThreadQuery, useMailCounts, useMailThreads, useMailTotals } from "../../api/queries";
 import type { Account } from "../../api/types";
 import { useRestoreMail } from "../../hooks/useMailOffload";
 import { useApprove } from "../../hooks/useRules";
@@ -32,9 +32,9 @@ export function MailReader({ account }: { account: Account }) {
   const thread = params.get("thread") ?? "";
   const labelName = useMailCounts(account.id, label !== "").data?.labels.find((l) => l.id === label)?.name;
   const pages = useMailThreads(account.id, { view, label, q }).data?.pages;
-  const first = pages?.[0];
   const rows = pages?.flatMap((p) => p.threads) ?? [];
   const archive = view === "archive";
+  const totals = useMailTotals(account.id, { view, label, q }).data;
   const list = useRef<HTMLElement>(null);
   const backFrom = useRef<string | null>(null); // the thread "Back to the list" left
   useEffect(() => {
@@ -78,9 +78,9 @@ export function MailReader({ account }: { account: Account }) {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-4 sm:px-6">
         <h1 className="text-title font-semibold">{title}</h1>
         {q && <span className="text-table text-ink-2">for {q}</span>}
-        {first?.total != null && (
+        {totals && (
           <span className="text-table text-ink-2 tabular">
-            {first.total.toLocaleString()} {first.total === 1 ? "mail" : "mails"} · {formatBytes(first.total_bytes ?? 0)}
+            {totals.total.toLocaleString()} {totals.total === 1 ? "mail" : "mails"} · {formatBytes(totals.total_bytes)}
           </span>
         )}
         {view === "suggested" && (
@@ -89,7 +89,7 @@ export function MailReader({ account }: { account: Account }) {
           </Button>
         )}
         <div className="ml-auto flex flex-wrap gap-2">
-          <MailHeaderActions account={account} q={q} view={view} label={label} scope={scope} total={first?.total} />
+          <MailHeaderActions account={account} q={q} view={view} label={label} scope={scope} total={totals?.total} />
         </div>
       </div>
       {picked.size > 0 && (
