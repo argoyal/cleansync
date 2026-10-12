@@ -34,9 +34,10 @@ describe("message list", () => {
           thread({ thread_id: "t3", subject: "Weekly digest #112", deleted: true }),
         ],
         next_cursor: null,
-        total: 5,
-        total_bytes: 6.2 * 1024 ** 3,
+        total: null,
+        total_bytes: null,
       },
+      "GET /api/mail/totals": { total: 5, total_bytes: 6.2 * 1024 ** 3 },
     });
     renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail" });
     expect(await screen.findByRole("heading", { name: "All mail" })).toBeInTheDocument();
@@ -50,6 +51,17 @@ describe("message list", () => {
     expect(within(rows[0]).getByRole("img", { name: "Has attachments" })).toBeInTheDocument();
     expect(within(rows[1]).getByText("Offloaded")).toBeInTheDocument();
     expect(within(rows[2]).getByText("Deleted in Gmail")).toBeInTheDocument();
+  });
+
+  it("shows the list without waiting for the totals", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", subject: "Quick one" })], next_cursor: null, total: null, total_bytes: null },
+      "GET /api/mail/totals": () => new Promise(() => {}), // never answers
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail" });
+    expect(await screen.findByText("Quick one")).toBeInTheDocument();
+    expect(screen.queryByText(/mails ·/)).not.toBeInTheDocument();
   });
 
   it("puts the marks and date in a row's spoken name", async () => {
@@ -93,7 +105,7 @@ describe("message list", () => {
     expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
     const asked = calls.filter((c) => c.path === "/api/mail/threads").map((c) => c.url.searchParams.get("view"));
     expect(asked).toEqual(["inbox", "inbox"]);
-    // The first page carries no empty cursor, label or search, so the server counts the totals.
+    // The first page carries no empty cursor, label or search.
     const firstUrl = calls.find((c) => c.path === "/api/mail/threads")!.url;
     expect(firstUrl.searchParams.has("cursor")).toBe(false);
     expect(firstUrl.searchParams.has("label")).toBe(false);

@@ -163,13 +163,25 @@ class MailBackup:
     def _log(self, r: BackupRun, line: str) -> None:
         job_log(r.log_path, line)
 
-    def _progress(self, r: BackupRun) -> None:
-        with self.sf() as db:
+    async def _db(self, fn, *args):
+        """Database work in a worker thread, in a session of its own: a commit waiting on a
+        reader's lock must not freeze the whole app (issue #16)."""
+
+        def run():
+            with self.sf() as db:
+                return fn(db, *args)
+
+        return await asyncio.to_thread(run)
+
+    async def _progress(self, r: BackupRun) -> None:
+        def save(db):
             st = sync_state(db, r.account_id)
             st.done = count_messages(db, r.account_id)
             db.commit()
             update_mail_job(db, r.job_id, done=r.downloaded, bytes_=r.bytes)
-            done, total = st.done, st.total
+            return st.done, st.total
+
+        done, total = await self._db(save)
         self.bus.publish(
             "mail", {"account_id": r.account_id, "job_id": r.job_id, "done": done, "total": total}
         )
@@ -209,15 +221,19 @@ class MailBackup:
                 st = sync_state(db, r.account_id)
                 st.cursor = nxt
                 db.commit()
-            self._progress(r)
+            await self._progress(r)
             if nxt is None:
                 return
             cursor = nxt
 
     async def _download_new(self, r: BackupRun, ids: list[str]) -> None:
-        with self.sf() as db:
-            have = stored_ids(db, r.account_id, ids)
-            waiting = waiting_failures(db, r.account_id, ids, self.clock())
+        def known(db):
+            return (
+                stored_ids(db, r.account_id, ids),
+                waiting_failures(db, r.account_id, ids, self.clock()),
+            )
+
+        have, waiting = await self._db(known)
         for mid in ids:
             if mid not in have and mid not in waiting:
                 await self._download(r, mid)
@@ -289,7 +305,7 @@ class MailBackup:
             st = sync_state(db, r.account_id)
             st.history_id = changes.history_id
             db.commit()
-        self._progress(r)
+        await self._progress(r)
 
     async def _recheck(self, r: BackupRun) -> None:
         """History too old: list every mail again, download what is missing, mark as deleted
@@ -387,11 +403,15 @@ class MailBackup:
         rel = eml_rel(meta.id, meta.internal_date)
         # Off the event loop: a 25-50 MB mail must not freeze the app.
         parsed = await asyncio.to_thread(parse_eml, raw)
-        with self.sf() as db:
+
+        def adopt(db):
             adopted = adopt_restored_copy(db, r.account_id, parsed.message_id, meta)
-            kept = adopted.file_path if adopted is not None else None
-            if kept is not None:
-                clear_failure(db, r.account_id, mid)
+            if adopted is None:
+                return None
+            clear_failure(db, r.account_id, mid)
+            return adopted.file_path
+
+        kept = await self._db(adopt)
         if kept is not None:
             # A restore's import whose answer got lost: the mail is kept here already.
             self._log(r, f"{mid} is the mail a restore put back; kept as {kept}")
@@ -403,10 +423,15 @@ class MailBackup:
         except OSError as e:
             self._failed(r, mid, f"could not write the file: {e.strerror or e}")
             return False
-        with self.sf() as db:
-            # Only now that the file is complete on disk (spec §4.3).
-            add_message(db, r.account_id, meta, parsed, rel, size, sha, self.clock())
-            clear_failure(db, r.account_id, mid)
+
+        def save(db):
+            # Only now that the file is complete on disk (spec §4.3). The row, its search
+            # entry and the failure record go in one transaction (issue #16).
+            add_message(db, r.account_id, meta, parsed, rel, size, sha, self.clock(), commit=False)
+            clear_failure(db, r.account_id, mid, commit=False)
+            db.commit()
+
+        await self._db(save)
         r.downloaded += 1
         r.bytes += size
         self._log(r, f"saved {rel}")

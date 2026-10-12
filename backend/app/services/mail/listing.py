@@ -7,11 +7,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.clock import as_utc
-from app.models import MailLabel, MailMessage
+from app.models import MailLabel, MailMessage, MailMessageLabel
 from app.models.enums import MailState
 from app.services.mail.gmail import valid_mail_id
 from app.services.mail.search import SearchError
@@ -50,27 +50,92 @@ def decode_cursor(value: str) -> tuple[datetime, str]:
         raise SearchError(BAD_CURSOR_MSG) from None
 
 
+WALK_CHUNK = 500  # mails read per statement while looking for a page of threads
+
+
+def walk_statement(conds: list, key: tuple | None):
+    """One chunk of matching mails, newest first, strictly below `key` (date, thread_id, id)."""
+    q = select(MailMessage.thread_id, MailMessage.date, MailMessage.id).where(*conds)
+    if key is not None:
+        d, t, i = key
+        q = q.where(
+            or_(
+                MailMessage.date < d,
+                and_(MailMessage.date == d, MailMessage.thread_id < t),
+                and_(MailMessage.date == d, MailMessage.thread_id == t, MailMessage.id < i),
+            )
+        )
+    return q.order_by(
+        MailMessage.date.desc(), MailMessage.thread_id.desc(), MailMessage.id.desc()
+    ).limit(WALK_CHUNK)
+
+
+def _newest_first(db: Session, conds: list, start: tuple | None):
+    """Chunks of (thread_id, date, id) of matching mails, newest first. Each chunk is its own
+    short statement, so no read lock is held between them (the database is not in WAL mode)."""
+    key = start
+    while True:
+        rows = db.execute(walk_statement(conds, key)).all()
+        yield rows
+        if len(rows) < WALK_CHUNK:
+            return
+        key = (rows[-1].date, rows[-1].thread_id, rows[-1].id)
+
+
+def _shown_before(db: Session, conds: list, tids: list[str], when: datetime, tid: str) -> set:
+    """Of these threads, the ones with a matching mail at or above the cursor: an earlier
+    page showed them already."""
+    if not tids:
+        return set()
+    return set(
+        db.scalars(
+            select(MailMessage.thread_id)
+            .where(
+                *conds,
+                MailMessage.thread_id.in_(tids),
+                or_(
+                    MailMessage.date > when,
+                    and_(MailMessage.date == when, MailMessage.thread_id >= tid),
+                ),
+            )
+            .distinct()
+        )
+    )
+
+
 def list_threads(
     db: Session, conds: list, *, cursor: str | None = None, limit: int = 50
 ) -> tuple[list[ThreadRow], str | None]:
     """Keyset paging on (newest date, thread id), so paging on never shows a thread twice
     or skips one that was there. A thread that gets new mail after you've paged past it
-    moves to the top, and shows up there after a refresh."""
-    last = func.max(MailMessage.date)
-    q = (
-        select(MailMessage.thread_id, last.label("last"))
-        .where(*conds)
-        .group_by(MailMessage.thread_id)
-    )
+    moves to the top, and shows up there after a refresh.
+
+    Walks mails newest first and stops once it has a page, instead of grouping the whole
+    mailbox (issue #16): the first time a thread turns up is its newest matching mail."""
+    when = tid = None
+    start = None
     if cursor:
         when, tid = decode_cursor(cursor)
-        q = q.having(or_(last < when, and_(last == when, MailMessage.thread_id < tid)))
-    groups = db.execute(
-        q.order_by(last.desc(), MailMessage.thread_id.desc()).limit(limit + 1)
-    ).all()
-    more = len(groups) > limit
-    groups = groups[:limit]
-    tids = [g.thread_id for g in groups]
+        # Every mail strictly below (when, tid); no mail has id -1, so the id part of the key
+        # never lets a mail of (when, tid) itself through.
+        start = (when, tid, -1)
+    order: list[tuple[str, datetime]] = []
+    seen: set[str] = set()
+    for rows in _newest_first(db, conds, start):
+        fresh = []
+        for r in rows:
+            if r.thread_id not in seen:
+                seen.add(r.thread_id)
+                fresh.append((r.thread_id, r.date))
+        if cursor:
+            old = _shown_before(db, conds, [t for t, _ in fresh], when, tid)
+            fresh = [f for f in fresh if f[0] not in old]
+        order.extend(fresh)
+        if len(order) > limit:
+            break
+    more = len(order) > limit
+    groups = order[:limit]
+    tids = [t for t, _ in groups]
     by_thread: dict[str, list[MailMessage]] = defaultdict(list)
     if tids:
         for m in db.scalars(
@@ -80,14 +145,14 @@ def list_threads(
         ):
             by_thread[m.thread_id].append(m)
     rows = []
-    for g in groups:
-        msgs = by_thread[g.thread_id]
+    for t, last in groups:
+        msgs = by_thread[t]
         newest = msgs[0]
         rows.append(
             ThreadRow(
-                thread_id=g.thread_id,
+                thread_id=t,
                 count=len(msgs),
-                last_date=g.last,
+                last_date=last,
                 message_id=newest.id,
                 from_addr=newest.from_addr,
                 subject=newest.subject,
@@ -98,7 +163,7 @@ def list_threads(
                 deleted=any(m.state == MailState.DELETED for m in msgs),
             )
         )
-    nxt = encode_cursor(groups[-1].last, groups[-1].thread_id) if more and groups else None
+    nxt = encode_cursor(groups[-1][1], groups[-1][0]) if more and groups else None
     return rows, nxt
 
 
@@ -111,11 +176,9 @@ def totals(db: Session, conds: list) -> tuple[int, int]:
 
 def _label_tally(db: Session, account_id: int) -> dict[str, int]:
     rows = db.execute(
-        text(
-            "SELECT j.value, count(*) FROM mail_messages m, json_each(m.labels) j "
-            "WHERE m.account_id = :a GROUP BY j.value"
-        ),
-        {"a": account_id},
+        select(MailMessageLabel.label_id, func.count())
+        .where(MailMessageLabel.account_id == account_id)
+        .group_by(MailMessageLabel.label_id)
     ).all()
     return {str(v): int(n) for v, n in rows}
 

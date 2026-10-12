@@ -82,8 +82,13 @@ class ThreadOut(BaseModel):
 class ThreadPageOut(BaseModel):
     threads: list[ThreadOut]
     next_cursor: str | None
-    total: int | None  # mails in this view or search (first page only)
+    total: int | None  # always None now: GET /api/mail/totals has it (issue #16)
     total_bytes: int | None
+
+
+class MailTotalsOut(BaseModel):
+    total: int  # mails in this view or search
+    total_bytes: int
 
 
 class LabelCountOut(BaseModel):
