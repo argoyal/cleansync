@@ -4,15 +4,15 @@ import pytest
 from sqlalchemy import select, text
 
 from app.devtools.fake_gmail import make_mail
-from app.models import Event, MailMessage
-from app.models.enums import MailState
+from app.models import Event, MailJob, MailMessage, MailOffloadItem, RuleDecision, RuleTodo
+from app.models.enums import JobState, MailJobKind, MailState
 from app.services.events.bus import EventBus
 from app.services.mail.archive import ArchiveProblem, delete_forever
 from app.services.mail.offload import restore_targets
 from app.services.mail.offload_plan import Pick
 from app.services.mail.store import eml_path
 from tests.rules_helpers import keep
-from tests.test_mail_restore import _offloaded, _restore
+from tests.test_mail_restore import _copies, _lose_first_import_answer, _offloaded, _restore
 
 NOW = datetime(2026, 10, 12, tzinfo=UTC)
 
@@ -131,3 +131,158 @@ async def test_restore_the_whole_archive_by_search(auth_client, offload_box):
     assert r.status_code == 202 and r.json()["count"] == 1
     await box.run_queued()
     assert box.row("Old statement").state == MailState.IN_MAIL
+
+
+async def test_a_lost_import_answer_for_an_archived_mail_never_makes_a_second_copy(
+    auth_client, offload_box
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    _archive(box, "Old photos")
+    box.fake.remove(row.provider_id)
+    _lose_first_import_answer(box)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    await box.backup()  # the check sees the imported mail
+    (copy,) = _copies(box, "Old photos")
+    (after,) = [r for r in box.rows_all() if r.subject == "Old photos"]
+    assert after.id == row.id and after.provider_id == copy.id
+    assert after.state == MailState.IN_MAIL and after.import_started_at is None
+
+
+def _restore_job(db, acc, state):
+    db.add(MailJob(account_id=acc.id, kind=MailJobKind.RESTORE, trigger="MANUAL", state=state))
+    db.commit()
+
+
+@pytest.mark.parametrize("state", [JobState.QUEUED, JobState.RUNNING, JobState.PAUSED])
+def test_delete_forever_waits_for_a_restore(db, layout, make_account, state):
+    acc = make_account()
+    a = archived(db, layout, acc, "x")
+    _restore_job(db, acc, state)
+    with pytest.raises(ArchiveProblem, match="restore is running"):
+        delete_forever(
+            db, layout, EventBus(), acc.id, acc.email, message_ids=[a.id], q="", confirm=1, now=NOW
+        )
+    assert db.get(MailMessage, a.id) is not None
+
+
+def test_delete_forever_waits_for_a_restore_not_started_yet(db, layout, make_account):
+    acc = make_account()
+    a = archived(db, layout, acc, "x")
+    with pytest.raises(ArchiveProblem, match="restore is running"):
+        delete_forever(
+            db,
+            layout,
+            EventBus(),
+            acc.id,
+            acc.email,
+            message_ids=[a.id],
+            q="",
+            confirm=1,
+            now=NOW,
+            restore_queued=lambda account_id: account_id == acc.id,
+        )
+    assert db.get(MailMessage, a.id) is not None
+
+
+def test_a_finished_restore_does_not_block(db, layout, make_account):
+    acc = make_account()
+    a = archived(db, layout, acc, "x")
+    _restore_job(db, acc, JobState.SUCCESS)
+    res = delete_forever(
+        db, layout, EventBus(), acc.id, acc.email, message_ids=[a.id], q="", confirm=1, now=NOW
+    )
+    assert res.deleted == 1
+
+
+@pytest.mark.parametrize("ids", [None, []])
+def test_nothing_picked_and_no_search_is_refused(db, layout, make_account, ids):
+    acc = make_account()
+    a = archived(db, layout, acc, "x")
+    with pytest.raises(ArchiveProblem, match="Pick mails or type a search"):
+        delete_forever(
+            db, layout, EventBus(), acc.id, acc.email, message_ids=ids, q=" ", confirm=1, now=NOW
+        )
+    assert db.get(MailMessage, a.id) is not None
+
+
+def test_the_wrong_count_message_says_one_mail(db, layout, make_account):
+    acc = make_account()
+    a = archived(db, layout, acc, "x")
+    with pytest.raises(ArchiveProblem, match=r"doesn't match the 1 mail picked\."):
+        delete_forever(
+            db, layout, EventBus(), acc.id, acc.email, message_ids=[a.id], q="", confirm=5, now=NOW
+        )
+
+
+def test_a_file_that_cannot_be_removed_does_not_fail_the_delete(
+    db, layout, make_account, monkeypatch, caplog
+):
+    acc = make_account()
+    a = archived(db, layout, acc, "x")
+    a_id = a.id
+
+    def boom(self, missing_ok=False):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("pathlib.Path.unlink", boom)
+    res = delete_forever(
+        db, layout, EventBus(), acc.id, acc.email, message_ids=[a_id], q="", confirm=1, now=NOW
+    )
+    assert res.deleted == 1 and db.get(MailMessage, a_id) is None
+    assert "denied" in caplog.text
+
+
+async def test_a_mail_deleted_during_a_restore_is_counted_not_restored(
+    auth_client, offload_box, monkeypatch
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    _archive(box, "Old photos")
+    adapter = box.mail.adapter_for(box.acc)
+    real = adapter.state
+
+    async def state_then_gone(pid):
+        with box.app.state.session_factory() as db:
+            if (gone := db.get(MailMessage, row.id)) is not None:
+                db.delete(gone)
+                db.commit()
+        return await real(pid)
+
+    monkeypatch.setattr(adapter, "state", state_then_gone)
+    out = await box.offloads._restore_one(box.acc, adapter, row.id, None)
+    assert out == "failed"
+
+
+async def test_deleting_forever_takes_its_rule_rows_and_offload_item_with_it(
+    auth_client, offload_box, db
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    off_id = row.offload_id
+    with box.app.state.session_factory() as s:
+        s.get(MailMessage, row.id).state = MailState.LOCAL_ARCHIVE
+        s.add(RuleDecision(account_id=box.acc.id, message_id=row.id))
+        s.add(RuleTodo(account_id=box.acc.id, message_id=row.id))
+        s.commit()
+    res = delete_forever(
+        db,
+        box.mail.layout,
+        EventBus(),
+        box.acc.id,
+        box.acc.email,
+        message_ids=[row.id],
+        q="",
+        confirm=1,
+        now=NOW,
+    )
+    assert res.deleted == 1
+    db.expire_all()
+    assert db.scalar(select(RuleDecision).where(RuleDecision.message_id == row.id)) is None
+    assert db.scalar(select(RuleTodo).where(RuleTodo.message_id == row.id)) is None
+    assert db.scalar(select(MailOffloadItem).where(MailOffloadItem.message_id == row.id)) is None
+    assert auth_client.get(f"/api/mail/offloads/{off_id}").status_code == 200

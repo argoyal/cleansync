@@ -783,6 +783,9 @@ class MailOffloads:
                 outcome = ALREADY  # the owner put it back in Gmail (or an earlier restore did)
         with self.sf() as db:
             row = db.get(MailMessage, msg_id)
+            if row is None:  # deleted forever while Gmail was answering
+                job_log(log_path, f"{pid}: the mail was deleted here meanwhile; not restored")
+                return FAILED
             if new_id is not None:
                 row.provider_id = new_id  # the file stays where it is (row.file_path)
             row.import_started_at = None  # the outcome is known

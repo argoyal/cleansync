@@ -151,7 +151,9 @@ def adopt_restored_copy(
             MailMessage.account_id == account_id,
             MailMessage.message_id == message_id,
             MailMessage.import_started_at.is_not(None),
-            MailMessage.state.in_([MailState.OFFLOADED, MailState.DELETED]),
+            MailMessage.state.in_(
+                [MailState.OFFLOADED, MailState.DELETED, MailState.LOCAL_ARCHIVE]
+            ),
         )
         .order_by(MailMessage.import_started_at.desc())
         .limit(1)
@@ -165,10 +167,11 @@ def adopt_restored_copy(
     return row
 
 
-def delete_search_rows(db: Session, ids: Iterable[int]) -> None:
+def delete_search_rows(db: Session, ids: Iterable[int], *, commit: bool = True) -> None:
     for chunk in _chunks(list(ids)):
         db.execute(text("DELETE FROM mail_fts WHERE rowid = :id"), [{"id": i} for i in chunk])
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def sync_state(db: Session, account_id: int) -> MailSyncState:
