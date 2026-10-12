@@ -184,7 +184,10 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 logger.warning("could not remove half-written mail files: %s", e)
             app.state.scheduler.start()
             app.state.rule_worker.start()
-            app.state.rule_jobs.resume()
+            try:
+                app.state.rule_jobs.resume()
+            except Exception:
+                logger.exception("could not resume rule jobs")
             try:
                 active = await self_test(layout.storage)
                 app.state.watcher.events_ok = active
