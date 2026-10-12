@@ -44,6 +44,7 @@ export const RECOVERY_REFRESH_MS = 5000;
 /** Mail events come in bursts (one per backup or offload batch): the reader's lists refresh
  * at most once every 5 seconds. */
 export const MAIL_REFRESH_MS = 5000;
+const RULES_KEYS = ["rules", "rules-sorting", "rule-decisions", "mail-threads", "mail-counts", "mail-thread", "mail-message"];
 const MAIL_KEYS = [
   "mail-status",
   "mail-overview",
@@ -99,6 +100,8 @@ export function useLiveEvents(): void {
     const recovery = throttle(() => invalidate(["recovery"]), RECOVERY_REFRESH_MS);
     const refreshRecovery = recovery.call;
     const mail = throttle(() => invalidate(MAIL_KEYS), MAIL_REFRESH_MS);
+    // Rule changes and sorting come in bursts too: same pace as mail.
+    const rules = throttle(() => invalidate(RULES_KEYS), MAIL_REFRESH_MS);
     const data = (e: Event): unknown => {
       try {
         return JSON.parse((e as MessageEvent).data as string);
@@ -135,9 +138,7 @@ export function useLiveEvents(): void {
       });
       // Mail jobs (spec §4): progress, pauses and the end of each job.
       source.addEventListener("mail", mail.call);
-      source.addEventListener("rules", () =>
-        invalidate(["rules-sorting", "rule-decisions", "mail-threads", "mail-counts", "mail-thread"]),
-      );
+      source.addEventListener("rules", rules.call);
       source.addEventListener("pair", () => invalidate(["pairs", "status", "browse"]));
       source.addEventListener("progress", (e) => {
         const p = data(e) as Progress | null;
@@ -164,6 +165,7 @@ export function useLiveEvents(): void {
       window.clearTimeout(timer);
       recovery.stop();
       mail.stop();
+      rules.stop();
       source?.close();
       liveStore.set("connecting");
       progressStore.set({});

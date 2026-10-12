@@ -1,8 +1,12 @@
+import { Link } from "react-router-dom";
+
 import { friendlyError } from "../api/client";
 import { useMailStatus } from "../api/queries";
 import type { Account, MailFailure, MailStatus } from "../api/types";
+import { useSorting } from "../api/rules";
 import { useCheckMail } from "../hooks/useMail";
-import { formatBytes, formatDuration, formatRelative, percent } from "../lib/format";
+import { formatBytes, formatDuration, formatRelative, formatWhen, percent } from "../lib/format";
+import { mailHref } from "../lib/mail";
 import { Bar, Button, Notice } from "./ui";
 
 export function summaryLine(s: MailStatus): string {
@@ -36,6 +40,31 @@ function FailedMails({ failed }: { failed: MailFailure[] }) {
       </ul>
       {more > 0 && <p className="mt-1 text-table text-ink-2">and {more.toLocaleString()} more</p>}
     </Notice>
+  );
+}
+
+/** One line about AI sorting; nothing when it is off (the switch lives in Rules). */
+function SortingStatus({ accountId }: { accountId: number }) {
+  const sorting = useSorting(accountId).data;
+  if (!sorting?.enabled) return null;
+  if (sorting.warning) {
+    return (
+      <Notice tone="warn">
+        Sorting has been failing since {formatWhen(sorting.failing_since)}: {sorting.last_error} New mail waits until the model answers again.{" "}
+        <Link to="/settings?tab=models" className="font-semibold text-accent">
+          Settings → Models
+        </Link>
+      </Notice>
+    );
+  }
+  const n = sorting.suggested;
+  return (
+    <p className="text-table text-ink-2 tabular">
+      Sorting: {sorting.sorted_today.toLocaleString()} today · {sorting.waiting.toLocaleString()} waiting ·{" "}
+      <Link to={mailHref({ view: "suggested" })} className="font-semibold text-accent">
+        {n.toLocaleString()} {n === 1 ? "suggestion" : "suggestions"}
+      </Link>
+    </p>
   );
 }
 
@@ -78,6 +107,7 @@ export function MailBackupStatus({ account, title }: { account: Pick<Account, "i
         </>
       )}
       {(ended === "PAUSED" || ended === "FAILED") && status.last_error && <Notice tone={ended === "PAUSED" ? "warn" : "err"}>{status.last_error}</Notice>}
+      <SortingStatus accountId={account.id} />
       {status.failed.length > 0 && <FailedMails failed={status.failed} />}
     </section>
   );

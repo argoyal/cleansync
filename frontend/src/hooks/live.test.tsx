@@ -81,6 +81,20 @@ describe("live updates", () => {
     expect(count("mail-threads")).toBe(3); // quiet for 5 s: straight away again
   });
 
+  it("refreshes rules, decisions and the open mail on a rules event, at most once every 5 seconds", () => {
+    vi.useFakeTimers();
+    const { spy, source } = setup();
+    const count = (k: string) => keys(spy).filter((x) => x === k).length;
+    act(() => source.emit("rules", { account_id: 1 }));
+    expect(keys(spy)).toEqual(
+      expect.arrayContaining(["rules", "rules-sorting", "rule-decisions", "mail-threads", "mail-counts", "mail-thread", "mail-message"]),
+    );
+    for (let i = 0; i < 20; i++) act(() => source.emit("rules", { account_id: 1 }));
+    expect(count("rules")).toBe(1); // held back
+    act(() => vi.advanceTimersByTime(5000));
+    expect(count("rules")).toBe(2); // one catch-up
+  });
+
   it("refreshes offloads and files on an offload event, also one without a pair", () => {
     const { spy, source } = setup();
     act(() => source.emit("offload", { account_id: 1, pair_id: null }));
