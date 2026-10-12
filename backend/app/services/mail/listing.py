@@ -11,8 +11,8 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.core.clock import as_utc
-from app.models import MailLabel, MailMessage
-from app.models.enums import MailState
+from app.models import MailLabel, MailMessage, RuleDecision
+from app.models.enums import DecisionStatus, MailState
 from app.services.mail.gmail import valid_mail_id
 from app.services.mail.search import SearchError
 
@@ -113,9 +113,9 @@ def _label_tally(db: Session, account_id: int) -> dict[str, int]:
     rows = db.execute(
         text(
             "SELECT j.value, count(*) FROM mail_messages m, json_each(m.labels) j "
-            "WHERE m.account_id = :a GROUP BY j.value"
+            "WHERE m.account_id = :a AND m.state != :archive GROUP BY j.value"
         ),
-        {"a": account_id},
+        {"a": account_id, "archive": MailState.LOCAL_ARCHIVE.value},
     ).all()
     return {str(v): int(n) for v, n in rows}
 
@@ -137,6 +137,16 @@ def view_counts(
             .group_by(MailMessage.state)
         ).all()
     )
+    archived = states.pop(MailState.LOCAL_ARCHIVE, 0)
+    suggested = (
+        db.scalar(
+            select(func.count(func.distinct(RuleDecision.message_id))).where(
+                RuleDecision.account_id == account_id,
+                RuleDecision.status == DecisionStatus.SUGGESTED,
+            )
+        )
+        or 0
+    )
     return {
         "all": sum(states.values()),
         "inbox": tally.get("INBOX", 0),
@@ -145,6 +155,8 @@ def view_counts(
         "important": tally.get("IMPORTANT", 0),
         "offloaded": states.get(MailState.OFFLOADED, 0),
         "deleted": states.get(MailState.DELETED, 0),
+        "archive": archived,
+        "suggested": suggested,
     }
 
 

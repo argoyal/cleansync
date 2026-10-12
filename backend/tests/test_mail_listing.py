@@ -129,6 +129,8 @@ def test_counts_for_views_and_labels(auth_client, db, make_account):
         "important": 1,
         "offloaded": 1,
         "deleted": 1,
+        "archive": 0,
+        "suggested": 0,
     }
     assert body["labels"] == [
         {"id": "Label_2", "name": "Receipts", "count": 0},

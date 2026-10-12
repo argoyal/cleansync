@@ -9,8 +9,8 @@ from decimal import Decimal
 from sqlalchemy import Text, cast, column, false, or_, select, text
 from sqlalchemy.orm import Session
 
-from app.models import MailLabel, MailMessage
-from app.models.enums import MailState
+from app.models import MailLabel, MailMessage, RuleDecision
+from app.models.enums import DecisionStatus, MailState
 
 UNITS = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
 AGE_DAYS = {"d": 1, "m": 30, "y": 365}
@@ -29,8 +29,10 @@ VIEWS = {
     "important": "IMPORTANT",
     "offloaded": MailState.OFFLOADED,
     "deleted": MailState.DELETED,
+    "suggested": "suggested",
+    "archive": MailState.LOCAL_ARCHIVE,
 }
-IS_VALUES = ("unread", "starred", "offloaded", "deleted")
+IS_VALUES = ("unread", "starred", "offloaded", "deleted", "archived")
 OPERATORS = (
     "from",
     "to",
@@ -70,6 +72,7 @@ class MailQuery:
     starred: bool = False
     offloaded: bool = False
     deleted: bool = False
+    archived: bool = False
 
     def is_empty(self) -> bool:
         return self == MailQuery()
@@ -208,6 +211,8 @@ def fts_match(words: list[str]) -> str:
 
 def query_conditions(db: Session, account_id: int, q: MailQuery) -> list:
     conds: list = []
+    if q.archived:
+        raise SearchError("Archived mail is on the Local archive page.")
     for s in q.senders:
         conds.append(MailMessage.from_addr.ilike(f"%{_like(s)}%", escape="\\"))
     for r in q.recipients:
@@ -256,6 +261,16 @@ def view_conditions(view: str, label: str | None) -> list:
     target = VIEWS[view]
     if view in ("offloaded", "deleted"):
         conds.append(MailMessage.state == target)
+    elif view == "archive":
+        pass  # mail_conditions limits to the archive
+    elif view == "suggested":
+        conds.append(
+            MailMessage.id.in_(
+                select(RuleDecision.message_id).where(
+                    RuleDecision.status == DecisionStatus.SUGGESTED
+                )
+            )
+        )
     elif target:
         conds.append(has_label(target))
     if label:
@@ -271,10 +286,16 @@ def mail_conditions(
     label: str | None = None,
     q: str = "",
     now: datetime,
+    archive: bool = False,
 ) -> list:
-    """Every condition for one account, view (or label) and search, ready for .where(*…)."""
+    """Every condition for one account, view (or label) and search, ready for .where(*…).
+    Local-archive mail is left out, unless asked for (archive=True or the archive view)."""
+    in_archive = archive or view == "archive"
     return [
         MailMessage.account_id == account_id,
+        MailMessage.state == MailState.LOCAL_ARCHIVE
+        if in_archive
+        else MailMessage.state != MailState.LOCAL_ARCHIVE,
         *view_conditions(view, label),
         *query_conditions(db, account_id, parse_query(q, now=now)),
     ]
