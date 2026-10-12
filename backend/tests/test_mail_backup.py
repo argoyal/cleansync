@@ -204,3 +204,46 @@ async def test_reading_a_mail_runs_off_the_event_loop(box, monkeypatch):
     monkeypatch.setattr(backup_mod, "parse_eml", watch)
     await box.run()
     assert seen and all(t is not loop_thread for t in seen)  # a big mail can't freeze the app
+
+
+async def test_each_saved_mail_is_one_write_transaction(box, engine, monkeypatch):
+    """Between reading one mail and the next, the backup commits once: the row, its search
+    entry and the failure record are saved together (issue #16)."""
+    from sqlalchemy import event
+
+    box.add(2)  # one page
+    marks: list[str] = []
+    real = backup_mod.parse_eml
+
+    def watch(raw):
+        marks.append("mail")
+        return real(raw)
+
+    def on_commit(conn):
+        marks.append("commit")
+
+    monkeypatch.setattr(backup_mod, "parse_eml", watch)
+    event.listen(engine, "commit", on_commit)
+    try:
+        await box.run()
+    finally:
+        event.remove(engine, "commit", on_commit)
+    first, second = [i for i, m in enumerate(marks) if m == "mail"]
+    assert marks[first + 1 : second].count("commit") == 1
+
+
+async def test_saving_a_mail_runs_off_the_event_loop(box, monkeypatch):
+    import threading
+
+    box.add(2)
+    loop_thread = threading.current_thread()
+    seen = []
+    real = backup_mod.add_message
+
+    def watch(*a, **kw):
+        seen.append(threading.current_thread())
+        return real(*a, **kw)
+
+    monkeypatch.setattr(backup_mod, "add_message", watch)
+    await box.run()
+    assert len(seen) == 2 and all(t is not loop_thread for t in seen)
