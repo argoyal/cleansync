@@ -17,7 +17,7 @@ from app.schemas.ai import (
     TestOut,
 )
 from app.services.ai.client import AiError
-from app.services.ai.connections import KEEP, ConnectionError_
+from app.services.ai.connections import KEEP, ConnectionError_, ConnectionNotFound
 from app.services.rules.chooser import AiChooser
 from app.services.rules.mailview import MailForModel
 from app.services.rules.match import Conditions, RuleView
@@ -100,15 +100,17 @@ def update(
                 headers=(body.headers or {}) if "headers" in given else KEEP,
             )
         )
+    except ConnectionNotFound as e:
+        raise HTTPException(404, str(e)) from e
     except ConnectionError_ as e:
-        raise HTTPException(404 if "no longer exists" in str(e) else 400, str(e)) from e
+        raise HTTPException(400, str(e)) from e
 
 
 @router.delete("/connections/{conn_id}", status_code=204)
 def delete(conn_id: int, request: Request, ctx: AuthContext = Depends(require_user)):
     try:
         _ai(request).delete(conn_id)
-    except ConnectionError_ as e:
+    except ConnectionNotFound as e:
         raise HTTPException(404, str(e)) from e
     return Response(status_code=204)
 
@@ -117,7 +119,7 @@ def delete(conn_id: int, request: Request, ctx: AuthContext = Depends(require_us
 async def models(conn_id: int, request: Request, ctx: AuthContext = Depends(require_user)):
     try:
         target = _ai(request).target_for(conn_id, "", timeout_s=15)
-    except ConnectionError_ as e:
+    except ConnectionNotFound as e:
         raise HTTPException(404, str(e)) from e
     try:
         return {"models": await request.app.state.ai_client.list_models(target)}
@@ -148,6 +150,8 @@ def set_task(task: str, body: TaskIn, request: Request, ctx: AuthContext = Depen
         t = _ai(request).set_task(
             name, body.connection_id, body.model, body.temperature, body.timeout_s
         )
+    except ConnectionNotFound as e:
+        raise HTTPException(404, str(e)) from e
     except ConnectionError_ as e:
         raise HTTPException(400, str(e)) from e
     return TaskOut(
@@ -165,7 +169,7 @@ async def test(body: TestIn, request: Request, ctx: AuthContext = Depends(requir
         target = _ai(request).target_for(
             body.connection_id, body.model, body.temperature, body.timeout_s
         )
-    except ConnectionError_ as e:
+    except ConnectionNotFound as e:
         raise HTTPException(404, str(e)) from e
     chooser = AiChooser(request.app.state.ai_client, lambda: target)
     try:

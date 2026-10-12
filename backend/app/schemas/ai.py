@@ -1,4 +1,19 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+MAX_HEADERS = 20
+
+
+def _check_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
+    # Fixed messages only: a header value is a secret and must never be echoed back.
+    if headers is None:
+        return None
+    if len(headers) > MAX_HEADERS:
+        raise ValueError(f"Use at most {MAX_HEADERS} extra headers.")
+    if any(len(k) > 100 for k in headers):
+        raise ValueError("A header name is too long.")
+    if any(len(v) > 4000 for v in headers.values()):
+        raise ValueError("A header value is too long.")
+    return headers
 
 
 class ConnectionIn(BaseModel):
@@ -7,12 +22,16 @@ class ConnectionIn(BaseModel):
     api_key: str | None = Field(None, max_length=4000)
     headers: dict[str, str] = Field(default_factory=dict)
 
+    _headers = field_validator("headers")(_check_headers)
+
 
 class ConnectionPatch(BaseModel):
     name: str | None = Field(None, max_length=80)
     base_url: str | None = Field(None, max_length=500)
     api_key: str | None = Field(None, max_length=4000)
     headers: dict[str, str] | None = None
+
+    _headers = field_validator("headers")(_check_headers)
 
 
 class ConnectionOut(BaseModel):

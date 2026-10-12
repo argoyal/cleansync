@@ -107,3 +107,9 @@ async def test_no_target_means_no_rule_without_asking():
     fc = FakeClient({"rule": 1})
     c = await AiChooser(fc, lambda: None).choose(RULES, mail(), [])
     assert c.rule_id is None and fc.asked is None
+
+
+def test_off_the_list_reason_caps_the_echoed_value():
+    from app.services.rules.chooser import _not_on_list
+
+    assert len(_not_on_list("z" * 500)) < 150

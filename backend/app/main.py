@@ -2,7 +2,9 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import sessionmaker
 
 from app.api import (
@@ -90,6 +92,14 @@ def _log_sweep(task: asyncio.Future) -> None:
         logger.warning("could not sweep old upload copies: %r", task.exception())
     elif task.result():
         logger.info("removed %s upload copies left by an earlier crash", task.result())
+
+
+async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # FastAPI's default answer repeats the submitted value, which can be a key or password.
+    detail = [
+        {"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")} for e in exc.errors()
+    ]
+    return JSONResponse({"detail": detail}, status_code=422)
 
 
 def create_app(settings: Settings | None = None, *, start_background: bool = True) -> FastAPI:
@@ -428,6 +438,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     ):
         app.include_router(router)
     app.include_router(legal.router)
+    app.add_exception_handler(RequestValidationError, _validation_error)
     app.add_middleware(SecurityHeaders)
     mount_spa(app, settings.frontend_dir)  # last: its catch-all route must not shadow the API
     return app

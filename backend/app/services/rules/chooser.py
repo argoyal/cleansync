@@ -81,6 +81,10 @@ def _number(value) -> int | None:
     return None
 
 
+def _not_on_list(value) -> str:
+    return f"The model answered {repr(value)[:40]}, which isn't on the list."
+
+
 class AiChooser:
     def __init__(self, client: AiClient, target: Callable[[], AiTarget | None]) -> None:
         self.client = client
@@ -110,7 +114,7 @@ class AiChooser:
             return Choice(rules[n - 1].id, why, ans.model, ans.took_ms)
         return Choice(
             None,
-            f"The model answered {ans.data.get('rule')!r}, which isn't on the list.",
+            _not_on_list(ans.data.get("rule")),
             ans.model,
             ans.took_ms,
             ans.raw[:500],

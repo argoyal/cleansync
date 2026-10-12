@@ -29,6 +29,10 @@ class ConnectionError_(ValueError):
     """A plain reason, shown as is."""
 
 
+class ConnectionNotFound(ConnectionError_):
+    """The connection id is not (or no longer) saved."""
+
+
 @dataclass(frozen=True)
 class AiTarget:
     connection_id: int
@@ -131,7 +135,7 @@ class AiSettings:
     def _get(self, db: Session, conn_id: int) -> AiConnection:
         conn = db.get(AiConnection, conn_id)
         if conn is None:
-            raise ConnectionError_("That connection no longer exists.")
+            raise ConnectionNotFound("That connection no longer exists.")
         return conn
 
     def update(

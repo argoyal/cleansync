@@ -88,3 +88,54 @@ def test_test_button_reports_a_plain_error(auth_client):
 
 def test_needs_login(client):
     assert client.get("/api/ai/connections").status_code == 401
+
+
+def test_validation_errors_never_echo_a_secret(auth_client):
+    c = make(auth_client)
+    long_key = "k-secret-" + "x" * 4000
+    bad = [
+        {"name": "x", "base_url": URL, "api_key": long_key},
+        {"name": "x", "base_url": URL, "headers": {"X": ["secret-h"]}},
+    ]
+    for body in bad:
+        r = auth_client.post("/api/ai/connections", json=body)
+        assert r.status_code == 422 and "msg" in r.text
+        assert "secret-h" not in r.text and "k-secret-" not in r.text
+        patch = {k: v for k, v in body.items() if k in ("api_key", "headers")}
+        r = auth_client.patch(f"/api/ai/connections/{c['id']}", json=patch)
+        assert r.status_code == 422 and "msg" in r.text
+        assert "secret-h" not in r.text and "k-secret-" not in r.text
+
+
+def test_headers_are_bounded(auth_client):
+    many = {f"H{i}": "v" for i in range(21)}
+    for headers in (many, {"n" * 101: "v"}, {"X": "v" * 4001}):
+        r = auth_client.post(
+            "/api/ai/connections", json={"name": "x", "base_url": URL, "headers": headers}
+        )
+        assert r.status_code == 422
+
+
+def test_missing_connection_is_404_and_bad_input_400(auth_client):
+    assert auth_client.patch("/api/ai/connections/999", json={"name": "x"}).status_code == 404
+    c = make(auth_client)
+    r = auth_client.patch(f"/api/ai/connections/{c['id']}", json={"base_url": "nope"})
+    assert r.status_code == 400
+
+
+def test_changes_need_the_csrf_header(auth_client):
+    c = make(auth_client)
+    token = auth_client.headers.pop("X-CSRF-Token")
+    try:
+        assert auth_client.post("/api/ai/connections", json={"base_url": URL}).status_code == 403
+        assert (
+            auth_client.patch(f"/api/ai/connections/{c['id']}", json={"name": "z"}).status_code
+            == 403
+        )
+        assert auth_client.delete(f"/api/ai/connections/{c['id']}").status_code == 403
+        assert (
+            auth_client.put("/api/ai/tasks/sorting", json={"connection_id": None}).status_code
+            == 403
+        )
+    finally:
+        auth_client.headers["X-CSRF-Token"] = token
