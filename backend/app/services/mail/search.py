@@ -179,11 +179,16 @@ def _like(value: str) -> str:
 
 def has_label(account_id: int, label_id: str):
     """Mails of this account that carry this label id, read from the label table the
-    database keeps up to date (issue #16), not from each mail's JSON."""
-    return MailMessage.id.in_(
-        select(MailMessageLabel.message_id).where(
-            MailMessageLabel.account_id == account_id, MailMessageLabel.label_id == label_id
+    database keeps up to date (issue #16), not from each mail's JSON. A lookup per mail on
+    the table's key, so the list can walk the date index newest first and stop early."""
+    return (
+        select(MailMessageLabel.message_id)
+        .where(
+            MailMessageLabel.message_id == MailMessage.id,
+            MailMessageLabel.label_id == label_id,
+            MailMessageLabel.account_id == account_id,
         )
+        .exists()
     )
 
 
