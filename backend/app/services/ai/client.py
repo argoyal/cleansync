@@ -4,20 +4,20 @@ three ways, in order, and remembers which one worked for each connection and mod
 
 import asyncio
 import json
-import logging
 import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
 from app.services.ai.connections import AiTarget
 
-log = logging.getLogger(__name__)
 MODES = ("json_schema", "json_object", "text")
 RAW_KEEP = 2000
+SHAPE_REFUSED = (400, 404, 405, 415, 422)  # a response_format the server does not take
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
@@ -76,7 +76,13 @@ def read_json(text: str) -> dict | None:
 
 
 class _ShapeRefused(Exception):
-    """HTTP 400 for a response_format: try the next mode."""
+    """The server did not take this response_format: try the next mode."""
+
+
+def _origin(url: str) -> str:
+    """scheme://host[:port] only, so no user:password or query string reaches a message."""
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc.rsplit('@', 1)[-1]}"
 
 
 class AiClient:
@@ -101,7 +107,10 @@ class AiClient:
         return h
 
     async def _post(self, t: AiTarget, body: dict) -> dict:
-        """One request with one retry when the server can't be reached."""
+        """One request with one retry when the server is busy or can't be reached. A server
+        that rejects or fails on a response_format raises _ShapeRefused so the next mode is
+        tried. A server that can't be reached at all does not cycle modes."""
+        shaped = "response_format" in body
         last = "the model's server didn't answer"
         for attempt in (1, 2):
             try:
@@ -112,25 +121,28 @@ class AiClient:
                         headers=self._headers(t),
                         timeout=t.timeout_s,
                     )
+            except httpx.InvalidURL:
+                raise AiRefused("The model's server address isn't valid.") from None
             except httpx.TimeoutException:
                 last = f"the model didn't answer within {int(t.timeout_s)} seconds"
             except httpx.HTTPError as e:
-                last = f"couldn't reach {t.base_url} ({type(e).__name__})"
+                last = f"couldn't reach {_origin(t.base_url)} ({type(e).__name__})"
             else:
-                if resp.status_code == 400 and "response_format" in body:
+                code = resp.status_code
+                if shaped and code in SHAPE_REFUSED:
                     raise _ShapeRefused()
-                if resp.status_code in (401, 403):
+                if code in (401, 403):
                     raise AiRefused("The model's server refused the API key.")
-                if resp.status_code == 404:
+                if code == 404:
                     raise AiRefused(
                         f"The server has no model called {t.model!r}, or the address is wrong."
                     )
-                if resp.status_code == 429 or resp.status_code >= 500:
-                    last = f"the model's server is busy or failing (HTTP {resp.status_code})"
+                if code >= 500 and shaped and attempt == 2:
+                    raise _ShapeRefused()
+                if code == 429 or code >= 500:
+                    last = f"the model's server is busy or failing (HTTP {code})"
                 elif resp.status_code >= 400:
-                    raise AiRefused(
-                        f"The model's server refused the request (HTTP {resp.status_code})."
-                    )
+                    raise AiRefused(f"The model's server refused the request (HTTP {code}).")
                 else:
                     try:
                         return resp.json()
@@ -161,6 +173,7 @@ class AiClient:
         first = self.modes.remembered_mode(target.connection_id, target.model)
         order = [first] + [m for m in MODES if m != first] if first in MODES else list(MODES)
         started = self.monotonic()
+        last_answer: AiAnswer | None = None
         for mode in order:
             body: dict = {
                 "model": target.model,
@@ -185,14 +198,19 @@ class AiClient:
             parsed = read_json(text) if mode != "text" else None
             if parsed is None:
                 parsed = parse_text(_THINK.sub(" ", text)) or read_json(text)
-            self.modes.remember_mode(target.connection_id, target.model, mode)
-            return AiAnswer(
+            answer = AiAnswer(
                 data=parsed,
                 raw=text[:RAW_KEEP],
                 mode=mode,
                 took_ms=int((self.monotonic() - started) * 1000),
                 model=target.model,
             )
+            if parsed is not None:
+                self.modes.remember_mode(target.connection_id, target.model, mode)
+                return answer
+            last_answer = answer
+        if last_answer is not None:
+            return last_answer
         raise AiRefused("The model's server refused every way of asking.")
 
     async def list_models(self, target: AiTarget) -> list[str]:
@@ -203,8 +221,12 @@ class AiClient:
                     headers=self._headers(target),
                     timeout=target.timeout_s,
                 )
+        except httpx.InvalidURL:
+            raise AiRefused("The model's server address isn't valid.") from None
         except httpx.HTTPError as e:
-            raise AiUnreachable(f"Couldn't reach {target.base_url} ({type(e).__name__}).") from None
+            raise AiUnreachable(
+                f"Couldn't reach {_origin(target.base_url)} ({type(e).__name__})."
+            ) from None
         if resp.status_code in (401, 403):
             raise AiRefused("The model's server refused the API key.")
         if resp.status_code >= 400:

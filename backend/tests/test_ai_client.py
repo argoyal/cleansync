@@ -153,3 +153,91 @@ async def test_list_models():
         return_value=httpx.Response(200, json={"data": [{"id": "b"}, {"id": "a"}]})
     )
     assert await AiClient(Modes()).list_models(target()) == ["a", "b"]
+
+
+def _mode_of(request) -> str | None:
+    fmt = json.loads(request.content).get("response_format")
+    return fmt["type"] if fmt else None
+
+
+@pytest.mark.parametrize(
+    "status,sent",
+    [
+        (422, ["json_schema", "json_object"]),
+        (404, ["json_schema", "json_object"]),
+        (500, ["json_schema", "json_schema", "json_object"]),
+    ],
+)
+@respx.mock
+async def test_unsupported_json_schema_falls_through_to_json_object(status, sent):
+    modes = Modes()
+
+    def handler(request):
+        mode = _mode_of(request)
+        if mode == "json_schema":
+            return httpx.Response(status, json={"error": "unsupported"})
+        return reply('{"rule": 6}')
+
+    route = respx.post(f"{URL}/chat/completions").mock(side_effect=handler)
+    ans = await ask(AiClient(modes, retry_pause_s=0))
+    assert ans.data == {"rule": 6} and ans.mode == "json_object"
+    assert [_mode_of(c.request) for c in route.calls] == sent
+    assert modes.saved[(1, "llama3.1:8b")] == "json_object"
+
+
+@respx.mock
+async def test_unreadable_json_schema_then_readable_json_object():
+    modes = Modes()
+
+    def handler(request):
+        if _mode_of(request) == "json_schema":
+            return reply("I cannot decide.")
+        return reply('{"rule": 7}')
+
+    route = respx.post(f"{URL}/chat/completions").mock(side_effect=handler)
+    ans = await ask(AiClient(modes, retry_pause_s=0))
+    assert ans.data == {"rule": 7} and ans.mode == "json_object"
+    assert [_mode_of(c.request) for c in route.calls] == ["json_schema", "json_object"]
+    assert modes.saved[(1, "llama3.1:8b")] == "json_object"
+
+
+@respx.mock
+async def test_unreadable_everywhere_is_none_and_nothing_remembered():
+    modes = Modes()
+    route = respx.post(f"{URL}/chat/completions").mock(return_value=reply("I cannot decide."))
+    ans = await ask(AiClient(modes, retry_pause_s=0))
+    assert ans.data is None and ans.mode == "text"
+    assert route.call_count == 3
+    assert modes.saved == {}
+
+
+@respx.mock
+async def test_connect_error_does_not_cycle_modes():
+    route = respx.post(f"{URL}/chat/completions").mock(side_effect=httpx.ConnectError("c"))
+    with pytest.raises(AiUnreachable):
+        await ask(AiClient(Modes(), retry_pause_s=0))
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_userinfo_never_appears_in_error_text():
+    secret_url = "http://user:pass-secret-1@ollama.example.com:11434/v1"
+    respx.route(host="ollama.example.com").mock(side_effect=httpx.ConnectError("c"))
+    t = AiTarget(1, secret_url, None, {}, "m", 0.0, 5.0)
+    with pytest.raises(AiUnreachable) as e:
+        await ask(AiClient(Modes(), retry_pause_s=0), t)
+    assert "pass-secret-1" not in str(e.value) and "user:" not in str(e.value)
+    assert "http://ollama.example.com:11434" in str(e.value)
+
+
+@respx.mock
+async def test_text_mode_404_is_still_refused_about_the_model():
+    respx.post(f"{URL}/chat/completions").mock(return_value=httpx.Response(404))
+    with pytest.raises(AiRefused, match="no model called"):
+        await ask(AiClient(Modes(), retry_pause_s=0))
+
+
+async def test_invalid_address_is_refused_plainly():
+    t = AiTarget(1, "http://example.com:notaport/v1", None, {}, "m", 0.0, 5.0)
+    with pytest.raises(AiRefused, match="address isn't valid"):
+        await ask(AiClient(Modes(), retry_pause_s=0), t)
