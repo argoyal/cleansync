@@ -116,3 +116,18 @@ def test_thread_list_carries_the_rule_chip(auth_client, mailbox, db):
     assert t["decision"]["rule_name"] == "Newsletters" and t["decision"]["status"] == "suggested"
     m = auth_client.get(f"/api/mail/messages/{row.id}").json()
     assert m["decision"]["why"] == "a digest"
+
+
+def test_delete_forever_with_an_empty_pick_never_falls_back_to_the_search(auth_client, mailbox):
+    acc, _, add = mailbox
+    row = add("Promo")
+    auth_client.post("/api/mail/delete", json={"account_id": acc.id, "message_ids": [row.id]})
+    r = auth_client.post(
+        "/api/mail/archive/delete-forever",
+        json={"account_id": acc.id, "message_ids": [], "q": "Promo", "confirm": 1},
+    )
+    assert r.status_code == 400 and r.json()["detail"] == "Pick mails or type a search."
+    one = auth_client.get(
+        f"/api/mail/threads/{row.thread_id}", params={"account_id": acc.id, "archive": True}
+    ).json()
+    assert one[0]["state"] == "local_archive"

@@ -37,7 +37,9 @@ class ForeverResult:
 def archive_targets(
     db: Session, account_id: int, *, message_ids: list[int] | None, q: str, now: datetime
 ) -> tuple[list[MailMessage], int]:
-    if message_ids:
+    if message_ids is not None:  # a pick, even an empty one: never the search instead
+        if not message_ids:
+            raise ArchiveProblem(NOTHING_PICKED_MSG)
         rows = rows_where_in(db, account_id, MailMessage.id, message_ids)
         mine = [r for r in rows if r.state == MailState.LOCAL_ARCHIVE]
         return mine, len(rows) - len(mine)

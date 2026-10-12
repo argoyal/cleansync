@@ -191,7 +191,11 @@ def restore_targets(
         # A picked list can be longer than SQLite takes in one query: asked in chunks.
         column = MailMessage.id if pick.message_ids else MailMessage.thread_id
         rows = rows_where_in(db, account_id, column, pick.message_ids or pick.thread_ids or [])
-        found = {r.id: r for r in rows if r.state in restorable}
+        # A picked thread can hold archived and offloaded mail: keep to the side it was picked on.
+        side = (
+            (MailState.LOCAL_ARCHIVE,) if pick.archive else (MailState.OFFLOADED, MailState.DELETED)
+        )
+        found = {r.id: r for r in rows if r.state in side}
         return [r.id for r in sorted(found.values(), key=lambda r: (as_utc(r.date), r.id))]
     q = select(MailMessage.id).where(
         MailMessage.account_id == account_id,

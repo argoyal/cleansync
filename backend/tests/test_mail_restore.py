@@ -689,3 +689,27 @@ async def test_a_restore_of_more_ids_than_sqlite_takes_in_one_query_works(auth_c
         assert restore_targets(db, box.acc.id, Pick(thread_ids=threads), None, NOW) == [
             r.id for r in old
         ]
+
+
+def test_a_picked_restore_stays_on_its_side_of_the_local_archive(db, layout, make_account):
+    """A thread can hold an archived mail and an offloaded one: restoring picked mail from the
+    archive takes only archived mail, and restoring offloaded mail never takes archived mail."""
+    from app.models import MailMessage
+    from app.services.mail.offload import restore_targets
+    from app.services.mail.offload_plan import Pick
+    from tests.rules_helpers import keep
+
+    acc = make_account()
+    archived = keep(db, layout, acc, make_mail("Archived"))
+    offloaded = keep(db, layout, acc, make_mail("Offloaded"))
+    for row, state in ((archived, MailState.LOCAL_ARCHIVE), (offloaded, MailState.OFFLOADED)):
+        m = db.get(MailMessage, row.id)
+        m.state, m.thread_id = state, "t-shared"
+    db.commit()
+    ids = [archived.id, offloaded.id]
+    for pick_archive, want in ((True, [archived.id]), (False, [offloaded.id])):
+        for pick in (
+            Pick(message_ids=ids, archive=pick_archive),
+            Pick(thread_ids=["t-shared"], archive=pick_archive),
+        ):
+            assert restore_targets(db, acc.id, pick, None, NOW) == want
