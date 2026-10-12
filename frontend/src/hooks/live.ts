@@ -135,6 +135,9 @@ export function useLiveEvents(): void {
       });
       // Mail jobs (spec §4): progress, pauses and the end of each job.
       source.addEventListener("mail", mail.call);
+      source.addEventListener("rules", () =>
+        invalidate(["rules-sorting", "rule-decisions", "mail-threads", "mail-counts", "mail-thread"]),
+      );
       source.addEventListener("pair", () => invalidate(["pairs", "status", "browse"]));
       source.addEventListener("progress", (e) => {
         const p = data(e) as Progress | null;

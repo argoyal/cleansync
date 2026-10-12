@@ -344,6 +344,7 @@ export type ActivityJob = {
 };
 
 export type MailCounts = { views: Record<string, number>; labels: { id: string; name: string; count: number }[] };
+export type DecisionChip = { id: number; rule_name: string; status: "suggested" | "applied" | "planned"; how: string; why: string };
 export type ThreadRow = {
   thread_id: string;
   count: number;
@@ -356,6 +357,7 @@ export type ThreadRow = {
   unread: boolean;
   offloaded: boolean;
   deleted: boolean;
+  decision: DecisionChip | null;
 };
 export type ThreadPage = { threads: ThreadRow[]; next_cursor: string | null; total: number | null; total_bytes: number | null };
 export type MailAttachment = { index: number; name: string; type: string; size: number; preview: boolean };
@@ -372,13 +374,14 @@ export type MailMessageInfo = {
   size: number;
   file_size: number;
   labels: { id: string; name: string }[];
-  state: "in_mail" | "offloaded" | "deleted_in_provider";
+  state: "in_mail" | "offloaded" | "deleted_in_provider" | "local_archive";
   offload_id: number | null;
   attachments: MailAttachment[];
   /** Known for one opened mail (`useMailMessage`); null in a thread list. */
   has_remote_images: boolean | null;
   gmail_url: string | null;
   file_missing: boolean;
+  decision: DecisionChip | null;
 };
 
 /** Mail offload and restore (spec §5). Named Mail… to stay apart from the Drive offload types. */
