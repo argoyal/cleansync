@@ -11,11 +11,17 @@ from app.paths import Layout
 from app.services.mail.store import check_eml_bytes, eml_path, parse_eml, read_message
 
 BODY_CHARS = 2000
+# Line starts only ever skip spaces and tabs, never newlines: a long run of blank lines
+# must not make the search quadratic.
 _QUOTE_START = re.compile(
-    r"^\s*(On\s.{1,300}\swrote:|-{2,}\s*Original Message\s*-{2,})\s*$",
+    r"^[ \t]*(On\s.{1,300}\swrote:|-{2,}[ \t]*Original Message[ \t]*-{2,})[ \t]*$",
     re.MULTILINE | re.IGNORECASE,
 )
-_LINK = re.compile(r"https?://([^/\s<>\"')\]]+)[^\s<>\"')\]]*", re.IGNORECASE)
+_LINK = re.compile(r"(?:https?://|\b(?=www\.))([^\s<>\"')\]/?#]+)[^\s<>\"')\]]*", re.IGNORECASE)
+MAX_SUBJECT = 300
+MAX_NAME = 100
+MAX_ADDRESSES = 20
+MAX_ATTACHMENTS = 20
 
 
 class CopyUnreadable(Exception):
@@ -53,12 +59,18 @@ def _addresses(value: str) -> list[str]:
     return [a.strip().lower() for _, a in getaddresses([value or ""]) if "@" in a]
 
 
+def _host_of(link_body: str) -> str:
+    """The host of a link: no user name or password (up to the last "@"), no port."""
+    return link_body.rsplit("@", 1)[-1].split(":", 1)[0].lower()
+
+
 def model_text(text: str, limit: int = BODY_CHARS) -> str:
-    m = _QUOTE_START.search(text or "")
+    text = (text or "")[: limit * 10]  # the body is untrusted: bound the work too
+    m = _QUOTE_START.search(text)
     if m:
         text = text[: m.start()]
-    lines = [ln for ln in (text or "").splitlines() if not ln.lstrip().startswith(">")]
-    text = _LINK.sub(lambda mm: f"[link: {mm.group(1).lower()}]", "\n".join(lines))
+    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith(">")]
+    text = _LINK.sub(lambda mm: f"[link: {_host_of(mm.group(1))}]", "\n".join(lines))
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
     return text[:limit]
@@ -83,14 +95,17 @@ def mail_for_model(layout: Layout, owner_email: str, row: MailMessage) -> MailFo
     calendar = any(p.get_content_type() == "text/calendar" for p in msg.walk()) or any(
         n.lower().endswith(".ics") for n in names
     )
+    # Header fields and names come from the sender: cap them before the model sees them.
+    to, cc = to[:MAX_ADDRESSES], cc[:MAX_ADDRESSES]
+    names = [n[:MAX_NAME] for n in names[:MAX_ATTACHMENTS]]
     return MailForModel(
         message_id=row.id,
         sender=sender_of(row.from_addr),
-        sender_name=parseaddr(row.from_addr or "")[0].strip(),
+        sender_name=parseaddr(row.from_addr or "")[0].strip()[:MAX_NAME],
         to=to,
         cc=cc,
         owner_in="to" if owner in to else "cc" if owner in cc else "other",
-        subject=row.subject or "",
+        subject=(row.subject or "")[:MAX_SUBJECT],
         date=row.date,
         attachments=names,
         list_unsubscribe=bool(msg.get("List-Unsubscribe")),

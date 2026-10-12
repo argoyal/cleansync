@@ -1,8 +1,11 @@
+import time
+
 import pytest
 
 from app.devtools.fake_gmail import make_mail
 from app.services.mail.store import eml_path
 from app.services.rules.mailview import (
+    BODY_CHARS,
     CopyUnreadable,
     domain_of,
     mail_for_model,
@@ -62,3 +65,42 @@ def test_sender_of(value, addr):
 
 def test_domain_of():
     assert domain_of("a@Mail.Example.com") == "mail.example.com" and domain_of("x") == ""
+
+
+def test_a_long_run_of_blank_lines_is_handled_quickly():
+    started = time.monotonic()
+    out = model_text("\n" * 100_000 + "hi")
+    assert time.monotonic() - started < 1.0
+    assert len(out) <= BODY_CHARS
+
+
+@pytest.mark.parametrize(
+    "text,shown",
+    [
+        ("see https://user:pw@host.example.com/x now", "[link: host.example.com]"),
+        ("see https://host.example.com:8443/x now", "[link: host.example.com]"),
+        ("deal www.shop.example.com/deal?x=1 today", "[link: www.shop.example.com]"),
+        ("see HTTPS://Mixed.Example.com/A", "[link: mixed.example.com]"),
+    ],
+)
+def test_links_show_only_the_host(text, shown):
+    out = model_text(text)
+    assert shown in out
+    assert "pw" not in out and "8443" not in out and "/x" not in out
+
+
+def test_header_fields_and_attachment_names_are_capped(db, layout, make_account):
+    acc = make_account()
+    many_to = ",".join(f"person{i}@example.com" for i in range(25))
+    raw = make_mail(
+        "S" * 1000,
+        sender=f"{'N' * 300} <sender@example.com>",
+        to=many_to,
+        attachments=tuple((f"{i}-{'n' * 150}.txt", "text/plain", b"x") for i in range(30)),
+    )
+    m = mail_for_model(layout, acc.email, keep(db, layout, acc, raw))
+    assert len(m.subject) == 300
+    assert len(m.sender_name) == 100
+    assert len(m.to) == 20
+    assert len(m.attachments) == 20
+    assert all(len(name) <= 100 for name in m.attachments)
