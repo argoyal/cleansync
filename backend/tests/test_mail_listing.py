@@ -195,3 +195,52 @@ def test_counts_read_the_label_tally_once(auth_client, db, make_account, monkeyp
     body = auth_client.get("/api/mail/counts", params={"account_id": acc.id}).json()
     assert body["views"]["inbox"] == 1
     assert calls == [acc.id]
+
+
+def test_archived_mail_leaves_inbox_list_and_count(auth_client, db, make_account):
+    acc = make_account()
+    keep = _add(db, acc, "a1", days=2)
+    gone = _add(db, acc, "a2", days=1)
+    gone.labels = ["Label_9"]  # archived in Gmail: INBOX removed
+    db.commit()
+    inbox = _page(auth_client, acc, view="inbox")["threads"]
+    assert [t["thread_id"] for t in inbox] == [keep.thread_id]
+    assert len(_page(auth_client, acc)["threads"]) == 2
+    counts = auth_client.get("/api/mail/counts", params={"account_id": acc.id}).json()
+    assert counts["views"]["inbox"] == 1
+
+
+def test_label_ids_with_like_characters_match_exactly(auth_client, db, make_account):
+    acc = make_account()
+    db.add_all(
+        [
+            MailLabel(account_id=acc.id, provider_label_id=i, name=i, type="user")
+            for i in ("Label_%1", "Label_x1")
+        ]
+    )
+    db.commit()
+    _add(db, acc, "a1", labels=("Label_%1",))
+    _add(db, acc, "a2", labels=("Label_x1",))
+    got = _page(auth_client, acc, label="Label_%1")["threads"]
+    assert [t["thread_id"] for t in got] == ["a1"]
+
+
+def test_label_tally_reads_the_label_table_not_each_mails_json(db, make_account):
+    from sqlalchemy import event
+
+    from app.services.mail.listing import _label_tally
+
+    acc = make_account()
+    _add(db, acc, "a1")
+    seen: list[str] = []
+
+    def listener(conn, cur, stmt, *args):
+        seen.append(stmt)
+
+    eng = db.get_bind()
+    event.listen(eng, "before_cursor_execute", listener)
+    try:
+        assert _label_tally(db, acc.id)["INBOX"] == 1
+    finally:
+        event.remove(eng, "before_cursor_execute", listener)
+    assert seen and not any("json_each" in s for s in seen)

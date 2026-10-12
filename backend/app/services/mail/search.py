@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import Text, cast, column, false, or_, select, text
+from sqlalchemy import column, false, or_, select, text
 from sqlalchemy.orm import Session
 
-from app.models import MailLabel, MailMessage
+from app.models import MailLabel, MailMessage, MailMessageLabel
 from app.models.enums import MailState
 
 UNITS = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
@@ -177,9 +177,14 @@ def _like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def has_label(label_id: str):
-    """Labels are stored as a JSON list of ids: look for the quoted id."""
-    return cast(MailMessage.labels, Text).like(f'%"{_like(label_id)}"%', escape="\\")
+def has_label(account_id: int, label_id: str):
+    """Mails of this account that carry this label id, read from the label table the
+    database keeps up to date (issue #16), not from each mail's JSON."""
+    return MailMessage.id.in_(
+        select(MailMessageLabel.message_id).where(
+            MailMessageLabel.account_id == account_id, MailMessageLabel.label_id == label_id
+        )
+    )
 
 
 def label_ids(db: Session, account_id: int, name: str) -> list[str]:
@@ -220,7 +225,7 @@ def query_conditions(db: Session, account_id: int, q: MailQuery) -> list:
         )
     for name in q.labels:
         ids = label_ids(db, account_id, name)
-        conds.append(or_(*[has_label(i) for i in ids]) if ids else false())
+        conds.append(or_(*[has_label(account_id, i) for i in ids]) if ids else false())
     if q.has_attachment:
         conds.append(MailMessage.has_attachments.is_(True))
     if q.larger is not None:
@@ -249,7 +254,7 @@ def query_conditions(db: Session, account_id: int, q: MailQuery) -> list:
     return conds
 
 
-def view_conditions(view: str, label: str | None) -> list:
+def view_conditions(account_id: int, view: str, label: str | None) -> list:
     if view not in VIEWS:
         raise SearchError(f"unknown view {view!r}")
     conds: list = []
@@ -257,9 +262,9 @@ def view_conditions(view: str, label: str | None) -> list:
     if view in ("offloaded", "deleted"):
         conds.append(MailMessage.state == target)
     elif target:
-        conds.append(has_label(target))
+        conds.append(has_label(account_id, target))
     if label:
-        conds.append(has_label(label))
+        conds.append(has_label(account_id, label))
     return conds
 
 
@@ -275,6 +280,6 @@ def mail_conditions(
     """Every condition for one account, view (or label) and search, ready for .where(*…)."""
     return [
         MailMessage.account_id == account_id,
-        *view_conditions(view, label),
+        *view_conditions(account_id, view, label),
         *query_conditions(db, account_id, parse_query(q, now=now)),
     ]

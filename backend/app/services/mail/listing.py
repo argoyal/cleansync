@@ -7,11 +7,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.clock import as_utc
-from app.models import MailLabel, MailMessage
+from app.models import MailLabel, MailMessage, MailMessageLabel
 from app.models.enums import MailState
 from app.services.mail.gmail import valid_mail_id
 from app.services.mail.search import SearchError
@@ -111,11 +111,9 @@ def totals(db: Session, conds: list) -> tuple[int, int]:
 
 def _label_tally(db: Session, account_id: int) -> dict[str, int]:
     rows = db.execute(
-        text(
-            "SELECT j.value, count(*) FROM mail_messages m, json_each(m.labels) j "
-            "WHERE m.account_id = :a GROUP BY j.value"
-        ),
-        {"a": account_id},
+        select(MailMessageLabel.label_id, func.count())
+        .where(MailMessageLabel.account_id == account_id)
+        .group_by(MailMessageLabel.label_id)
     ).all()
     return {str(v): int(n) for v, n in rows}
 
