@@ -16,6 +16,7 @@ dependencies = [
   "sse-starlette>=2.1",
   "pillow>=11",
   "nh3>=0.3.7",
+  "pyyaml>=6.0",
 ]
 
 [dependency-groups]
