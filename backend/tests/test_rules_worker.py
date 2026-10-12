@@ -448,3 +448,33 @@ async def test_the_mail_file_is_read_off_the_event_loop(gbox, monkeypatch):
     monkeypatch.setattr(worker_mod, "mail_for_model", spy)
     assert await worker(gbox, Pick()).run_once(gbox.acc.id) == 1
     assert on_loop == [False]
+
+
+async def test_keep_up_to_do_row_goes_in_the_same_transaction_as_the_mail(box):
+    """Merge of 0.2.1: each mail is saved in one short transaction off the event loop; the
+    sorting to-do row must still be written inside it, before the commit."""
+    seen = []
+
+    def hook(s, account_id, row):
+        with box.sf() as other:  # a second connection sees only committed rows
+            visible = other.scalar(select(MailMessage).where(MailMessage.id == row.id))
+        seen.append((s.in_transaction(), visible is None, threading.current_thread().name))
+        enqueue_new(s, account_id, row)
+
+    box.backup.on_kept = hook
+    box.add(1)
+    await box.run()  # first backup: never sorted
+    assert seen == []
+    with box.sf() as db:
+        set_sorting(db, box.acc.id, True)
+        db.commit()
+    box.add(1)
+    box.add(1, labels=("SENT",))
+    await box.run()  # keep-up
+    assert len(seen) == 1  # only the new INBOX mail
+    in_tx, not_yet_committed, thread = seen[0]
+    assert in_tx and not_yet_committed
+    assert thread != threading.main_thread().name  # run off the event loop
+    with box.sf() as db:
+        (todo,) = db.scalars(select(RuleTodo))
+        assert db.get(MailMessage, todo.message_id) is not None

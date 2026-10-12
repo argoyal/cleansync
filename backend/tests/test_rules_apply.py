@@ -308,3 +308,28 @@ async def test_undo_of_mail_no_longer_in_gmail_changes_nothing(gbox, actions, la
     assert d.status == "applied" and d.reason == "It's no longer in Gmail, so nothing was undone."
     assert get(gbox, MailMessage, row.id).state == later
     assert gbox.fake.messages[row.provider_id].labels == labels_before
+
+
+async def test_rule_archive_and_delete_keep_label_views_and_counts_right(gbox):
+    """Merge of 0.2.1: the label table is kept by triggers; the Applier's local updates
+    (set_flags after modify / trash) must show in the label views and counts at once."""
+    from app.models import MailMessageLabel
+    from app.services.mail.listing import view_counts
+
+    def counts():
+        with gbox.sf() as db:
+            return view_counts(db, gbox.acc.id)
+
+    a, b = gbox.add("Digest"), gbox.add("Junk")
+    assert counts()["inbox"] == 2
+    assert await gbox.applier.apply(decision(gbox, a, [{"kind": "archive"}])) == "applied"
+    with gbox.sf() as db:
+        rows = set(
+            db.scalars(select(MailMessageLabel.label_id).where(MailMessageLabel.message_id == a.id))
+        )
+    assert "INBOX" not in rows
+    c = counts()
+    assert c["inbox"] == 1 and c["all"] == 2 and c["archive"] == 0
+    assert await gbox.applier.apply(decision(gbox, b, [{"kind": "delete"}])) == "applied"
+    c = counts()
+    assert c["inbox"] == 0 and c["all"] == 1 and c["archive"] == 1

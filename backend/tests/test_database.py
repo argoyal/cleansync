@@ -130,3 +130,53 @@ def test_backup_keep_must_be_at_least_one(tmp_path):
     run_migrations(db_file)
     with pytest.raises(ValueError):
         backup_database(db_file, tmp_path / "backups", today=date(2026, 1, 1), keep=0)
+
+
+def test_a_v0_2_1_database_upgrades_to_ai_rules(tmp_path):
+    """0.2.1 shipped migration 0008 (mail speed); the AI rules migration is 0009 on top of it.
+    A 0.2.1 database keeps its mail and label rows, gets the rules tables, and the label
+    triggers still work afterwards."""
+    from alembic.script import ScriptDirectory
+
+    from app.database.migrate import _MIGRATIONS
+
+    script = ScriptDirectory(str(_MIGRATIONS))
+    assert script.get_heads() == ["0009"]
+    assert script.get_revision("0009").down_revision == "0008"
+    assert script.get_revision("0008").down_revision == "0007"
+
+    f = tmp_path / "v021.db"
+    run_migrations(f, "0008")
+    eng = make_engine(f)
+    stamp = "2026-01-02 03:04:05.000000"
+    with eng.begin() as c:
+        c.execute(
+            text(
+                "INSERT INTO accounts (id, email, remote_name, status, connected_at) "
+                "VALUES (1, 'a@x.com', 'a', 'CONNECTED', :t)"
+            ),
+            {"t": stamp},
+        )
+        c.execute(
+            text(
+                "INSERT INTO mail_messages (account_id, provider_id, thread_id, from_addr, "
+                "to_addrs, cc_addrs, subject, date, size, file_size, sha256, labels, unread, "
+                "starred, has_attachments, attachments, snippet, file_path, state, "
+                "first_seen_at, updated_at) VALUES (1, 'm1', 't1', '', '', '', '', :t, 10, 12, "
+                ":sha, '[\"INBOX\"]', 0, 0, 0, '[]', '', 'x', 'IN_MAIL', :t, :t)"
+            ),
+            {"t": stamp, "sha": "0" * 64},
+        )
+        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0008"
+    eng.dispose()
+    run_migrations(f)
+    eng = make_engine(f)
+    with eng.begin() as c:
+        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0009"
+        tables = {r[0] for r in c.execute(text("SELECT name FROM sqlite_master")).all()}
+        assert {"rules", "rule_todo", "rule_decisions", "mail_message_labels"} <= tables
+        assert {"mail_labels_ai", "mail_labels_au", "mail_labels_ad"} <= tables
+        c.execute(text("UPDATE mail_messages SET labels = '[\"SENT\"]' WHERE provider_id = 'm1'"))
+        got = c.execute(text("SELECT label_id FROM mail_message_labels")).scalars().all()
+    eng.dispose()
+    assert got == ["SENT"]
