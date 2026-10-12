@@ -9,7 +9,7 @@ import logging
 from collections.abc import Callable
 from datetime import timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import and_, case, delete, select, update
 from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
@@ -92,47 +92,119 @@ class SortingWorker:
         self._event_loop: asyncio.AbstractEventLoop | None = None  # set by start()
 
     # ---- one step, for tests and the loop ------------------------------------------------
-    def _wait(self, db: Session, todo: RuleTodo, reason: str) -> None:
-        todo.attempts += 1
-        todo.last_error = reason
-        todo.next_try_at = self.clock() + retry_after(todo.attempts)
+    # A new run of rules can take a mail over while it is being decided: start_preview stops
+    # the old preview and queues the mail again under the new job, with the same key. So every
+    # write that touches a to-do row names the job the mail was being decided for, and is the
+    # first write of its transaction. SQLite then holds the database from that write until the
+    # commit: a new run either got in before it (no row matches, so the old verdict is thrown
+    # away and the new job's row is left for the next pass) or waits for the commit.
+    @staticmethod
+    def _mine(account_id: int, message_id: int, job_id: int | None) -> tuple:
+        """Conditions for the mail's to-do row, as long as it still belongs to job_id."""
+        return (
+            RuleTodo.account_id == account_id,
+            RuleTodo.message_id == message_id,
+            RuleTodo.job_id.is_(None) if job_id is None else RuleTodo.job_id == job_id,
+        )
 
-    def _finish(self, db: Session, todo: RuleTodo) -> None:
-        """Remove a to-do row; a rule job counts it as decided (every removal goes here)."""
-        if todo.job_id:
-            job = db.get(RuleJob, todo.job_id)
-            if job is not None:
-                job.decided += 1
-                if job.decided >= job.total and job.state == RuleJobState.PREVIEWING:
-                    job.state = RuleJobState.PREVIEWED
-        db.delete(todo)
+    def _take(self, db: Session, account_id: int, message_id: int, job_id: int | None) -> bool:
+        """Remove the mail's to-do row if it still belongs to job_id, and count it toward the
+        job as decided (every removal goes here, as the first write). False: nothing done."""
+        gone = db.execute(
+            delete(RuleTodo)
+            .where(*self._mine(account_id, message_id, job_id))
+            .execution_options(synchronize_session=False)
+        ).rowcount
+        if gone != 1:
+            return False
+        if job_id is not None:
+            db.execute(
+                update(RuleJob)
+                .where(RuleJob.id == job_id)
+                .values(
+                    decided=RuleJob.decided + 1,
+                    state=case(
+                        (
+                            and_(
+                                RuleJob.state == RuleJobState.PREVIEWING,
+                                RuleJob.decided + 1 >= RuleJob.total,
+                            ),
+                            RuleJobState.PREVIEWED,
+                        ),
+                        else_=RuleJob.state,
+                    ),
+                )
+                .execution_options(synchronize_session=False)
+            )
+        return True
 
-    def _own_todo(
-        self, db: Session, account_id: int, message_id: int, job_id: int | None
-    ) -> RuleTodo | None:
-        """The mail's to-do row, if it still belongs to the job the mail was being decided for.
-        A new run of rules may have taken the mail over meanwhile (start_preview stops the old
-        preview and queues the mail again under the new job): its row is then left alone for the
-        next pass, and whatever was decided for the old job is thrown away."""
-        todo = db.get(RuleTodo, (account_id, message_id))
-        if todo is None or todo.job_id != job_id:
-            return None
-        return todo
+    def _wait(
+        self,
+        db: Session,
+        account_id: int,
+        message_id: int,
+        job_id: int | None,
+        attempts: int,
+        reason: str,
+    ) -> bool:
+        """Leave the mail waiting for a later try, if its row still belongs to job_id."""
+        return (
+            db.execute(
+                update(RuleTodo)
+                .where(*self._mine(account_id, message_id, job_id), RuleTodo.attempts == attempts)
+                .values(
+                    attempts=attempts + 1,
+                    last_error=reason,
+                    next_try_at=self.clock() + retry_after(attempts + 1),
+                )
+                .execution_options(synchronize_session=False)
+            ).rowcount
+            == 1
+        )
 
-    def _give_up(self, db: Session, todo: RuleTodo, reason: str) -> None:
-        row = db.get(MailMessage, todo.message_id)
+    def _attempts(self, db: Session, account_id: int, message_id: int, job_id: int | None):
+        return db.scalar(
+            select(RuleTodo.attempts).where(*self._mine(account_id, message_id, job_id))
+        )
+
+    def _give_up(
+        self, db: Session, account_id: int, message_id: int, job_id: int | None, reason: str
+    ) -> bool:
+        if not self._take(db, account_id, message_id, job_id):
+            return False
+        row = db.get(MailMessage, message_id)
         db.add(
             RuleDecision(
-                account_id=todo.account_id,
-                message_id=todo.message_id,
+                account_id=account_id,
+                message_id=message_id,
                 how=DecisionHow.NONE,
                 status=DecisionStatus.FAILED,
                 reason=reason,
-                job_id=todo.job_id,
+                job_id=job_id,
                 labels_seen=list(row.labels or []) if row else [],
             )
         )
-        self._finish(db, todo)
+        return True
+
+    def _failed_try(
+        self, account_id: int, message_id: int, job_id: int | None, reason: str, gave_up: str
+    ) -> tuple[int, bool]:
+        """A try that went wrong: the mail waits for a later try, or is given up after
+        GIVE_UP_AFTER tries. Returns (mails finished, anything changed)."""
+        with self.sf() as db:
+            attempts = self._attempts(db, account_id, message_id, job_id)
+            if attempts is None:
+                return 0, False
+            if attempts + 1 >= GIVE_UP_AFTER:
+                done = self._give_up(db, account_id, message_id, job_id, gave_up)
+                changed = done
+            else:
+                done, changed = (
+                    False,
+                    self._wait(db, account_id, message_id, job_id, attempts, reason),
+                )
+            db.commit()
+            return int(done), changed
 
     async def _retry_waiting(self, account_id: int) -> bool:
         """Apply decisions that were waiting on Gmail. True when any was tried."""
@@ -165,35 +237,25 @@ class SortingWorker:
             acc = db.get(Account, account_id)
             ra = db.get(RuleAccount, account_id)
             sorting_on = bool(ra and ra.sorting_enabled)
-            keys = [
-                (t.message_id, t.job_id)
-                for t in db.scalars(
-                    select(RuleTodo)
+            ids = list(
+                db.scalars(
+                    select(RuleTodo.message_id)
                     .where(RuleTodo.account_id == account_id, RuleTodo.next_try_at <= now)
                     .order_by(RuleTodo.job_id.is_not(None), RuleTodo.added_at)
                     .limit(self.batch)
                 )
-            ]
+            )
             email = acc.email if acc else ""
         chooser = self.chooser()
         handled = 0
-        for message_id, job_id in keys:
+        for message_id in ids:
             try:
                 done, did_change, stop = await self._sort_one(
                     account_id, email, message_id, chooser, now, sorting_on
                 )
-            except Exception:
+            except Exception:  # reading the to-do row itself failed: it is tried again later
                 log.exception("sorting mail %s failed", message_id)
                 done, did_change, stop = 0, True, False
-                with self.sf() as db:
-                    todo = self._own_todo(db, account_id, message_id, job_id)
-                    if todo is not None:
-                        if todo.attempts + 1 >= GIVE_UP_AFTER:
-                            self._give_up(db, todo, GAVE_UP)
-                            done = 1
-                        else:
-                            self._wait(db, todo, SOMETHING_WRONG)
-                        db.commit()
             handled += done
             changed = changed or did_change
             if stop:
@@ -206,8 +268,8 @@ class SortingWorker:
         self, account_id, email, message_id, chooser, now, sorting_on
     ) -> tuple[int, bool, bool]:
         """Decide one to-do mail. Returns (mails finished, anything changed, stop the batch).
-        The job comes from the to-do row read here, and every later write first checks the row
-        still belongs to that job (see _own_todo)."""
+        The job comes from the to-do row read here; every later write checks the row still
+        belongs to it (see _mine)."""
         with self.sf() as db:
             todo = db.get(RuleTodo, (account_id, message_id))
             row = db.get(MailMessage, message_id)
@@ -220,25 +282,27 @@ class SortingWorker:
                 or row.state != MailState.IN_MAIL
                 or moved_back(db, message_id)
             ):
-                self._finish(db, todo)
+                if not self._take(db, account_id, message_id, job_id):
+                    return 0, False, False
                 db.commit()
                 return 1, True, False
+        try:
+            return await self._decide_one(account_id, email, message_id, job_id, row, chooser, now)
+        except Exception:
+            log.exception("sorting mail %s failed", message_id)
+            done, _ = self._failed_try(account_id, message_id, job_id, SOMETHING_WRONG, GAVE_UP)
+            return done, True, False
+
+    async def _decide_one(
+        self, account_id, email, message_id, job_id, row, chooser, now
+    ) -> tuple[int, bool, bool]:
         # The mail file is read off the event loop, with no database session held open.
         try:
             mail = await asyncio.to_thread(mail_for_model, self.layout, email, row)
         except CopyUnreadable as e:
             reason = f"The copy here can't be read ({e})."
-            with self.sf() as db:
-                todo = self._own_todo(db, account_id, message_id, job_id)
-                if todo is None:
-                    return 0, False, False
-                if todo.attempts + 1 >= GIVE_UP_AFTER:
-                    self._give_up(db, todo, reason)
-                    db.commit()
-                    return 1, True, False
-                self._wait(db, todo, reason)
-                db.commit()
-                return 0, True, False
+            done, changed = self._failed_try(account_id, message_id, job_id, reason, reason)
+            return done, changed, False
         with self.sf() as db:
             rules = rule_views(db, account_id)
             remembered = remembered_senders(db, account_id)
@@ -248,18 +312,17 @@ class SortingWorker:
             verdict = await decide(rules, mail, remembered=remembered, chooser=chooser, hints=hints)
         except AiError as e:
             with self.sf() as db:
-                todo = self._own_todo(db, account_id, message_id, job_id)
-                if todo is not None:
-                    self._wait(db, todo, str(e))
+                attempts = self._attempts(db, account_id, message_id, job_id)
+                if attempts is not None:
+                    self._wait(db, account_id, message_id, job_id, attempts, str(e))
                 ra = _account(db, account_id)
                 ra.failing_since = ra.failing_since or now
                 ra.last_error = str(e)
                 db.commit()
             return 0, True, True  # the model is down: the rest would fail the same way
         with self.sf() as db:
-            todo = self._own_todo(db, account_id, message_id, job_id)
-            if todo is None:
-                return 0, False, False
+            if not self._take(db, account_id, message_id, job_id):
+                return 0, False, False  # a new run took the mail over, or sorting was turned off
             status = (
                 DecisionStatus.NO_RULE
                 if verdict.rule is None
@@ -284,7 +347,6 @@ class SortingWorker:
                 job_id=job_id,
             )
             db.add(d)
-            self._finish(db, todo)
             ra = _account(db, account_id)
             ra.failing_since, ra.last_error, ra.last_ok_at = None, None, self.clock()
             db.commit()

@@ -1,4 +1,5 @@
 import asyncio
+import threading
 
 import pytest
 from sqlalchemy import select, update
@@ -366,6 +367,11 @@ def _one_try_left(gbox, message_id):
         db.commit()
 
 
+def _old_job_untouched(gbox, jid):
+    """The stopped job counted nothing more and was not reopened after the stop."""
+    assert _job_state(gbox, jid) == (0, 1, RuleJobState.STOPPED)
+
+
 def _decisions_of(gbox, jid):
     with gbox.sf() as db:
         return list(db.scalars(select(RuleDecision).where(RuleDecision.job_id == jid)))
@@ -401,6 +407,8 @@ async def test_a_new_run_keeps_the_mail_the_worker_was_deciding_for_the_old_prev
     (d,) = _decisions_of(gbox, new)
     assert d.message_id == m.id and d.status == DecisionStatus.PLANNED
     assert jobs.preview(gbox.acc.id, new).planned == 1
+    assert _decisions_of(gbox, old) == []
+    _old_job_untouched(gbox, old)
 
 
 async def test_a_give_up_for_the_old_preview_leaves_the_new_runs_mail_alone(gbox, monkeypatch):
@@ -430,10 +438,13 @@ async def test_a_give_up_for_the_old_preview_leaves_the_new_runs_mail_alone(gbox
         todo = db.get(RuleTodo, (gbox.acc.id, m.id))
         assert todo.job_id == new and todo.attempts == 9 and todo.last_error is None
     assert _job_state(gbox, new) == (0, 1, RuleJobState.PREVIEWING)
+    _old_job_untouched(gbox, old)
     while await worker.run_once(gbox.acc.id):
         pass
     assert _job_state(gbox, new) == (1, 1, RuleJobState.PREVIEWED)
     assert [d.status for d in _decisions_of(gbox, new)] == [DecisionStatus.PLANNED]
+    assert _decisions_of(gbox, old) == []
+    _old_job_untouched(gbox, old)
 
 
 async def test_an_unreachable_model_for_the_old_preview_leaves_the_new_runs_mail_alone(gbox):
@@ -454,12 +465,15 @@ async def test_an_unreachable_model_for_the_old_preview_leaves_the_new_runs_mail
         applier=gbox.applier,
     )
     jobs = RuleJobs(gbox.sf, gbox.applier, worker)
-    jobs.start_preview(gbox.acc.id, view="inbox")
+    old = jobs.start_preview(gbox.acc.id, view="inbox")
     await worker.run_once(gbox.acc.id)
     (new,) = started
+    assert _decisions_of(gbox, old) == [] and _decisions_of(gbox, new) == []
     with gbox.sf() as db:
         todo = db.get(RuleTodo, (gbox.acc.id, m.id))
         assert todo.job_id == new and todo.attempts == 0 and todo.last_error is None
+    assert _job_state(gbox, new) == (0, 1, RuleJobState.PREVIEWING)
+    _old_job_untouched(gbox, old)
 
 
 async def test_an_error_for_the_old_preview_does_not_give_up_the_new_runs_mail(gbox):
@@ -490,3 +504,74 @@ async def test_an_error_for_the_old_preview_does_not_give_up_the_new_runs_mail(g
         todo = db.get(RuleTodo, (gbox.acc.id, m.id))
         assert todo.job_id == new and todo.attempts == 9 and todo.last_error is None
     assert _job_state(gbox, new) == (0, 1, RuleJobState.PREVIEWING)
+    _old_job_untouched(gbox, old)
+
+
+async def test_a_new_run_started_between_the_check_and_the_write_keeps_its_mail(gbox):
+    """The new run lands after the worker made sure the mail was still its job's, but before
+    it wrote anything (here: just before its first flush). The worker's claim on the to-do row
+    must be its first write, so the new run waits for it instead of slipping in between."""
+    from sqlalchemy import event
+
+    with gbox.sf() as db:
+        create_rule(db, gbox.acc.id, ARCHIVE, "a")
+    m = gbox.add("M")
+    worker, jobs = setup(gbox)
+    old = jobs.start_preview(gbox.acc.id, view="inbox")
+    seen = {}
+
+    def start_new_run():
+        seen["new"] = jobs.start_preview(gbox.acc.id, view="inbox")
+        seen["old_decided"] = _job_state(gbox, old)[0]
+
+    def before_first_flush(session, flush_context, instances):
+        if "thread" not in seen:
+            seen["thread"] = threading.Thread(target=start_new_run)
+            seen["thread"].start()
+            seen["thread"].join(0.5)  # it gets in now, or waits for the worker's write
+
+    event.listen(gbox.sf, "before_flush", before_first_flush)
+    try:
+        await worker.run_once(gbox.acc.id)
+        seen["thread"].join()
+    finally:
+        event.remove(gbox.sf, "before_flush", before_first_flush)
+    new = seen["new"]
+    while await worker.run_once(gbox.acc.id):
+        pass
+    assert _job_state(gbox, new) == (1, 1, RuleJobState.PREVIEWED)
+    (d,) = _decisions_of(gbox, new)
+    assert d.message_id == m.id and d.status == DecisionStatus.PLANNED
+    decided, _total, state = _job_state(gbox, old)
+    assert state == RuleJobState.STOPPED and decided == seen["old_decided"]
+    assert all(x.status == DecisionStatus.SKIPPED for x in _decisions_of(gbox, old))
+
+
+async def test_new_mail_is_not_sorted_when_sorting_is_turned_off_meanwhile(gbox):
+    from app.services.rules.worker import enqueue_new, set_sorting
+
+    with gbox.sf() as db:
+        create_rule(db, gbox.acc.id, ARCHIVE, "a")
+    m = gbox.add("M")
+    with gbox.sf() as db:
+        set_sorting(db, gbox.acc.id, True)
+        enqueue_new(db, gbox.acc.id, m)
+        db.commit()
+
+    class TurnedOffMeanwhile:
+        async def choose(self, rules, mail, hints):
+            with gbox.sf() as db:
+                set_sorting(db, gbox.acc.id, False)
+                db.commit()
+            return Choice(rules[0].id, "fits")
+
+    worker = SortingWorker(
+        session_factory=gbox.sf,
+        layout=gbox.layout,
+        chooser=lambda: TurnedOffMeanwhile(),
+        applier=gbox.applier,
+    )
+    assert await worker.run_once(gbox.acc.id) == 0
+    with gbox.sf() as db:
+        assert list(db.scalars(select(RuleDecision))) == []
+        assert list(db.scalars(select(RuleTodo))) == []
