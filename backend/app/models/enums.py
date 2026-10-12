@@ -102,6 +102,9 @@ class MailState(StrEnum):
     IN_MAIL = "in_mail"  # in Gmail, and kept here
     OFFLOADED = "offloaded"  # CleanSync moved it out of Gmail; kept here
     DELETED = "deleted_in_provider"  # deleted in Gmail by someone else; kept here
+    # Deleted by a rule or by hand: in Gmail's trash (or gone from it), kept here as archive
+    # only, out of the main views and search (AI rules spec §7).
+    LOCAL_ARCHIVE = "local_archive"
 
 
 class MailPhase(StrEnum):
@@ -131,3 +134,51 @@ class MailItemResult(StrEnum):
     OFFLOADED = "offloaded"
     SKIPPED = "skipped"  # stayed in Gmail; the reason says why
     RESTORED = "restored"  # put back in Gmail later
+
+
+class RuleMode(StrEnum):
+    SUGGEST = "suggest"  # decisions wait for the owner
+    AUTOMATIC = "automatic"  # decisions are applied as soon as they are made
+
+
+class RuleCombine(StrEnum):
+    """How a rule's fixed conditions combine with its description (AI rules spec §5)."""
+
+    FIXED_ONLY = "fixed_only"  # no AI call
+    FIXED_DECIDES = "fixed_decides"  # a fixed match applies it; else the AI is asked
+    FIXED_THEN_AI = "fixed_then_ai"  # a fixed match makes it a candidate; the AI confirms
+    AI_ONLY = "ai_only"
+
+
+class DecisionHow(StrEnum):
+    REMEMBERED = "remembered"
+    FIXED = "fixed"
+    AI = "ai"
+    NONE = "none"  # no rule fitted
+    MANUAL = "manual"  # the owner's own Delete or correction, logged so it can be undone
+
+
+class DecisionStatus(StrEnum):
+    PLANNED = "planned"  # a rule job's preview; applied when the owner confirms the job
+    SUGGESTED = "suggested"
+    APPLIED = "applied"
+    REJECTED = "rejected"
+    WITHDRAWN = "withdrawn"  # the owner moved the mail, or the rule went, before approval
+    UNDONE = "undone"
+    FAILED = "failed"
+    NO_RULE = "no_rule"
+    SKIPPED = "skipped"  # a rule job's mail that changed since the preview
+
+
+class RuleJobState(StrEnum):
+    PREVIEWING = "PREVIEWING"
+    PREVIEWED = "PREVIEWED"
+    RUNNING = "RUNNING"
+    DONE = "DONE"
+    STOPPED = "STOPPED"
+    FAILED = "FAILED"
+
+
+class AiTaskName(StrEnum):
+    SORTING = "sorting"
+    WRITING_RULES = "writing_rules"  # falls back to SORTING's choice when not set
