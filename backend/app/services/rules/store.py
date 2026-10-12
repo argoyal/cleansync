@@ -14,6 +14,7 @@ from app.services.rules.match import Conditions, RuleView
 ACTION_KINDS = ("archive", "label", "mark_read", "star", "delete")
 SNAPSHOT = ("name", "description", "conditions", "combine", "actions", "mode")
 MAX_NAME, MAX_DESCRIPTION, MAX_LABEL = 80, 1000, 100
+MAX_RULES_IN_FILE = 100
 
 
 class RuleProblem(ValueError):
@@ -111,9 +112,12 @@ def _unique_name(db: Session, account_id: int, name: str) -> str:
     if name not in taken:
         return name
     n = 2
-    while f"{name} ({n})" in taken:
+    while True:
+        suffix = f" ({n})"
+        candidate = name[: MAX_NAME - len(suffix)] + suffix
+        if candidate not in taken:
+            return candidate
         n += 1
-    return f"{name} ({n})"
 
 
 def create_rule(db: Session, account_id: int, data: RuleIn, saved_by: str) -> Rule:
@@ -241,11 +245,12 @@ STARTERS: dict[str, RuleIn] = {
 
 def add_starters(db: Session, account_id: int, names: list[str], saved_by: str) -> list[Rule]:
     have = set(db.scalars(select(Rule.name).where(Rule.account_id == account_id)))
-    return [
-        create_rule(db, account_id, STARTERS[n], saved_by)
-        for n in names
-        if n in STARTERS and n not in have
-    ]
+    created: list[Rule] = []
+    for n in names:
+        if n in STARTERS and n not in have:
+            created.append(create_rule(db, account_id, STARTERS[n], saved_by))
+            have.add(n)
+    return created
 
 
 def export_yaml(db: Session, account_id: int) -> str:
@@ -278,12 +283,18 @@ def import_yaml(db: Session, account_id: int, text: str, saved_by: str) -> list[
     items = doc.get("rules") if isinstance(doc, dict) else None
     if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
         raise RuleProblem("That file has no list of rules.")
+    if len(items) > MAX_RULES_IN_FILE:
+        raise RuleProblem(
+            f"That file has more than {MAX_RULES_IN_FILE} rules. Split it and import the parts."
+        )
     for i in items:  # check all before saving any
         _clean(_from_item(i))
     return [_create_from(db, account_id, i, saved_by) for i in items]
 
 
 def copy_rules(db: Session, from_account: int, to_account: int, saved_by: str) -> int:
+    if from_account == to_account:
+        raise RuleProblem("Pick another mailbox to copy the rules to.")
     rules = list(
         db.scalars(select(Rule).where(Rule.account_id == from_account).order_by(Rule.position))
     )

@@ -141,3 +141,86 @@ def test_yaml_rule_without_a_name_is_refused(db, make_account):
         import_yaml(
             db, acc.id, "rules:\n  - description: d\n    actions: [{kind: archive}]\n", "admin"
         )
+
+
+def test_starters_named_twice_in_one_call_make_one_rule(db, make_account):
+    acc = make_account()
+    add_starters(db, acc.id, ["Newsletters", "Newsletters"], "admin")
+    assert [v.name for v in rule_views(db, acc.id)] == ["Newsletters"]
+
+
+def test_long_names_stay_within_the_limit_when_renamed(db, make_account):
+    acc = make_account()
+    long_name = "N" * 80
+    data = f"rules:\n  - name: {long_name}\n    description: d\n    actions: [{{kind: archive}}]\n"
+    import_yaml(db, acc.id, data, "admin")
+    import_yaml(db, acc.id, data, "admin")
+    names = [v.name for v in rule_views(db, acc.id)]
+    assert len(names) == 2 and len(set(names)) == 2
+    assert all(len(n) <= 80 for n in names)
+    assert names[1].endswith(" (2)")
+
+
+def test_yaml_with_more_than_100_rules_is_refused(db, make_account):
+    acc = make_account()
+    items = "".join(
+        f"  - name: R{i}\n    description: d\n    actions: [{{kind: archive}}]\n"
+        for i in range(101)
+    )
+    with pytest.raises(RuleProblem, match="more than 100 rules"):
+        import_yaml(db, acc.id, "rules:\n" + items, "admin")
+    assert rule_views(db, acc.id, enabled_only=False) == []
+
+
+def test_copy_to_the_same_mailbox_is_refused(db, make_account):
+    acc = make_account()
+    create_rule(db, acc.id, NEWS, "admin")
+    with pytest.raises(RuleProblem, match="Pick another mailbox"):
+        copy_rules(db, acc.id, acc.id, "admin")
+
+
+def test_delete_withdraws_planned_and_keeps_applied(db, layout, make_account):
+    acc = make_account()
+    r = create_rule(db, acc.id, NEWS, "admin")
+    m1 = keep(db, layout, acc, make_mail("One"))
+    m2 = keep(db, layout, acc, make_mail("Two"))
+    db.add(
+        RuleDecision(
+            account_id=acc.id,
+            message_id=m1.id,
+            rule_id=r.id,
+            how=DecisionHow.AI,
+            status=DecisionStatus.PLANNED,
+        )
+    )
+    db.add(
+        RuleDecision(
+            account_id=acc.id,
+            message_id=m2.id,
+            rule_id=r.id,
+            how=DecisionHow.AI,
+            status=DecisionStatus.APPLIED,
+        )
+    )
+    db.commit()
+    delete_rule(db, acc.id, r.id)
+    by_mail = {d.message_id: d for d in db.scalars(select(RuleDecision))}
+    assert by_mail[m1.id].status == DecisionStatus.WITHDRAWN
+    assert by_mail[m2.id].status == DecisionStatus.APPLIED
+    assert by_mail[m2.id].reason is None
+
+
+def test_copy_creates_named_rules_for_the_target(db, make_account):
+    a = make_account()
+    c = make_account("carol@example.com")
+    create_rule(db, a.id, NEWS, "admin")
+    create_rule(
+        db,
+        a.id,
+        RuleIn(name="Receipts", description="Receipts", actions=[{"kind": "star"}]),
+        "admin",
+    )
+    assert copy_rules(db, a.id, c.id, "admin") == 2
+    copies = rule_views(db, c.id)
+    assert [v.name for v in copies] == ["Newsletters", "Receipts"]
+    assert all(get_rule(db, c.id, v.id).account_id == c.id for v in copies)
