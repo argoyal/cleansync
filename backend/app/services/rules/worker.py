@@ -92,6 +92,31 @@ class SortingWorker:
         todo.last_error = reason
         todo.next_try_at = self.clock() + retry_after(todo.attempts)
 
+    def _finish(self, db: Session, todo: RuleTodo) -> None:
+        """Remove a to-do row; a rule job counts it as decided (every removal goes here)."""
+        if todo.job_id:
+            job = db.get(RuleJob, todo.job_id)
+            if job is not None:
+                job.decided += 1
+                if job.decided >= job.total and job.state == RuleJobState.PREVIEWING:
+                    job.state = RuleJobState.PREVIEWED
+        db.delete(todo)
+
+    def _give_up(self, db: Session, todo: RuleTodo, reason: str) -> None:
+        row = db.get(MailMessage, todo.message_id)
+        db.add(
+            RuleDecision(
+                account_id=todo.account_id,
+                message_id=todo.message_id,
+                how=DecisionHow.NONE,
+                status=DecisionStatus.FAILED,
+                reason=reason,
+                job_id=todo.job_id,
+                labels_seen=list(row.labels or []) if row else [],
+            )
+        )
+        self._finish(db, todo)
+
     async def _retry_waiting(self, account_id: int) -> bool:
         """Apply decisions that were waiting on Gmail. True when any was tried."""
         with self.sf() as db:
@@ -146,7 +171,11 @@ class SortingWorker:
                 with self.sf() as db:
                     todo = db.get(RuleTodo, (account_id, message_id))
                     if todo is not None:
-                        self._wait(db, todo, SOMETHING_WRONG)
+                        if todo.attempts + 1 >= GIVE_UP_AFTER:
+                            self._give_up(db, todo, SOMETHING_WRONG)
+                            done = 1
+                        else:
+                            self._wait(db, todo, SOMETHING_WRONG)
                         db.commit()
             handled += done
             changed = changed or did_change
@@ -171,7 +200,7 @@ class SortingWorker:
                 or row.state != MailState.IN_MAIL
                 or moved_back(db, message_id)
             ):
-                db.delete(todo)
+                self._finish(db, todo)
                 db.commit()
                 return 1, True, False
             try:
@@ -179,18 +208,7 @@ class SortingWorker:
             except CopyUnreadable as e:
                 reason = f"The copy here can't be read ({e})."
                 if todo.attempts + 1 >= GIVE_UP_AFTER:
-                    db.add(
-                        RuleDecision(
-                            account_id=account_id,
-                            message_id=message_id,
-                            how=DecisionHow.NONE,
-                            status=DecisionStatus.FAILED,
-                            reason=reason,
-                            job_id=job_id,
-                            labels_seen=list(row.labels or []),
-                        )
-                    )
-                    db.delete(todo)
+                    self._give_up(db, todo, reason)
                     db.commit()
                     return 1, True, False
                 self._wait(db, todo, reason)
@@ -237,15 +255,11 @@ class SortingWorker:
                 job_id=job_id,
             )
             db.add(d)
-            db.delete(db.get(RuleTodo, (account_id, message_id)))
+            todo = db.get(RuleTodo, (account_id, message_id))
+            if todo is not None:
+                self._finish(db, todo)
             ra = _account(db, account_id)
             ra.failing_since, ra.last_error, ra.last_ok_at = None, None, self.clock()
-            if job_id:
-                job = db.get(RuleJob, job_id)
-                if job is not None:
-                    job.decided += 1
-                    if job.decided >= job.total and job.state == RuleJobState.PREVIEWING:
-                        job.state = RuleJobState.PREVIEWED
             db.commit()
             did = d.id
         if verdict.rule is not None and not job_id and verdict.rule.mode == RuleMode.AUTOMATIC:

@@ -338,3 +338,56 @@ async def test_failing_flag_clears_after_a_success(gbox):
     await worker(gbox, Pick()).run_once(gbox.acc.id)
     with gbox.sf() as db:
         assert db.get(RuleAccount, gbox.acc.id).failing_since is None
+
+
+def _job_with(gbox, *rows):
+    with gbox.sf() as db:
+        job = RuleJob(account_id=gbox.acc.id, total=len(rows))
+        db.add(job)
+        db.flush()
+        for r in rows:
+            db.add(RuleTodo(account_id=gbox.acc.id, message_id=r.id, job_id=job.id))
+        db.commit()
+        return job.id
+
+
+def _job(gbox, job_id):
+    with gbox.sf() as db:
+        j = db.get(RuleJob, job_id)
+        return j.decided, j.total, j.state
+
+
+async def test_job_with_an_unreadable_mail_still_finishes_its_preview(gbox):
+    _rule(gbox)
+    bad, good = gbox.add("Bad"), gbox.add("Good")
+    eml_path(gbox.layout, gbox.acc.email, bad.file_path).unlink()
+    jid = _job_with(gbox, bad, good)
+    with gbox.sf() as db:
+        db.get(RuleTodo, (gbox.acc.id, bad.id)).attempts = 9
+        db.commit()
+    await worker(gbox, Pick()).run_once(gbox.acc.id)
+    assert _job(gbox, jid) == (2, 2, RuleJobState.PREVIEWED)
+
+
+async def test_job_row_whose_mail_left_the_mailbox_is_counted(gbox):
+    _rule(gbox)
+    row = gbox.add("One")
+    jid = _job_with(gbox, row)
+    with gbox.sf() as db:
+        db.get(MailMessage, row.id).state = MailState.LOCAL_ARCHIVE
+        db.commit()
+    await worker(gbox, Pick()).run_once(gbox.acc.id)
+    assert todos(gbox) == [] and _job(gbox, jid) == (1, 1, RuleJobState.PREVIEWED)
+
+
+async def test_job_mail_that_keeps_raising_is_given_up_and_counted(gbox):
+    _rule(gbox)
+    row = gbox.add("One")
+    jid = _job_with(gbox, row)
+    with gbox.sf() as db:
+        db.get(RuleTodo, (gbox.acc.id, row.id)).attempts = 9
+        db.commit()
+    await worker(gbox, Pick(error=RuntimeError("boom"))).run_once(gbox.acc.id)
+    (d,) = decisions(gbox)
+    assert d.status == DecisionStatus.FAILED and d.reason.startswith("Something went wrong")
+    assert todos(gbox) == [] and _job(gbox, jid) == (1, 1, RuleJobState.PREVIEWED)
