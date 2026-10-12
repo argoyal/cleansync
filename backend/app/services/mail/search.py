@@ -209,9 +209,9 @@ def fts_match(words: list[str]) -> str:
     return " ".join(f'"{w}"*' for w in clean)
 
 
-def query_conditions(db: Session, account_id: int, q: MailQuery) -> list:
+def query_conditions(db: Session, account_id: int, q: MailQuery, *, archive: bool = False) -> list:
     conds: list = []
-    if q.archived:
+    if q.archived and not archive:  # inside the archive the view already limits to it
         raise SearchError("Archived mail is on the Local archive page.")
     for s in q.senders:
         conds.append(MailMessage.from_addr.ilike(f"%{_like(s)}%", escape="\\"))
@@ -297,5 +297,5 @@ def mail_conditions(
         if in_archive
         else MailMessage.state != MailState.LOCAL_ARCHIVE,
         *view_conditions(view, label),
-        *query_conditions(db, account_id, parse_query(q, now=now)),
+        *query_conditions(db, account_id, parse_query(q, now=now), archive=in_archive),
     ]

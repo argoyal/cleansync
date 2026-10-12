@@ -77,3 +77,28 @@ def test_taken_out_of_trash_in_gmail_is_back_in_mail(db, layout, make_account):
     apply_labels(db, acc.id, b.provider_id, ["INBOX"])
     db.refresh(b)
     assert b.state == MailState.IN_MAIL
+
+
+def test_suggested_count_leaves_out_archived_mail(db, layout, make_account):
+    acc = make_account()
+    a, b = setup(db, layout, acc)
+    for m in (a, b):
+        db.add(
+            RuleDecision(
+                account_id=acc.id,
+                message_id=m.id,
+                how=DecisionHow.AI,
+                status=DecisionStatus.SUGGESTED,
+            )
+        )
+    db.commit()
+    assert view_counts(db, acc.id)["suggested"] == 1
+
+
+def test_is_archived_is_accepted_inside_the_archive_view(db, layout, make_account):
+    acc = make_account()
+    setup(db, layout, acc)
+    assert ids(db, acc, view="archive", q="is:archived invoice") == {"Archived invoice"}
+    assert ids(db, acc, archive=True, q="is:archived") == {"Archived invoice"}
+    with pytest.raises(SearchError):
+        mail_conditions(db, acc.id, view="inbox", q="is:archived", now=NOW)

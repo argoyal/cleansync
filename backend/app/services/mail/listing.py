@@ -140,9 +140,12 @@ def view_counts(
     archived = states.pop(MailState.LOCAL_ARCHIVE, 0)
     suggested = (
         db.scalar(
-            select(func.count(func.distinct(RuleDecision.message_id))).where(
+            select(func.count(func.distinct(RuleDecision.message_id)))
+            .join(MailMessage, MailMessage.id == RuleDecision.message_id)
+            .where(
                 RuleDecision.account_id == account_id,
                 RuleDecision.status == DecisionStatus.SUGGESTED,
+                MailMessage.state != MailState.LOCAL_ARCHIVE,
             )
         )
         or 0
