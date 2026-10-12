@@ -7,7 +7,10 @@ You do not need a Google account to work on CleanSync: tests use a fake rclone, 
     make lint        # ruff, eslint, tsc
     make dev-seed    # once: alice@example.com backed by drivesync-data/local-remotes/
     make dev         # API on :8080, web app with hot reload on http://localhost:5173
+    make fake-model  # a pretend AI model on :11999 for mail rules (sets DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1)
     make e2e         # Playwright against :8080 (after `make fe-build`; see frontend/e2e)
+
+The pretend model (`app/devtools/fake_model.py`) answers like an OpenAI-style server without any AI: point a connection in Settings → Models at `http://127.0.0.1:11999/v1` with the model `fake-sorter`. Like the pretend accounts, it refuses to start without `DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1`. The rules browser test needs it running where the server can reach it.
 
 Tests that use a real rclone binary between two local folders are marked `realrclone`:
 `cd backend && uv run pytest -m realrclone`. Keep the data folder path short; rclone's bisync names its lock file after both folder paths.

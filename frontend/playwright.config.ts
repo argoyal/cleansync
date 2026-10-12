@@ -2,7 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 
 // Runs against an already running CleanSync (CI: the built container with a seeded
 // local "pretend Google" account). Set E2E_BASE_URL and E2E_ADMIN_PASSWORD. The rules test also
-// needs the pretend model (python -m app.devtools.fake_model) where the server can reach it;
+// needs the pretend model (DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 python -m app.devtools.fake_model, or
+// make fake-model) where the server can reach it;
 // E2E_FAKE_MODEL_URL says where, by default http://127.0.0.1:11999/v1.
 export default defineConfig({
   testDir: "./e2e",

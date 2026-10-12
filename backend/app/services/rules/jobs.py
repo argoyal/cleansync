@@ -8,7 +8,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 
 from app.core.clock import utcnow
 from app.models import MailMessage, Rule, RuleDecision, RuleJob, RuleTodo
@@ -293,14 +293,13 @@ class RuleJobs:
         with self.sf() as db:
             job = self._job(db, account_id, job_id)
             db.execute(delete(RuleTodo).where(RuleTodo.job_id == job_id))
-            left = db.scalars(
-                select(RuleDecision).where(
-                    RuleDecision.job_id == job_id, RuleDecision.status == DecisionStatus.PLANNED
-                )
-            ).all()
-            for d in left:
-                d.status, d.reason = DecisionStatus.SKIPPED, STOPPED_MSG
-            job.skipped += len(left)
+            left = db.execute(
+                update(RuleDecision)
+                .where(RuleDecision.job_id == job_id, RuleDecision.status == DecisionStatus.PLANNED)
+                .values(status=DecisionStatus.SKIPPED, reason=STOPPED_MSG)
+                .execution_options(synchronize_session=False)
+            ).rowcount
+            job.skipped += left
             if job.state in (RuleJobState.PREVIEWING, RuleJobState.PREVIEWED, RuleJobState.RUNNING):
                 job.state, job.finished_at = RuleJobState.STOPPED, self.clock()
             db.commit()

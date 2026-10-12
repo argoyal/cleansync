@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -205,6 +207,37 @@ async def test_loop_survives_a_scan_error_and_still_sorts(gbox):
     finally:
         await w.stop()
     assert len(decisions(gbox)) == 1
+
+
+async def test_a_poke_from_another_thread_wakes_the_waiting_loop(gbox):
+    """start_preview pokes from a sync endpoint's worker thread. Setting the asyncio.Event
+    there doesn't wake a loop that is idle, so the poke must go through the loop."""
+    _rule(gbox)
+    chosen = asyncio.Event()
+
+    class Telling(Pick):
+        async def choose(self, rules, mail, hints):
+            chosen.set()
+            return await super().choose(rules, mail, hints)
+
+    w = SortingWorker(
+        session_factory=gbox.sf,
+        layout=gbox.layout,
+        chooser=lambda: Telling(),
+        applier=gbox.applier,
+        idle_s=600,
+    )
+    w.start()
+    try:
+        await asyncio.sleep(0.1)  # nothing to do: the loop is waiting for a poke
+        queue(gbox, gbox.add("One"))
+        # A plain thread that pokes once the loop is asleep: nothing else wakes it meanwhile.
+        poker = threading.Thread(target=lambda: (time.sleep(0.2), w.poke()))
+        poker.start()
+        await asyncio.wait_for(chosen.wait(), 2)
+        poker.join()
+    finally:
+        await w.stop()
 
 
 async def test_waiting_decision_is_listed_and_retried_without_new_mail(gbox):

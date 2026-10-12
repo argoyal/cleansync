@@ -57,7 +57,7 @@ Every change can be undone: click an "applied" chip and press **Undo**. Undo onl
 
 **Correct…** tells CleanSync which rule the mail should have had, or "No rule". An applied change is undone first, then the right rule acts. Corrections are passed to the model as hints for later mail from the same sender.
 
-**Remembered senders.** When you approve or correct mail from the same sender into the same rule three times, CleanSync remembers that sender for that rule and stops asking the model about them. Remembered senders are listed on the rule, where you can remove each one.
+**Remembered senders.** When you approve or correct mail from the same sender into the same rule three times, CleanSync remembers that sender for that rule and stops asking the model about them. Remembered senders are listed on the rule; **Forget** removes one.
 
 **Your own moves win.** If CleanSync archived a mail and you put it back in the inbox, it is marked "moved back by you" and never sorted again. If you move a mail before approving its suggestion, the suggestion is dropped.
 
@@ -65,13 +65,13 @@ The Mail status line shows how sorting is going: how many mails were sorted toda
 
 ## 4. Run rules on older mail
 
-**Run rules on…** (on the Rules page, or above the mail list for the view or search you are in) runs your rules on mail you already have.
+**Run rules on…** (on the Rules page, or above the mail list for most views and searches) runs your rules on mail you already have.
 
 1. CleanSync decides every mail first, using only its own copy, and shows a preview: how many mails each rule would change, what it would do, and some examples with the model's reasons. Nothing has changed yet.
 2. Type the number of mails to go ahead, and press **Change N mails**. Typing the number counts as your approval, so the changes are made whatever each rule's mode is.
-3. The changes are made one by one. You can close the dialog; it keeps going. **Stop** stops it. A mail that changed between the preview and the run is skipped and listed in Suggested.
+3. The changes are made one by one. You can close the dialog; it keeps going. **Stop** stops it. A mail that changed between the preview and the run (or whose rule you changed meanwhile) is left as it is and counted as skipped.
 
-One run covers at most 20,000 mails. Narrow the search for more.
+One run at a time per mailbox: run or stop it before starting another. One run covers at most 20,000 mails. Narrow the search for more.
 
 ## 5. Delete and the Local archive
 
@@ -81,7 +81,7 @@ CleanSync keeps its copy in the **Local archive**, a view in the Mail panel. Arc
 
 From the Local archive you can:
 - **Restore to Gmail:** the mail comes out of Gmail's trash, or is imported again if Gmail no longer has it.
-- **Delete forever…:** type the number of mails, and CleanSync removes its own copy (the `.eml` file, its search entry and its rule history). This can't be undone. If Gmail no longer has the mail either, it exists nowhere. A short record (sender, subject, date) is kept in the Activity log.
+- **Delete forever…:** type the number of mails, and CleanSync removes its own copy (the `.eml` file, its search entry and its rule history). This can't be undone. If Gmail no longer has the mail either, it exists nowhere. A short record (sender, subject, date of up to 500 of the mails, and how many more) is kept in the Activity log. Delete forever waits while a restore is running for that mailbox.
 
 If you take a deleted mail out of Gmail's trash yourself, CleanSync sees it on its next check and moves it back to your normal mail.
 

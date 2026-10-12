@@ -1,6 +1,8 @@
 """A pretend OpenAI-style model for development and the browser test. Never used in production.
 
-    python -m app.devtools.fake_model [--port 11999] [--host 127.0.0.1]
+    DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 python -m app.devtools.fake_model [--port 11999] [--host 127.0.0.1]
+
+Like the pretend accounts, it refuses to start without DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1.
 
 Point a connection at http://127.0.0.1:11999/v1 with the model "fake-sorter". It answers the
 three questions CleanSync asks, without any real AI:
@@ -12,7 +14,9 @@ three questions CleanSync asks, without any real AI:
 
 import argparse
 import json
+import os
 import re
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from app.services.rules import chooser, drafting
@@ -134,6 +138,14 @@ def main() -> None:
     p.add_argument("--port", type=int, default=11999)
     p.add_argument("--host", default="127.0.0.1")
     args = p.parse_args()
+    allowed = os.environ.get("DRIVESYNC_ALLOW_LOCAL_ACCOUNTS", "").strip().lower()
+    if allowed not in ("1", "true", "yes", "on"):
+        print(
+            "Refusing: the pretend model is for development and tests only. "
+            "Set DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 to start it.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     make_server(args.port, args.host).serve_forever()
 
 

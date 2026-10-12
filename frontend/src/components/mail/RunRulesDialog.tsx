@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 
 import { describeAction, type JobPreview, useRuleJob } from "../../api/rules";
 import type { Account } from "../../api/types";
 import { useRunRuleJob, useStartRuleJob, useStopRuleJob } from "../../hooks/useRules";
-import { mailHref } from "../../lib/mail";
 import { Bar, Button, Dialog, Field, inputClass, Notice } from "../ui";
 import { parseTyped } from "./OffloadMailDialog";
 
@@ -141,9 +139,10 @@ export function RunRulesDialog({ account, start, onClose }: { account: Account; 
           </p>
           {job.reason && <p className="text-table text-ink-2">{job.reason}</p>}
           {job.skipped > 0 && (
-            <Link to={mailHref({ view: "suggested" })} onClick={onClose} className="inline-block text-table font-semibold text-accent">
-              See skipped mail in Suggested
-            </Link>
+            <p className="text-table text-ink-2">
+              {job.skipped === 1 ? "1 mail was left as it was" : `${mails(job.skipped)} were left as they were`}
+              {state === "DONE" ? ` because ${job.skipped === 1 ? "it" : "they"} changed since the preview.` : "."}
+            </p>
           )}
         </div>
       )}

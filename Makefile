@@ -18,8 +18,9 @@ dev-seed:
 	cd backend && $(DEV_ENV) DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 uv run python -m app.devtools.seed_local_account alice@example.com --sample-files --sample-mail
 
 # A pretend AI model for trying mail rules without a real one: http://127.0.0.1:11999/v1, model "fake-sorter".
+# Development only: like dev-seed, it needs DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1.
 fake-model:
-	cd backend && uv run python -m app.devtools.fake_model --port 11999
+	cd backend && DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 uv run python -m app.devtools.fake_model --port 11999
 
 templates:
 	cd backend && uv run python scripts/make_office_templates.py app/resources/office

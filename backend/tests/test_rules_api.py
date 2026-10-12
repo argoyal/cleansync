@@ -1,3 +1,4 @@
+import time
 from datetime import timedelta
 
 # backend/tests/test_rules_api.py
@@ -140,10 +141,11 @@ def test_a_previewed_job_runs_and_stops_from_the_api(auth_client, acc, db, layou
     db.commit()
     r = auth_client.post(f"/api/rule-jobs/{jid}/run", json={"account_id": acc.id, "confirm": 0})
     assert r.status_code == 202, r.text
-    for _ in range(50):
+    for _ in range(50):  # the run is a task on the app's loop: give it a moment
         p = auth_client.get(f"/api/rule-jobs/{jid}", params={"account_id": acc.id}).json()
         if p["state"] == "DONE":
             break
+        time.sleep(0.05)
     assert p["state"] == "DONE"
     r = auth_client.post(f"/api/rule-jobs/{jid}/stop", json={"account_id": acc.id})
     assert r.status_code == 204, r.text

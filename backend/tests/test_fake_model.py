@@ -1,11 +1,14 @@
 """The pretend model for development and the browser test: it answers the real prompts
 (sorting, the Test button, writing rules) sensibly, over a real OpenAI-style HTTP server."""
 
+import sys
 import threading
 from datetime import UTC, datetime
 
+import pytest
+
 from app.api.models_ai import SAMPLE_MAIL, SAMPLE_RULES
-from app.devtools.fake_model import answer, make_server
+from app.devtools.fake_model import answer, main, make_server
 from app.services.ai.client import AiClient
 from app.services.ai.connections import AiTarget
 from app.services.rules import chooser, drafting
@@ -102,3 +105,13 @@ async def test_answers_over_http_like_a_real_server():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_refuses_to_start_unless_pretend_accounts_are_allowed(monkeypatch, capsys):
+    monkeypatch.delenv("DRIVESYNC_ALLOW_LOCAL_ACCOUNTS", raising=False)
+    monkeypatch.setattr(sys, "argv", ["fake_model", "--port", "0"])
+    monkeypatch.setattr("app.devtools.fake_model.make_server", lambda *a: pytest.fail("started"))
+    with pytest.raises(SystemExit) as e:
+        main()
+    assert e.value.code == 2
+    assert "DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1" in capsys.readouterr().err

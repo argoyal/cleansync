@@ -105,8 +105,13 @@ jobs:
       - name: Start the pretend model
         # For the rules browser test: CleanSync's server calls it at http://127.0.0.1:11999/v1.
         run: |
-          docker exec -d cs python -m app.devtools.fake_model --port 11999
-          for i in $(seq 1 30); do docker exec cs python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:11999/v1/models')" && break; sleep 1; done
+          docker exec -d -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 cs python -m app.devtools.fake_model --port 11999
+          for i in $(seq 1 30); do
+            docker exec cs python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:11999/v1/models')" && exit 0
+            sleep 1
+          done
+          echo "The pretend model didn't start."
+          exit 1
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

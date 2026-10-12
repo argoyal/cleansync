@@ -89,6 +89,7 @@ class SortingWorker:
         self.batch = batch
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None  # set by start()
 
     # ---- one step, for tests and the loop ------------------------------------------------
     def _wait(self, db: Session, todo: RuleTodo, reason: str) -> None:
@@ -291,7 +292,17 @@ class SortingWorker:
             return sorted({*due, *waiting})
 
     def poke(self) -> None:
-        self._wake.set()
+        """Wake the loop. Safe from any thread: sync API endpoints call it from worker threads,
+        where setting the Event directly wouldn't wake a loop that is asleep."""
+        loop = self._event_loop
+        try:
+            on_loop = asyncio.get_running_loop() is loop
+        except RuntimeError:
+            on_loop = False
+        if loop is not None and not on_loop and not loop.is_closed():
+            loop.call_soon_threadsafe(self._wake.set)
+        else:
+            self._wake.set()
 
     async def _loop(self) -> None:
         while True:
@@ -311,6 +322,7 @@ class SortingWorker:
 
     def start(self) -> None:
         if self._task is None:
+            self._event_loop = asyncio.get_running_loop()
             self._task = asyncio.ensure_future(self._loop())
 
     async def stop(self) -> None:

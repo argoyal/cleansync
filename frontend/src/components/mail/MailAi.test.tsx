@@ -58,6 +58,19 @@ describe("AI in mail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-jobs/9/run")?.body).toEqual({ account_id: ACCOUNT.id, confirm: 2 }));
   });
 
+  it("says plainly why mail was left as it was, without sending it to Suggested", async () => {
+    const done = { job_id: 9, state: "DONE", total: 5, decided: 5, planned: 3, no_rule: 2, applied: 1, skipped: 2, failed: 0, reason: null, per_rule: [] };
+    mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": done });
+    const r = renderApp(<RunRulesDialog account={ACCOUNT} start={{ q: "", view: "inbox" }} onClose={() => {}} />);
+    expect(await screen.findByText("Done. Applied 1, skipped 2, failed 0.")).toBeInTheDocument();
+    expect(screen.getByText("2 mails were left as they were because they changed since the preview.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Suggested/ })).not.toBeInTheDocument();
+    r.unmount();
+    mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": { ...done, state: "STOPPED", skipped: 1 } });
+    renderApp(<RunRulesDialog account={ACCOUNT} start={{ q: "", view: "inbox" }} onClose={() => {}} />);
+    expect(await screen.findByText("1 mail was left as it was.")).toBeInTheDocument();
+  });
+
   it("makes a rule from picked mail, saves it, then runs it on the sender's older mail", async () => {
     const draft = { name: "Shop receipts", description: "Receipts from the shop", conditions: { senders_in: ["shop@example.com"] }, combine: "fixed_then_ai", actions: [{ kind: "label", label: "Receipts" }], notes: ["The shop sends receipts and offers; this is only receipts."] };
     const { calls } = mockApi({
