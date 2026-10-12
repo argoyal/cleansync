@@ -370,7 +370,8 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     app.state.ai_client = AiClient(app.state.ai)
 
     def _sorting_chooser():
-        # None when no Sorting model is set: the worker then leaves mail in the to-do list
+        # None when no Sorting model is set. Fixed-only rules and remembered senders still
+        # decide; mail that would need the model gets a "no rule" decision.
         if app.state.ai.target(AiTaskName.SORTING) is None:
             return None
         return AiChooser(app.state.ai_client, lambda: app.state.ai.target(AiTaskName.SORTING))

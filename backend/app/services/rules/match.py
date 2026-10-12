@@ -10,11 +10,14 @@ from app.services.rules.mailview import MailForModel, domain_of
 ADDRESSED = ("direct", "cc", "list")
 
 
-def _strs(value) -> tuple[str, ...]:
+def _strs(value, *, senders: bool = False) -> tuple[str, ...]:
+    """Trimmed, lower-case, without repeats. For senders, "@example.com" means "example.com"."""
     if not isinstance(value, (list, tuple)):
         return ()
-    out = [str(v).strip().lower() for v in value if str(v).strip()]
-    return tuple(dict.fromkeys(out))
+    out = [str(v).strip().lower() for v in value]
+    if senders:
+        out = [v.removeprefix("@").strip() for v in out]
+    return tuple(dict.fromkeys(v for v in out if v))
 
 
 def _flag(value) -> bool | None:
@@ -36,8 +39,8 @@ class Conditions:
         d = data if isinstance(data, dict) else {}
         addressed = d.get("addressed")
         return cls(
-            senders_in=_strs(d.get("senders_in")),
-            senders_not_in=_strs(d.get("senders_not_in")),
+            senders_in=_strs(d.get("senders_in"), senders=True),
+            senders_not_in=_strs(d.get("senders_not_in"), senders=True),
             subject_contains=_strs(d.get("subject_contains")),
             list_unsubscribe=_flag(d.get("list_unsubscribe")),
             calendar_invite=_flag(d.get("calendar_invite")),

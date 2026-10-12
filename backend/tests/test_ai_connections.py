@@ -73,3 +73,38 @@ def test_load_secrets_registers_saved_values(session_factory, layout):
     seen: list[str] = []
     AiSettings(session_factory, layout.secrets_dir, on_secret=seen.append).load_secrets()
     assert set(seen) == {"sk-bbbbbbbb", "hhhhhhhh"}
+
+
+@pytest.mark.parametrize(
+    "url", ["http://me:pw@gw.example.com/v1", "https://token@gw.example.com/v1", "http://@a:1/v1"]
+)
+def test_a_user_name_or_password_in_the_address_is_refused(ai, url):
+    with pytest.raises(ConnectionError_, match="Use the API key field"):
+        ai.create("x", url)
+
+
+def test_key_and_header_values_are_saved_without_stray_spaces(ai, layout):
+    conn = ai.create("A", "http://a:1/v1", api_key="sk-cccccccc\n", headers={"X-K": " hhhh\n"})
+    folder = layout.secrets_dir / "ai"
+    assert (folder / f"{conn.id}.key").read_text() == "sk-cccccccc"
+    assert json.loads((folder / f"{conn.id}.headers.json").read_text()) == {"X-K": "hhhh"}
+    assert "sk-cccccccc" in ai.seen and "hhhh" in ai.seen
+    assert ai.target_for(conn.id, "m").api_key == "sk-cccccccc"
+
+
+def test_a_new_server_drops_the_saved_key_and_headers(ai, layout):
+    folder = layout.secrets_dir / "ai"
+    conn = ai.create("A", "http://a:1/v1", api_key="sk-aaaaaaaa", headers={"X-K": "hhhhhhhh"})
+    ai.update(conn.id, base_url="http://a:1/v2")  # same server, another path: kept
+    assert (folder / f"{conn.id}.key").exists() and (folder / f"{conn.id}.headers.json").exists()
+    c = ai.update(conn.id, base_url="http://a:2/v2")  # another port: another server
+    assert (c.has_key, c.header_names) == (False, [])
+    assert not (folder / f"{conn.id}.key").exists()
+    assert not (folder / f"{conn.id}.headers.json").exists()
+
+
+def test_a_new_server_with_a_new_key_keeps_that_key(ai, layout):
+    conn = ai.create("A", "http://a:1/v1", api_key="sk-aaaaaaaa", headers={"X-K": "hhhhhhhh"})
+    c = ai.update(conn.id, base_url="https://b.example.com/v1", api_key="sk-dddddddd")
+    assert c.has_key is True and c.header_names == []
+    assert ai.target_for(conn.id, "m").api_key == "sk-dddddddd"

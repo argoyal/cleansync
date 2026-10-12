@@ -23,6 +23,13 @@ describe("Settings → Models", () => {
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ name: "Ollama", base_url: CONN.base_url, api_key: "sk-typed-1", headers: {} }));
   });
 
+  it("warns that moving a connection to another server removes its saved key", async () => {
+    mockApi({ "GET /api/ai/connections": [{ ...CONN, has_key: true }], "GET /api/ai/tasks": TASKS });
+    renderApp(<ModelsSettings />);
+    await userEvent.click(await screen.findByRole("button", { name: /Edit/ }));
+    expect(screen.getByText(/Changing the server removes the saved key\./)).toBeInTheDocument();
+  });
+
   it("lists models, saves the Sorting model and tests it", async () => {
     const { calls } = mockApi({
       "GET /api/ai/connections": [CONN],

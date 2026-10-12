@@ -37,6 +37,8 @@ def configure_logging(level: str, secrets: Iterable[str]) -> RedactingFilter:
     access = logging.getLogger("uvicorn.access")
     if not any(isinstance(f, AccessLogQueryFilter) for f in access.filters):
         access.addFilter(AccessLogQueryFilter())
+    # httpx logs every request's URL at INFO (model addresses included): warnings only.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     redactor = next(f for f in handler.filters if isinstance(f, RedactingFilter))
     for secret in secrets:
         redactor.add_secret(secret)

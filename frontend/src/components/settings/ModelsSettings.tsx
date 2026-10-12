@@ -114,7 +114,7 @@ function ConnectionDialog({ existing, onClose }: { existing: AiConnection | null
         <Field label="Name">
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Field label="Address" hint="Usually ends in /v1.">
+        <Field label="Address" hint={existing?.has_key || existing?.header_names.length ? "Usually ends in /v1. Changing the server removes the saved key." : "Usually ends in /v1."}>
           <input className={inputClass} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://ollama.example.com:11434/v1" />
         </Field>
         <Field label="API key (optional)" hint={existing?.has_key ? "Leave empty to keep the saved key" : undefined}>

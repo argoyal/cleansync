@@ -51,7 +51,21 @@ def clean_base_url(url: str) -> str:
         raise ConnectionError_(
             "The address must start with http:// or https://, for example http://ollama:11434/v1."
         )
+    if "@" in parts.netloc:
+        raise ConnectionError_(
+            "Don't put a user name or password in the address. Use the API key field."
+        )
     return url
+
+
+def _server(url: str) -> tuple:
+    """Scheme, host and port: a change here means another server."""
+    parts = urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return parts.scheme.lower(), (parts.hostname or "").lower(), port
 
 
 def _write_private(path: Path, text: str) -> None:
@@ -84,6 +98,7 @@ class AiSettings:
         return self.dir / f"{conn_id}.headers.json"
 
     def _save_key(self, conn_id: int, key: str | None) -> bool:
+        key = (key or "").strip()  # a pasted key often ends with a newline
         if key:
             _write_private(self._key_file(conn_id), key)
             self.on_secret(key)
@@ -92,7 +107,7 @@ class AiSettings:
         return False
 
     def _save_headers(self, conn_id: int, headers: dict[str, str]) -> list[str]:
-        clean = {str(k).strip(): str(v) for k, v in headers.items() if str(k).strip()}
+        clean = {str(k).strip(): str(v).strip() for k, v in headers.items() if str(k).strip()}
         if clean:
             _write_private(self._headers_file(conn_id), json.dumps(clean))
             for v in clean.values():
@@ -154,6 +169,10 @@ class AiSettings:
             if base_url is not None:
                 url = clean_base_url(base_url)
                 if url != conn.base_url:
+                    if _server(url) != _server(conn.base_url):
+                        # Another server must not be sent the old one's key or headers.
+                        api_key = None if isinstance(api_key, _Keep) else api_key
+                        headers = {} if isinstance(headers, _Keep) else headers
                     conn.base_url = url
                     conn.modes = {}  # another server: learn its answer modes again
             if not isinstance(api_key, _Keep):

@@ -50,7 +50,7 @@ function SortingStatus({ accountId }: { accountId: number }) {
   if (sorting.warning) {
     return (
       <Notice tone="warn">
-        Sorting has been failing since {formatWhen(sorting.failing_since)}: {sorting.last_error} New mail waits until the model answers again.{" "}
+        Sorting has been failing since {formatWhen(sorting.failing_since)}: {sorting.last_error ?? "the model didn't answer."} New mail waits until the model answers again.{" "}
         <Link to="/settings?tab=models" className="font-semibold text-accent">
           Settings → Models
         </Link>

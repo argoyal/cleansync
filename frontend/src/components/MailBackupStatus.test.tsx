@@ -41,6 +41,12 @@ describe("sorting status", () => {
     expect(screen.getByRole("link", { name: "Settings → Models" })).toHaveAttribute("href", "/settings?tab=models");
   });
 
+  it("says the model didn't answer when there is no error text", async () => {
+    mockApi({ "GET /api/mail/status": STATUS, "GET /api/rules/sorting": { ...BASE, warning: true, failing_since: "2026-10-12T10:40:00Z", last_error: null } });
+    renderApp(<MailBackupStatus account={ACCOUNT} />);
+    expect(await screen.findByText(/the model didn't answer\./)).toBeInTheDocument();
+  });
+
   it("shows nothing when sorting is off", async () => {
     mockApi({ "GET /api/mail/status": STATUS, "GET /api/rules/sorting": { ...BASE, enabled: false } });
     renderApp(<MailBackupStatus account={ACCOUNT} />);

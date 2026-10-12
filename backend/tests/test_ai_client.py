@@ -241,3 +241,13 @@ async def test_invalid_address_is_refused_plainly():
     t = AiTarget(1, "http://example.com:notaport/v1", None, {}, "m", 0.0, 5.0)
     with pytest.raises(AiRefused, match="address isn't valid"):
         await ask(AiClient(Modes(), retry_pause_s=0), t)
+
+
+def test_read_json_gives_up_quickly_on_a_long_unbalanced_answer():
+    import time
+
+    text = "{" * 20_000 + '{"rule": 1}'
+    started = time.monotonic()
+    assert read_json(text) is None  # the object sits past the first 8,000 characters
+    assert time.monotonic() - started < 2
+    assert read_json('{"rule": 1}' + " " * 100_000) == {"rule": 1}

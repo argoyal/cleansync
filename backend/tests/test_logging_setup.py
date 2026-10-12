@@ -103,3 +103,10 @@ def test_access_log_filter_is_added_once(settings):
     create_app(settings, start_background=False)
     create_app(settings, start_background=False)
     assert len(logging.getLogger("uvicorn.access").filters) == 1
+
+
+def test_httpx_request_lines_stay_quiet_even_at_debug(settings):
+    """httpx logs every request URL at INFO; a model address must not end up in the log."""
+    s = Settings(**(settings.model_dump() | {"log_level": "DEBUG"}))
+    create_app(s, start_background=False)
+    assert logging.getLogger("httpx").level == logging.WARNING

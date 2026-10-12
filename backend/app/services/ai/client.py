@@ -18,6 +18,7 @@ from app.services.ai.connections import AiTarget
 MODES = ("json_schema", "json_object", "text")
 RAW_KEEP = 2000
 SHAPE_REFUSED = (400, 404, 405, 415, 422)  # a response_format the server does not take
+READ_JSON_CHARS = 8000
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
@@ -52,7 +53,8 @@ class ModeStore(Protocol):
 def read_json(text: str) -> dict | None:
     """The JSON object in a model's text: thinking blocks and code fences are dropped, then
     the first {...} that parses wins. None when there is none."""
-    text = _THINK.sub(" ", text or "")
+    # Only the start of the answer is looked at: scanning a long unbalanced text is slow.
+    text = _THINK.sub(" ", text or "")[:READ_JSON_CHARS]
     candidates = [m.group(1) for m in _FENCE.finditer(text)] + [text]
     for cand in candidates:
         start = cand.find("{")

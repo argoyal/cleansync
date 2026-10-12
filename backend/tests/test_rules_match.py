@@ -130,3 +130,17 @@ async def test_remembered_rule_that_is_gone_is_ignored():
         hints=[],
     )
     assert v.rule.id == 1 and v.how == DecisionHow.AI
+
+
+def test_a_leading_at_sign_on_a_sender_domain_is_dropped():
+    from app.services.rules.match import Conditions
+
+    c = Conditions.from_json(
+        {
+            "senders_in": ["@Example.com", "news@example.com"],
+            "senders_not_in": [" @spam.example.com"],
+        }
+    )
+    assert c.senders_in == ("example.com", "news@example.com")
+    assert c.senders_not_in == ("spam.example.com",)
+    assert Conditions.from_json({"subject_contains": ["@home"]}).subject_contains == ("@home",)
