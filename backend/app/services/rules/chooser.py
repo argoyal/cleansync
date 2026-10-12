@@ -5,7 +5,7 @@ Built for small local models: one short answer, read strictly."""
 import re
 from collections.abc import Callable
 
-from app.services.ai.client import AiClient
+from app.services.ai.client import AiClient, read_json
 from app.services.ai.connections import AiTarget
 from app.services.rules.mailview import MailForModel
 from app.services.rules.match import Choice, RuleView
@@ -22,8 +22,8 @@ SCHEMA = {
     "required": ["rule", "why"],
     "additionalProperties": False,
 }
-_RULE_RE = re.compile(r"\brule\s*[:=#]?\s*(\d+)", re.IGNORECASE)
-_BARE_RE = re.compile(r"^\s*(\d+)\s*$", re.MULTILINE)
+# A text answer counts only when its first non-empty line is just the number ("Rule: 2", "2").
+_LINE_RE = re.compile(r"^\s*(?:rule\s*[:=#]?\s*)?(\d{1,6})\s*\.?\s*$", re.IGNORECASE)
 OWNER_IN = {"to": "To", "cc": "CC", "other": "neither (a list or a copy)"}
 
 
@@ -34,11 +34,13 @@ def _fence_safe(text: str) -> str:
 def build_prompt(rules: list[RuleView], mail: MailForModel, hints: list[str]) -> str:
     lines = ["Rules:"]
     for n, r in enumerate(rules, start=1):
-        lines.append(f"{n}. {r.name}: {r.description.strip() or r.name}")
+        name = " ".join(r.name.split())
+        desc = " ".join(r.description.split()) or name
+        lines.append(f"{n}. {name}: {desc}")
     lines.append("0. None of these")
     if hints:
         lines += ["", "The owner corrected earlier mail from this sender:"]
-        lines += [f"- {h}" for h in hints]
+        lines += [f"- {_fence_safe(h)}" for h in hints]
     who = f"{mail.sender_name} <{mail.sender}>" if mail.sender_name else mail.sender
     lines += [
         "",
@@ -59,7 +61,11 @@ def build_prompt(rules: list[RuleView], mail: MailForModel, hints: list[str]) ->
 
 
 def parse_text(text: str) -> dict | None:
-    m = _RULE_RE.search(text or "") or _BARE_RE.search(text or "")
+    data = read_json(text)
+    if data is not None:
+        return data
+    first = next((ln for ln in (text or "").splitlines() if ln.strip()), "")
+    m = _LINE_RE.match(first)
     return {"rule": int(m.group(1))} if m else None
 
 
@@ -68,8 +74,10 @@ def _number(value) -> int | None:
         return None
     if isinstance(value, int):
         return value
-    if isinstance(value, str) and value.strip().isdigit():
-        return int(value.strip())
+    if isinstance(value, str):
+        digits = value.strip()
+        if digits.isascii() and digits.isdecimal() and len(digits) <= 6:
+            return int(digits)
     return None
 
 
