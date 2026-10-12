@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 — 2026-10-12
+
+- Fix: starting a new "Run rules on…" right after closing a preview that was still deciding could leave a mail out of the new run, and turning sorting off while a mail is being sorted no longer sorts it.
+
 ## 0.3.0 — 2026-10-12
 
 - Mail rules: write rules in your own words, and a model you choose (any OpenAI-style server: Ollama, LM Studio, a LiteLLM gateway, OpenRouter…) sorts new inbox mail by them. Set up the model in Settings → Models (with Test); write rules from a sentence or from picked mail in Mail → Rules, with fixed conditions, Try it, starter rules, export/import and copy. Rules suggest first (Suggested view, rule chips with Approve, Correct… and Undo) or act automatically; senders you approve three times are remembered. "Run rules on…" previews a run on older mail and changes it after you type the count. Every change is logged and can be undone. See docs/mail-rules.md.
