@@ -35,10 +35,12 @@ from app.config import Settings
 from app.core.logsetup import configure_logging
 from app.database.engine import integrity_ok, make_engine
 from app.database.migrate import run_migrations
-from app.models.enums import Provider
+from app.models.enums import AiTaskName, Provider
 from app.paths import Layout
 from app.services.accounts.service import AccountService
 from app.services.adapters.files import FilesAdapters, GoogleDriveFiles
+from app.services.ai.client import AiClient
+from app.services.ai.connections import AiSettings
 from app.services.app_settings import get_setting
 from app.services.catalog.service import CatalogService
 from app.services.catalog.store import CatalogStore
@@ -62,6 +64,11 @@ from app.services.offload.service import OffloadService
 from app.services.offload.store import recover_offloads, sweep_delete_lists
 from app.services.queue import DB_BROKEN_MSG, SyncQueue, make_handler
 from app.services.rclone.setup import build_rclone_env, ensure_config_encrypted
+from app.services.rules.apply import Applier
+from app.services.rules.chooser import AiChooser
+from app.services.rules.decisions import Decisions
+from app.services.rules.jobs import RuleJobs
+from app.services.rules.worker import SortingWorker, enqueue_new
 from app.services.scheduler import Scheduler
 from app.services.sync.engine import SyncEngine
 from app.services.sync.initial import InitialSync
@@ -176,6 +183,8 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             except OSError as e:
                 logger.warning("could not remove half-written mail files: %s", e)
             app.state.scheduler.start()
+            app.state.rule_worker.start()
+            app.state.rule_jobs.resume()
             try:
                 active = await self_test(layout.storage)
                 app.state.watcher.events_ok = active
@@ -198,6 +207,8 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             # Offloads first: a cancelled step lets go of its pair (and may ask for a sync)
             # while the queue still runs, and the queue's stop then ends anything it started.
             await app.state.offloads.stop()
+            await app.state.rule_jobs.shutdown()
+            await app.state.rule_worker.stop()
             await app.state.mail.stop()  # also saves the Google API units counted so far
             await app.state.queue.stop()
             await app.state.catalog.stop()
@@ -338,6 +349,33 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         get_sync_queue=lambda: app.state.queue,  # tests swap the queue after startup
     )
     app.state.mail_offloads = MailOffloads(app.state.mail)
+    app.state.ai = AiSettings(session_factory, layout.secrets_dir, on_secret=redactor.add_secret)
+    app.state.ai.load_secrets()
+    app.state.ai_client = AiClient(app.state.ai)
+
+    def _sorting_chooser():
+        # None when no Sorting model is set: the worker then leaves mail in the to-do list
+        if app.state.ai.target(AiTaskName.SORTING) is None:
+            return None
+        return AiChooser(app.state.ai_client, lambda: app.state.ai.target(AiTaskName.SORTING))
+
+    app.state.sorting_chooser = _sorting_chooser
+    # One Applier for everything: its label-creation lock is per instance
+    app.state.rule_applier = Applier(
+        session_factory=session_factory,
+        layout=layout,
+        adapter_for=lambda acc: app.state.mail.adapter_for(acc),  # tests swap the adapters
+    )
+    app.state.rule_worker = SortingWorker(
+        session_factory=session_factory,
+        layout=layout,
+        chooser=lambda: app.state.sorting_chooser(),
+        applier=app.state.rule_applier,
+        bus=app.state.bus,
+    )
+    app.state.rule_decisions = Decisions(session_factory, app.state.rule_applier)
+    app.state.rule_jobs = RuleJobs(session_factory, app.state.rule_applier, app.state.rule_worker)
+    app.state.mail.backup.on_kept = enqueue_new
     app.state.scheduler = Scheduler(
         session_factory=session_factory,
         queue=app.state.queue,
