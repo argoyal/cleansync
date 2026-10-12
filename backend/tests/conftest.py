@@ -257,3 +257,10 @@ def box(session_factory, layout, make_account, db):
     ensure_services(db, acc)
     set_service_state(db, acc.id, ServiceKind.MAIL, ServiceState.ACTIVE)
     return Box(session_factory, layout, acc)
+
+
+@pytest.fixture
+def gbox(session_factory, layout, make_account):
+    from tests.rules_helpers import GmailBox
+
+    return GmailBox(session_factory, layout, make_account())
