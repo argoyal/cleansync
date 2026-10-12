@@ -133,3 +133,11 @@ export const useStarters = () =>
 
 export const useAiConnections = () => useQuery({ queryKey: ["ai-connections"], queryFn: () => api<AiConnection[]>("/api/ai/connections") });
 export const useAiTasks = () => useQuery({ queryKey: ["ai-tasks"], queryFn: () => api<Record<string, AiTask>>("/api/ai/tasks") });
+
+/** The rules as a YAML file to download (the server sends it as an attachment). */
+export const rulesExportUrl = (accountId: number) => `/api/rules/export${query({ account_id: accountId })}`;
+
+/** A saved rule's own fields, without the counts and order the server adds. */
+export function ruleFields(r: Rule): RuleFields {
+  return { name: r.name, description: r.description, conditions: r.conditions, combine: r.combine, actions: r.actions, mode: r.mode, enabled: r.enabled };
+}

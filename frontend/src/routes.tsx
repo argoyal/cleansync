@@ -15,6 +15,7 @@ import { DrivePage } from "./pages/DrivePage";
 import { HomePage, RecentPage, SearchPage, StarredPage } from "./pages/ListPages";
 import { MailOffloadPage, MailOffloadsPage } from "./pages/MailOffloadPage";
 import { MailPage } from "./pages/MailPage";
+import { MailRulesPage } from "./pages/MailRulesPage";
 import { OffloadedPage, OffloadPickPage } from "./pages/OffloadedPage";
 import { BlockedPage, PairDetailPage } from "./pages/PairDetailPage";
 import { RecoveryPage } from "./pages/RecoveryPage";
@@ -88,6 +89,7 @@ export function AppRoutes() {
           <Route path="drive" element={<DrivePage />} />
           <Route path="mail/offloads" element={<MailOffloadsPage />} />
           <Route path="mail/offloads/:id" element={<MailOffloadPage />} />
+          <Route path="mail/rules" element={<MailRulesPage />} />
           <Route path="mail/*" element={<MailPage />} />
           <Route path="offloaded" element={<OffloadedPage />} />
           <Route path="offloaded/pick" element={<OffloadPickPage />} />

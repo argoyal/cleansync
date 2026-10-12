@@ -118,6 +118,8 @@ function labelsOpen(): boolean {
 export function MailViews() {
   const { account } = useCurrentAccount();
   const counts = useMailCounts(account?.id ?? null).data;
+  // "/mail/rules" sits under "/mail", which would light up All mail too.
+  const onRules = useLocation().pathname === "/mail/rules";
   const [open, setOpenState] = useState(labelsOpen);
   const setOpen = (next: boolean) => {
     setOpenState(next);
@@ -130,8 +132,17 @@ export function MailViews() {
   return (
     <>
       {MAIL_VIEWS.map((v) => (
-        <PanelLink key={v.id} section="mail" to={mailHref({ view: v.id })} label={v.label} icon={v.icon} count={counts?.views[v.id]} />
+        <PanelLink
+          key={v.id}
+          section="mail"
+          to={mailHref({ view: v.id })}
+          label={v.label}
+          icon={v.icon}
+          count={counts?.views[v.id]}
+          active={onRules ? false : undefined}
+        />
       ))}
+      <PanelLink section="mail" to="/mail/rules" label="Rules" icon="view_list" />
       {counts && counts.labels.length > 0 && (
         <>
           <button
