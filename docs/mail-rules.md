@@ -13,7 +13,9 @@ Open **Settings → Models**.
    - A LiteLLM gateway: `http://litellm:4000/v1`, with the gateway's virtual key as the API key
    - OpenRouter: `https://openrouter.ai/api/v1`, with your OpenRouter key. Pick a model whose name ends in `:free` if you don't want to pay.
 
-   The API key and any extra headers are optional. Once saved they are never shown again (see [security](security.md)).
+   The API key and any extra headers are optional. Once saved they are never shown again (see [security](security.md)). Don't put a user name or password in the address; CleanSync refuses it. Use the API key field instead.
+
+   If you later change a connection to another server (another host or port, not just another path), its saved key and headers are removed, so they never go to the new server. Type them again in the same edit if the new server needs them.
 2. Under **Models for each task**, pick the connection and the model for each task:
    - **Sorting** decides which rule fits each mail.
    - **Writing rules** turns your sentence into a rule. When it isn't set, it uses the Sorting model.
@@ -71,7 +73,9 @@ The Mail status line shows how sorting is going: how many mails were sorted toda
 2. Type the number of mails to go ahead, and press **Change N mails**. Typing the number counts as your approval, so the changes are made whatever each rule's mode is.
 3. The changes are made one by one. You can close the dialog; it keeps going. **Stop** stops it. A mail that changed between the preview and the run (or whose rule you changed meanwhile) is left as it is and counted as skipped.
 
-One run at a time per mailbox: run or stop it before starting another. One run covers at most 20,000 mails. Narrow the search for more.
+Closing the dialog before you type the number drops the preview; nothing is changed. While a run is still going on, the Rules page says so, with an **Open** button that shows it again.
+
+Only one run at a time per mailbox. Starting a new one drops a preview that is still open, but while changes are being made you have to wait or press **Stop** first. One run covers at most 20,000 mails. Narrow the search for more.
 
 ## 5. Delete and the Local archive
 
@@ -81,7 +85,7 @@ CleanSync keeps its copy in the **Local archive**, a view in the Mail panel. Arc
 
 From the Local archive you can:
 - **Restore to Gmail:** the mail comes out of Gmail's trash, or is imported again if Gmail no longer has it.
-- **Delete forever…:** type the number of mails, and CleanSync removes its own copy (the `.eml` file, its search entry and its rule history). This can't be undone. If Gmail no longer has the mail either, it exists nowhere. A short record (sender, subject, date of up to 500 of the mails, and how many more) is kept in the Activity log. Delete forever waits while a restore is running for that mailbox.
+- **Delete forever…:** type the number of mails, and CleanSync removes its own copy (the `.eml` file, its search entry and its rule history). This can't be undone. If Gmail no longer has the mail either, it exists nowhere. A short record (sender, subject, date of up to 500 of the mails, and how many more) is kept in the Activity log. Delete forever refuses while a restore is running for that mailbox; try again when it's done.
 
 If you take a deleted mail out of Gmail's trash yourself, CleanSync sees it on its next check and moves it back to your normal mail.
 
