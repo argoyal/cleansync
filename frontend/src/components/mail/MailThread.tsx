@@ -15,7 +15,7 @@ export const isNarrow = () => !(window.matchMedia?.("(min-width: 1280px)").match
 
 export function MailThread({ account, threadId, onBack }: { account: Account; threadId: string; onBack?: () => void }) {
   const [params] = useSearchParams();
-  const thread = useMailThread(account.id, threadId);
+  const thread = useMailThread(account.id, threadId, params.get("view") === "archive");
   const messages = thread.data ?? [];
   const [open, setOpen] = useState<Set<number>>(new Set());
   const newest = messages.at(-1)?.id;

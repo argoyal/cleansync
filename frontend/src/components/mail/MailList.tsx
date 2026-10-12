@@ -7,6 +7,7 @@ import { formatWhen } from "../../lib/format";
 import { mailHref } from "../../lib/mail";
 import { Icon } from "../Icon";
 import { Button, Notice } from "../ui";
+import { RuleChip } from "./RuleChip";
 
 function sender(from: string): string {
   const m = from.match(/^\s*"?([^"<]+?)"?\s*</);
@@ -17,7 +18,21 @@ function Mark({ children }: { children: string }) {
   return <span className="ml-1.5 inline-block rounded-full bg-sec-mail-soft px-2 text-meta text-sec-mail-soft-ink">{children}</span>;
 }
 
-function Row({ t, href, open, picked, onToggle }: { t: ThreadRow; href: string; open: boolean; picked: boolean; onToggle?: (threadId: string) => void }) {
+function Row({
+  accountId,
+  t,
+  href,
+  open,
+  picked,
+  onToggle,
+}: {
+  accountId: number;
+  t: ThreadRow;
+  href: string;
+  open: boolean;
+  picked: boolean;
+  onToggle?: (threadId: string) => void;
+}) {
   const name = sender(t.from_addr);
   const parts = [name, t.subject || "(no subject)"];
   if (t.count > 1) parts.push(`${t.count} mails`);
@@ -25,6 +40,7 @@ function Row({ t, href, open, picked, onToggle }: { t: ThreadRow; href: string; 
   if (t.has_attachments) parts.push("has attachments");
   if (t.offloaded) parts.push("offloaded");
   if (t.deleted) parts.push("deleted in Gmail");
+  if (t.decision) parts.push(`${t.decision.status}: ${t.decision.rule_name}`);
   parts.push(formatWhen(t.last_date));
   const label = parts.join(", ");
   return (
@@ -57,6 +73,12 @@ function Row({ t, href, open, picked, onToggle }: { t: ThreadRow; href: string; 
           {formatWhen(t.last_date)}
         </span>
       </Link>
+      {t.decision && (
+        // Beside the link too: the chip is a button, and a button inside a link is not valid HTML.
+        <div className="flex shrink-0 items-center pr-3">
+          <RuleChip accountId={accountId} chip={t.decision} />
+        </div>
+      )}
     </li>
   );
 }
@@ -90,6 +112,7 @@ export function MailList({
         {rows.map((t) => (
           <Row
             key={t.thread_id}
+            accountId={accountId}
             t={t}
             open={t.thread_id === thread}
             href={mailHref({ view, label, q, thread: t.thread_id })}

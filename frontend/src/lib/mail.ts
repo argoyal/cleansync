@@ -4,11 +4,13 @@ import { formatDay } from "./format";
 export const MAIL_VIEWS: { id: string; label: string; icon: IconName }[] = [
   { id: "all", label: "All mail", icon: "mail" },
   { id: "inbox", label: "Inbox", icon: "inbox" },
+  { id: "suggested", label: "Suggested", icon: "auto_awesome" },
   { id: "sent", label: "Sent", icon: "send" },
   { id: "starred", label: "Starred", icon: "star" },
   { id: "important", label: "Important", icon: "label_important" },
   { id: "offloaded", label: "Offloaded", icon: "inventory_2" },
   { id: "deleted", label: "Deleted in Gmail", icon: "delete" },
+  { id: "archive", label: "Local archive", icon: "archive" },
 ];
 
 export function viewTitle(view: string, labelName?: string | null): string {

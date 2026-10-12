@@ -2,6 +2,7 @@
 // only carries the icons the app uses.
 
 import AddSvg from "@material-symbols/svg-400/rounded/add.svg?react";
+import ArchiveSvg from "@material-symbols/svg-400/rounded/archive.svg?react";
 import ArrowBackSvg from "@material-symbols/svg-400/rounded/arrow_back.svg?react";
 import ArrowDownwardSvg from "@material-symbols/svg-400/rounded/arrow_downward.svg?react";
 import ArrowUpwardSvg from "@material-symbols/svg-400/rounded/arrow_upward.svg?react";
@@ -65,15 +66,19 @@ import TableChartSvg from "@material-symbols/svg-400/rounded/table_chart.svg?rea
 import UploadSvg from "@material-symbols/svg-400/rounded/upload.svg?react";
 import UploadFileSvg from "@material-symbols/svg-400/rounded/upload_file.svg?react";
 import ViewListSvg from "@material-symbols/svg-400/rounded/view_list.svg?react";
+import WandStarsSvg from "@material-symbols/svg-400/rounded/wand_stars.svg?react";
 import WarningSvg from "@material-symbols/svg-400/rounded/warning.svg?react";
 
 const ICONS = {
   add: AddSvg,
+  archive: ArchiveSvg,
   arrow_back: ArrowBackSvg,
   arrow_downward: ArrowDownwardSvg,
   arrow_upward: ArrowUpwardSvg,
   article: ArticleSvg,
   attach_file: AttachFileSvg,
+  // This package has no auto_awesome.svg; wand_stars is the closest sparkle.
+  auto_awesome: WandStarsSvg,
   audio_file: AudioFileSvg,
   block: BlockSvg,
   check: CheckSvg,

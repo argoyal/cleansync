@@ -17,15 +17,21 @@ export const useStartOffload = () =>
       api<{ offload_id: number }>("/api/mail/offloads", { method: "POST", body: { ...body(b), confirm: b.confirm } }),
   });
 
-/** Spec §5.5: restore never makes a second copy in Gmail, so it needs no typed confirmation. */
+/** Spec §5.5: restore never makes a second copy in Gmail, so it needs no typed confirmation.
+ * `archive` restores mail from the local archive (mail deleted by hand or by a rule). */
 export function useRestoreMail() {
   const toast = useToast();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (b: { accountId: number; start?: OffloadStart; offloadId?: number }) =>
+    mutationFn: (b: { accountId: number; start?: OffloadStart; offloadId?: number; archive?: boolean }) =>
       api<{ queued: string; count: number }>("/api/mail/restore", {
         method: "POST",
-        body: { account_id: b.accountId, ...(b.start ?? {}), ...(b.offloadId !== undefined ? { offload_id: b.offloadId } : {}) },
+        body: {
+          account_id: b.accountId,
+          ...(b.start ?? {}),
+          ...(b.offloadId !== undefined ? { offload_id: b.offloadId } : {}),
+          ...(b.archive ? { archive: true } : {}),
+        },
       }),
     onSuccess: ({ count }) => {
       toast(`Putting ${count.toLocaleString()} ${count === 1 ? "mail" : "mails"} back in Gmail. Sync activity shows when it's done.`);

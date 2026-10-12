@@ -39,9 +39,12 @@ const post = <R>(path: string, body: unknown) => api<R>(path, { method: "POST", 
 type Acc = { accountId: number };
 
 // ---- rules ----
+/** The form shows a refusal next to Save rule, so this one makes no toast. */
 export const useSaveRule = () =>
-  useChange((b: Acc & { id?: number; rule: RuleFields }) =>
-    api<Rule>(b.id ? `/api/rules/${b.id}` : "/api/rules", { method: b.id ? "PUT" : "POST", body: { account_id: b.accountId, ...b.rule } }),
+  useChange(
+    (b: Acc & { id?: number; rule: RuleFields }) =>
+      api<Rule>(b.id ? `/api/rules/${b.id}` : "/api/rules", { method: b.id ? "PUT" : "POST", body: { account_id: b.accountId, ...b.rule } }),
+    { quiet: true },
   );
 
 export const useDeleteRule = () =>
