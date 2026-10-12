@@ -1,7 +1,7 @@
 """Mail rows in the database (spec §4.1), the search table that goes with them, the backup
 state, and failed downloads."""
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta
 
 from sqlalchemy import delete, func, select, text
@@ -77,6 +77,7 @@ def add_message(
     file_size: int,
     sha256: str,
     now: datetime,
+    extra: Callable[[Session, MailMessage], None] | None = None,
 ) -> MailMessage:
     """Called only after the .eml is complete on disk (spec §4.3)."""
     row = MailMessage(
@@ -116,6 +117,8 @@ def add_message(
             "body": parsed.body_text,
         },
     )
+    if extra is not None:
+        extra(db, row)  # e.g. the sorting to-do row, in the same transaction
     db.commit()
     return row
 

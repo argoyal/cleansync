@@ -12,6 +12,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.clock import utcnow
+from app.models import MailMessage
 from app.models.enums import JobState, MailPhase
 from app.paths import Layout
 from app.services.accounts.services import mail_needs_reconnect
@@ -81,6 +82,7 @@ class BackupRun:
     floor_bytes: int
     is_stopped: Callable[[], Awaitable[bool]]
     log_path: str | None = None
+    sort_new: bool = False  # keep-up runs: new inbox mail goes to the sorting to-do list
     downloaded: int = 0
     bytes: int = 0
     failed: int = 0
@@ -109,6 +111,7 @@ class MailBackup:
         self.bus = bus
         self.clock = clock
         self.disk_free = disk_free
+        self.on_kept: Callable[[Session, int, MailMessage], None] | None = None
         # What each phase does.
         self.steps: dict[str, Callable[[BackupRun], Awaitable[None]]] = {
             MailPhase.INITIAL: self._initial,
@@ -246,6 +249,7 @@ class MailBackup:
 
     async def _incremental(self, r: BackupRun) -> None:
         """Every few minutes and on Check now (spec §4.4)."""
+        r.sort_new = True
         with self.sf() as db:
             start = sync_state(db, r.account_id).history_id
         if start is None:  # never happens after a first backup; start over safely
@@ -406,7 +410,13 @@ class MailBackup:
             return False
         with self.sf() as db:
             # Only now that the file is complete on disk (spec §4.3).
-            add_message(db, r.account_id, meta, parsed, rel, size, sha, self.clock())
+            hook = self.on_kept
+            extra = (
+                (lambda s, row: hook(s, r.account_id, row))
+                if hook is not None and r.sort_new and "INBOX" in meta.labels
+                else None
+            )
+            add_message(db, r.account_id, meta, parsed, rel, size, sha, self.clock(), extra=extra)
             clear_failure(db, r.account_id, mid)
         r.downloaded += 1
         r.bytes += size
