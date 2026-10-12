@@ -32,6 +32,30 @@ class ThreadRow:
     unread: bool
     offloaded: bool
     deleted: bool
+    decision: dict | None = None
+
+
+CHIP_STATUSES = (DecisionStatus.SUGGESTED, DecisionStatus.APPLIED, DecisionStatus.PLANNED)
+
+
+def decision_chips(db: Session, message_ids: list[int]) -> dict[int, dict]:
+    """The newest shown decision of each mail: a suggestion, a planned change or an applied one."""
+    if not message_ids:
+        return {}
+    out: dict[int, dict] = {}
+    for d in db.scalars(
+        select(RuleDecision)
+        .where(RuleDecision.message_id.in_(message_ids), RuleDecision.status.in_(CHIP_STATUSES))
+        .order_by(RuleDecision.id)
+    ):
+        out[d.message_id] = {
+            "id": d.id,
+            "rule_name": d.rule_name or "Deleted by you",
+            "status": d.status,
+            "how": d.how,
+            "why": d.why,
+        }
+    return out
 
 
 def encode_cursor(date: datetime, thread_id: str) -> str:
@@ -98,6 +122,9 @@ def list_threads(
                 deleted=any(m.state == MailState.DELETED for m in msgs),
             )
         )
+    chips = decision_chips(db, [r.message_id for r in rows])
+    for r in rows:
+        r.decision = chips.get(r.message_id)
     nxt = encode_cursor(groups[-1].last, groups[-1].thread_id) if more and groups else None
     return rows, nxt
 

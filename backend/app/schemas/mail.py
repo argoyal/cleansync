@@ -65,6 +65,14 @@ class ActivityJobOut(BaseModel):
     log_url: str
 
 
+class DecisionChipOut(BaseModel):
+    id: int
+    rule_name: str
+    status: str
+    how: str
+    why: str
+
+
 class ThreadOut(BaseModel):
     thread_id: str
     count: int
@@ -77,6 +85,7 @@ class ThreadOut(BaseModel):
     unread: bool
     offloaded: bool
     deleted: bool
+    decision: DecisionChipOut | None = None
 
 
 class ThreadPageOut(BaseModel):
@@ -129,6 +138,7 @@ class MessageOut(BaseModel):
     has_remote_images: bool | None  # known for one opened mail; null in a thread list
     gmail_url: str | None
     file_missing: bool
+    decision: DecisionChipOut | None = None
 
 
 class MailPickIn(BaseModel):

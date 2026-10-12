@@ -15,7 +15,7 @@ from app.models import Account, MailMessage
 from app.models.enums import MailState
 from app.schemas.mail import AttachmentOut, MailCountsOut, MessageOut, ThreadOut, ThreadPageOut
 from app.services.mail.gmail import valid_mail_id
-from app.services.mail.listing import list_threads, mail_counts, totals
+from app.services.mail.listing import decision_chips, list_threads, mail_counts, totals
 from app.services.mail.reader import (
     MISSING_FILE_MSG,
     AttachmentUnreadable,
@@ -138,6 +138,7 @@ def _file_there(request: Request, account: Account, row: MailMessage) -> bool:
 
 def message_out(
     request: Request,
+    db: Session,
     row: MailMessage,
     account: Account,
     labels: dict[str, str],
@@ -196,6 +197,7 @@ def message_out(
         if row.state == MailState.IN_MAIL
         else None,
         file_missing=not present,
+        decision=decision_chips(db, [row.id]).get(row.id),
     )
 
 
@@ -207,7 +209,7 @@ def message(
     db: Session = Depends(get_db),
 ):
     row, account = message_or_404(db, message_id)
-    return message_out(request, row, account, user_label_map(db, row.account_id), detail=True)
+    return message_out(request, db, row, account, user_label_map(db, row.account_id), detail=True)
 
 
 @router.get("/threads/{thread_id}", response_model=list[MessageOut])
@@ -215,6 +217,7 @@ def thread(
     thread_id: str,
     account_id: int,
     request: Request,
+    archive: bool = False,
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
@@ -223,11 +226,17 @@ def thread(
         raise HTTPException(404, "thread not found")
     rows = db.scalars(
         select(MailMessage)
-        .where(MailMessage.account_id == account_id, MailMessage.thread_id == thread_id)
+        .where(
+            MailMessage.account_id == account_id,
+            MailMessage.thread_id == thread_id,
+            MailMessage.state == MailState.LOCAL_ARCHIVE
+            if archive
+            else MailMessage.state != MailState.LOCAL_ARCHIVE,
+        )
         .order_by(MailMessage.date, MailMessage.id)
     )
     labels = user_label_map(db, account_id)
-    return [message_out(request, r, account, labels, detail=False) for r in rows]
+    return [message_out(request, db, r, account, labels, detail=False) for r in rows]
 
 
 @router.get("/messages/{message_id}/attachments/{index}")
