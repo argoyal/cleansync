@@ -24,10 +24,14 @@ Accounts have a provider (Google today) and one row per service (Files, Mail) in
 ## Mail
 Gmail is reached through a Gmail adapter (`app/services/mail/gmail.py`) on top of one shared Google client that paces every call and counts it against a daily budget (default 10 million units, at most 40 million; Drive calls are counted but never held back). Mail work goes through a mail queue, one job per account at a time: backup and re-check, offload, and restore are queue actions, so they never overlap. Each mail is kept once as its original `.eml` under `mail/<email>/<year>/<month>/`, and the database holds its labels, state and an SQLite FTS5 search index. An offload checks the stored file, moves the mail to Gmail's trash (the narrow `gmail.modify` scope, so Gmail empties the trash itself after 30 days) and checks it is there; restore takes it out of the trash, or imports the stored `.eml` when Gmail no longer has it.
 
+## Rules
+Mail rules (`app/services/rules/`) sort new inbox mail with a model the owner picks in Settings → Models. One small client (`app/services/ai/client.py`, plain `httpx`, no SDK) talks to any OpenAI-style server; connections and the model for each task are in the database, and API keys and extra headers are files under `app/data/secrets/ai/`. When the backup keeps a new inbox mail, it adds a row to a to-do list (`rule_todo`) in the same transaction. A sorting worker, one asyncio task outside the mail queue (so a slow model never holds up backup, offload or restore), takes rows from that list, reads the mail from its stored `.eml` only, decides (remembered senders, then fixed conditions, then one question to the model), and writes a row to the decision log (`rule_decisions`) with the rule version, the reason and the exact label changes. Applying a decision is one `messages.modify` call (or `messages.trash` for Delete) through the shared, paced Google client; the decision log is what Undo and corrections reverse. "Run rules on…" is a rule job: the same worker decides every mail first as a preview, and makes the changes only after the owner types the count. Deleted mail moves to the `local_archive` state: in Gmail's trash, kept here, hidden from the normal views until restored or deleted forever.
+
 ## Folder layout
     /drivesync/
       app/data/   drivesync.db, db-backups/, rclone/ (encrypted rclone.conf, bisync state),
-                  filters/, previews/, catalog/, thumbs/, uploads/, backups/, logs/, secrets/
+                  filters/, previews/, catalog/, thumbs/, uploads/, backups/, logs/,
+                  secrets/ (with ai/ for the model keys)
       storage/<email>/   your files, one folder per Google account
       mail/<email>/      your mail, one .eml per message
 

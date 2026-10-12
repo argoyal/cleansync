@@ -1,6 +1,6 @@
 # Setting up mail backup
 
-CleanSync keeps a copy of every Gmail message on your server, as the original `.eml` file, and keeps it up to date every few minutes. It can then offload old or large mail out of Gmail, and put it back when you want. It never sends mail.
+CleanSync keeps a copy of every Gmail message on your server, as the original `.eml` file, and keeps it up to date every few minutes. It can then offload old or large mail out of Gmail, and put it back when you want. It never sends mail. With [mail rules](mail-rules.md) it can also sort new mail for you.
 
 ## 1. Let your Google client read mail
 
@@ -24,6 +24,7 @@ CleanSync counts your mail and shows roughly how many mails and how much space (
 - All mail except Spam and Trash. Drafts and chats are left out.
 - Each mail once, in `mail/<email>/<year>/<month>/<gmail-id>.eml` next to `storage/` in CleanSync's folder (never inside a Drive sync folder, so mail is never uploaded to Drive). Labels are kept and shown as folders.
 - Mail you delete in Gmail stays here, marked "Deleted in Gmail", and can be put back.
+- Mail you delete in CleanSync (by hand, or by a rule) goes to Gmail's trash, and CleanSync keeps its copy in the **Local archive**, apart from your other mail. From there you can restore it to Gmail, or delete CleanSync's copy forever. See [mail rules](mail-rules.md#5-delete-and-the-local-archive).
 
 ## Reading
 
@@ -54,6 +55,6 @@ The Gmail API is free today; Google plans to charge above 80 million units a day
 - A restore that is asked for but has not started yet is forgotten if CleanSync stops or the storage disk goes missing before it starts. The mails are safe and still show as offloaded; ask for the restore again.
 - CleanSync waits at most 60 seconds on each step of sending a mail to Gmail. A very large mail (tens of MB) on a slow upload connection may not get there in time: the restore stops with "CleanSync couldn't reach Gmail", and the mails not put back yet stay offloaded. Try again from a faster connection. Mail already sent is never imported twice.
 - Drafts, chats, Spam and Trash are not backed up.
-- Mail deleted in Gmail stays here, marked "Deleted in Gmail"; CleanSync never deletes its own copy.
+- Mail deleted in Gmail stays here, marked "Deleted in Gmail"; CleanSync never deletes its own copy of it. The only way a copy is removed is **Delete forever…** in the Local archive, which you confirm by typing the count.
 
 See also [troubleshooting](troubleshooting.md) and [known limitations](limitations.md).

@@ -35,7 +35,7 @@ When a new version changes the list of files that never sync (for example, the v
 
 ## Mail
 
-- CleanSync backs up and offloads mail; it does not send mail, invitations or replies, and the reader is read-only (no marking as read, labelling or deleting).
+- CleanSync backs up, offloads and sorts mail; it does not send mail, invitations or replies. The reader doesn't mark mail read or add labels by hand; that is done only by [mail rules](mail-rules.md). Delete moves mail to Gmail's trash and keeps CleanSync's copy in the Local archive.
 - Gmail only for now; Outlook comes later.
 - Spam, Trash, drafts and chats are not backed up.
 - Mail that cannot be downloaded from Gmail is never offloaded, and the offload preview does not count it among the mails it leaves out.
@@ -48,3 +48,12 @@ When a new version changes the list of files that never sync (for example, the v
 - The size shown before the first backup is what Gmail and Google Photos use together; Google doesn't report Gmail alone.
 - Images inside a mail are shown up to 10 MB per mail; the mail frame has a fixed height and scrolls by itself.
 - If CleanSync stops right after moving a mail to Gmail's trash but before marking it offloaded, that mail shows as "Deleted in Gmail" after the next check; restore it from there.
+
+## Mail rules
+
+- One rule per mail.
+- A small model gets some mail wrong, so start new rules in Suggest mode and switch them to Automatic once their suggestions look right.
+- A run of rules on older mail covers at most 20,000 mails at a time.
+- The record a Delete forever leaves in the Activity log keeps the mail's sender, subject and date.
+- Only new inbox mail is sorted automatically; mail a Gmail filter sends straight to a label is not.
+- The model's server sees the text CleanSync sends it (up to 2,000 characters per mail). Use a local model if that matters.
