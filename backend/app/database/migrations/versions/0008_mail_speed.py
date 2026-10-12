@@ -12,19 +12,18 @@ down_revision = "0007"
 branch_labels = None
 depends_on = None
 
-_INSERT = (
-    "INSERT OR IGNORE INTO mail_message_labels "
-    "(message_id, account_id, label_id, date, thread_id, size) "
-)
-# One row per label of the new or changed mail.
+# One row per label of the new or changed mail. Labels that aren't valid JSON give no rows
+# instead of failing the save (or this upgrade).
 _FILL_NEW = (
-    _INSERT + "SELECT NEW.id, NEW.account_id, j.value, NEW.date, NEW.thread_id, NEW.size "
-    "FROM json_each(NEW.labels) j WHERE j.type = 'text'"
+    "INSERT OR IGNORE INTO mail_message_labels (message_id, account_id, label_id) "
+    "SELECT NEW.id, NEW.account_id, j.value FROM json_each("
+    "CASE WHEN json_valid(NEW.labels) THEN NEW.labels ELSE '[]' END) j WHERE j.type = 'text'"
 )
 # The same for every mail already stored (run once, at upgrade).
 _FILL_ALL = (
-    _INSERT + "SELECT m.id, m.account_id, j.value, m.date, m.thread_id, m.size "
-    "FROM mail_messages m, json_each(m.labels) j WHERE j.type = 'text'"
+    "INSERT OR IGNORE INTO mail_message_labels (message_id, account_id, label_id) "
+    "SELECT m.id, m.account_id, j.value FROM mail_messages m, json_each("
+    "CASE WHEN json_valid(m.labels) THEN m.labels ELSE '[]' END) j WHERE j.type = 'text'"
 )
 
 
@@ -34,16 +33,13 @@ def upgrade() -> None:
         sa.Column("message_id", sa.Integer(), nullable=False),
         sa.Column("label_id", sa.String(length=128), nullable=False),
         sa.Column("account_id", sa.Integer(), nullable=False),
-        sa.Column("date", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("thread_id", sa.String(length=64), nullable=False),
-        sa.Column("size", sa.BigInteger(), nullable=False),
         sa.ForeignKeyConstraint(["message_id"], ["mail_messages.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("message_id", "label_id"),
     )
     op.create_index(
         "ix_mail_message_labels_lookup",
         "mail_message_labels",
-        ["account_id", "label_id", "date", "thread_id", "size"],
+        ["account_id", "label_id"],
     )
     op.drop_index("ix_mail_messages_account_date", table_name="mail_messages")
     op.drop_index("ix_mail_messages_account_state", table_name="mail_messages")
@@ -62,8 +58,7 @@ def upgrade() -> None:
         f"CREATE TRIGGER mail_labels_ai AFTER INSERT ON mail_messages BEGIN {_FILL_NEW}; END"
     )
     op.execute(  # fixed text, no input
-        "CREATE TRIGGER mail_labels_au AFTER UPDATE OF labels, date, thread_id, size "  # noqa: S608
-        "ON mail_messages BEGIN "
+        "CREATE TRIGGER mail_labels_au AFTER UPDATE OF labels ON mail_messages BEGIN "  # noqa: S608
         f"DELETE FROM mail_message_labels WHERE message_id = OLD.id; {_FILL_NEW}; END"
     )
     op.execute(

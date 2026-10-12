@@ -4,7 +4,7 @@
 
 - Mail opens quickly on big mailboxes. The list reads only the conversations it shows, label views and counts use a table of their own, and the "N mails · size" total loads separately, so the list doesn't wait for it.
 - A running mail backup no longer freezes the app. Each mail is saved in one short step, away from the part of the server that answers pages.
-- During a backup only the progress refreshes; the lists and counts refresh when the backup job ends.
+- During a backup the progress refreshes as it goes; the lists and counts catch up once a minute, and again when the backup job ends.
 - Database upgrade 0008 runs by itself on start. It adds the label table and new indexes, and takes a few seconds on a big mailbox.
 
 ## 0.2.0 — 2026-10-11

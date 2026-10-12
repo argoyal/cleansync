@@ -77,24 +77,17 @@ class MailMessage(Base):
 
 
 class MailMessageLabel(Base):
-    """One label of one mail, with the columns the list and the counts read (issue #16).
+    """One label of one mail, for the label views and counts (issue #16).
     SQLite triggers on mail_messages fill it and keep it up to date (migration 0008); never
     write it from Python."""
 
     __tablename__ = "mail_message_labels"
-    __table_args__ = (
-        Index(
-            "ix_mail_message_labels_lookup", "account_id", "label_id", "date", "thread_id", "size"
-        ),
-    )
+    __table_args__ = (Index("ix_mail_message_labels_lookup", "account_id", "label_id"),)
     message_id: Mapped[int] = mapped_column(
         ForeignKey("mail_messages.id", ondelete="CASCADE"), primary_key=True
     )
     label_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     account_id: Mapped[int] = mapped_column(Integer)
-    date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    thread_id: Mapped[str] = mapped_column(String(64))
-    size: Mapped[int] = mapped_column(BigInteger)
 
 
 class MailLabel(Base):

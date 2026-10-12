@@ -92,6 +92,25 @@ describe("live updates", () => {
     expect(keys(spy)).toEqual(expect.arrayContaining(["mail-threads", "mail-counts", "mail-totals", "mail-status"]));
   });
 
+  it("during a long backup the lists catch up once a minute, not on every progress event", () => {
+    vi.useFakeTimers();
+    const { spy, source } = setup();
+    const count = (k: string) => keys(spy).filter((x) => x === k).length;
+    const progress = () => act(() => source.emit("mail", { account_id: 1, job_id: 3, done: 500, total: 50000 }));
+    progress();
+    expect(count("mail-threads")).toBe(0);
+    act(() => vi.advanceTimersByTime(30_000));
+    progress();
+    act(() => vi.advanceTimersByTime(29_999));
+    expect(count("mail-threads")).toBe(0);
+    act(() => vi.advanceTimersByTime(1));
+    expect(count("mail-threads")).toBe(1); // a minute after the first progress
+    expect(count("mail-counts")).toBe(1);
+    expect(count("mail-totals")).toBe(1);
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(count("mail-threads")).toBe(1); // no progress since: nothing more
+  });
+
   it("refreshes offloads and files on an offload event, also one without a pair", () => {
     const { spy, source } = setup();
     act(() => source.emit("offload", { account_id: 1, pair_id: null }));

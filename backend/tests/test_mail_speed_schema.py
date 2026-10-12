@@ -71,14 +71,41 @@ def test_labels_follow_insert_update_and_delete(db, make_account):
     assert _label_rows(db) == 0
 
 
-def test_label_rows_carry_date_thread_and_size(db, make_account):
+def test_label_rows_hold_only_what_is_read(db, make_account):
     acc = make_account()
     m = _mail(acc.id, "m1", ["INBOX"], thread="t9", size=4321)
     db.add(m)
     db.commit()
+    cols = [r[1] for r in db.execute(text("PRAGMA table_info(mail_message_labels)")).all()]
+    assert sorted(cols) == ["account_id", "label_id", "message_id"]
     row = db.scalar(select(MailMessageLabel).where(MailMessageLabel.message_id == m.id))
-    assert (row.account_id, row.thread_id, row.size) == (acc.id, "t9", 4321)
-    assert row.date.replace(tzinfo=UTC) == WHEN
+    assert (row.account_id, row.label_id) == (acc.id, "INBOX")
+
+
+def test_a_mail_with_unreadable_labels_still_saves_with_no_label_rows(db, make_account):
+    """The label column is always JSON from the app, but a bad value must never stop a
+    save (or the upgrade): it just has no label rows."""
+    acc = make_account()
+    m = _mail(acc.id, "m1", ["INBOX"])
+    db.add(m)
+    db.commit()
+    db.execute(text("UPDATE mail_messages SET labels = 'not json' WHERE id = :i"), {"i": m.id})
+    db.commit()
+    assert _labels(db, m.id) == set()
+    db.execute(
+        text(
+            "INSERT INTO mail_messages (account_id, provider_id, thread_id, from_addr, "
+            "to_addrs, cc_addrs, subject, date, size, file_size, sha256, labels, unread, "
+            "starred, has_attachments, attachments, snippet, file_path, state, first_seen_at, "
+            "updated_at) SELECT account_id, 'm2', thread_id, from_addr, to_addrs, cc_addrs, "
+            "subject, date, size, file_size, sha256, 'also bad', unread, starred, "
+            "has_attachments, attachments, snippet, file_path, state, first_seen_at, "
+            "updated_at FROM mail_messages WHERE id = :i"
+        ),
+        {"i": m.id},
+    )
+    db.commit()
+    assert _label_rows(db) == 0
 
 
 def test_deleting_the_account_removes_its_label_rows(db, make_account):
@@ -113,17 +140,27 @@ def test_upgrade_fills_labels_from_existing_mail_and_downgrade_works(tmp_path):
             ),
             {"t": stamp, "sha": "0" * 64},
         )
+        c.execute(
+            text(
+                "INSERT INTO mail_messages (account_id, provider_id, thread_id, from_addr, "
+                "to_addrs, cc_addrs, subject, date, size, file_size, sha256, labels, unread, "
+                "starred, has_attachments, attachments, snippet, file_path, state, "
+                "first_seen_at, updated_at) VALUES (1, 'm2', 't2', '', '', '', '', :t, 10, 12, "
+                ":sha, 'not json', 0, 0, 0, '[]', '', 'y', 'IN_MAIL', :t, :t)"
+            ),
+            {"t": stamp, "sha": "0" * 64},
+        )
     eng.dispose()
     run_migrations(f)
     eng = make_engine(f)
     with eng.connect() as c:
         got = c.execute(
-            text("SELECT label_id, thread_id, size FROM mail_message_labels ORDER BY label_id")
+            text("SELECT label_id, account_id FROM mail_message_labels ORDER BY label_id")
         ).all()
         count = c.execute(text("SELECT count(*) FROM mail_messages")).scalar()
     eng.dispose()
-    assert [tuple(r) for r in got] == [("INBOX", "t1", 10), ("SENT", "t1", 10)]
-    assert count == 1
+    assert [tuple(r) for r in got] == [("INBOX", 1), ("SENT", 1)]
+    assert count == 2  # the mail with unreadable labels is kept, with no label rows
     _downgrade(f, "0007")  # the way back works too
     eng = make_engine(f)
     with eng.connect() as c:
@@ -131,4 +168,4 @@ def test_upgrade_fills_labels_from_existing_mail_and_downgrade_works(tmp_path):
         count = c.execute(text("SELECT count(*) FROM mail_messages")).scalar()
     eng.dispose()
     assert "mail_message_labels" not in tables and "mail_labels_ai" not in tables
-    assert count == 1
+    assert count == 2
