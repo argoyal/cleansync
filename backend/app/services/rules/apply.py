@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
@@ -16,13 +17,35 @@ from app.models.enums import DecisionHow, DecisionStatus, MailState
 from app.paths import Layout
 from app.services.google.client import RateLimited
 from app.services.google.quota import BudgetReached
-from app.services.mail.adapter import MailAdapter, MailApiError, MailNotFound
+from app.services.mail.adapter import (
+    MailAdapter,
+    MailApiError,
+    MailAuthError,
+    MailNotFound,
+    MailUnreachable,
+)
 from app.services.mail.index import save_labels, set_flags
 from app.services.mail.store import check_eml, eml_path
 
 BUDGET_WAIT = "Google's daily budget is used up; this is applied when it resets."
 GONE_MSG = "It's no longer in Gmail."
 NOT_IN_MAIL_MSG = "It's no longer in Gmail, so nothing was changed."
+UNREACHABLE_WAIT = "Gmail couldn't be reached; this is tried again later."
+RECONNECT_WAIT = "Reconnect this Google account; this is tried again after that."
+WAITING_REASONS = (BUDGET_WAIT, UNREACHABLE_WAIT, RECONNECT_WAIT)
+WAIT_ERRORS = (BudgetReached, RateLimited, MailUnreachable, MailAuthError)
+GONE_ROW_MSG = "That mail isn't here any more."
+SYSTEM_LABELS = {
+    "INBOX",
+    "SPAM",
+    "TRASH",
+    "UNREAD",
+    "STARRED",
+    "IMPORTANT",
+    "SENT",
+    "DRAFT",
+    "CHAT",
+}
 APPLYABLE = (DecisionStatus.SUGGESTED, DecisionStatus.PLANNED)
 SYSTEM_NAMES = {"INBOX": "Inbox", "UNREAD": "Unread", "STARRED": "Starred", "TRASH": "Trash"}
 
@@ -64,6 +87,20 @@ def _norm(name: str) -> str:
     return " ".join(name.split()).casefold()
 
 
+def is_system_label(name: str) -> bool:
+    """True when the name is one of Gmail's own labels (a rule must never add those)."""
+    up = " ".join(name.split()).upper()
+    return up in SYSTEM_LABELS or up.startswith("CATEGORY_")
+
+
+def _wait_reason(e: Exception) -> str:
+    if isinstance(e, MailUnreachable):
+        return UNREACHABLE_WAIT
+    if isinstance(e, MailAuthError):
+        return RECONNECT_WAIT
+    return BUDGET_WAIT
+
+
 class Applier:
     def __init__(
         self,
@@ -81,14 +118,18 @@ class Applier:
 
     def _local_label(self, db: Session, account_id: int, name: str) -> str | None:
         want = _norm(name)
-        for lab in db.scalars(select(MailLabel).where(MailLabel.account_id == account_id)):
+        for lab in db.scalars(
+            select(MailLabel).where(MailLabel.account_id == account_id, MailLabel.type == "user")
+        ):
             if _norm(lab.name) == want:
                 return lab.provider_label_id
         return None
 
     async def _label_id(self, adapter: MailAdapter, account_id: int, name: str) -> str:
-        if name in SYSTEM_NAMES:  # STARRED and friends are ids already
+        if name == "STARRED":  # the one system id plan_changes produces itself
             return name
+        if is_system_label(name):
+            raise MailApiError(f"{name!r} is one of Gmail's own labels, so a rule can't add it.")
         async with self._label_lock:
             with self.sf() as db:
                 found = self._local_label(db, account_id, name)
@@ -96,16 +137,19 @@ class Applier:
                 return found
             try:
                 lab = await adapter.create_label(" ".join(name.split()))
-                with self.sf() as db:
-                    db.add(
-                        MailLabel(
-                            account_id=account_id,
-                            provider_label_id=lab.id,
-                            name=lab.name,
-                            type="user",
+                try:
+                    with self.sf() as db:
+                        db.add(
+                            MailLabel(
+                                account_id=account_id,
+                                provider_label_id=lab.id,
+                                name=lab.name,
+                                type="user",
+                            )
                         )
-                    )
-                    db.commit()
+                        db.commit()
+                except IntegrityError:  # a backup saved the same label first
+                    pass
                 return lab.id
             except MailApiError as e:
                 if e.status != 409:
@@ -132,6 +176,10 @@ class Applier:
             if d is None or d.status not in APPLYABLE:
                 return d.status if d else DecisionStatus.FAILED
             row = db.get(MailMessage, d.message_id)
+            if row is None:
+                d.status, d.reason = DecisionStatus.FAILED, GONE_ROW_MSG
+                db.commit()
+                return DecisionStatus.FAILED
             acc = db.get(Account, d.account_id)
             actions, labels_now = list(d.actions or []), list(row.labels or [])
             state, pid, path_rel = row.state, row.provider_id, row.file_path
@@ -151,6 +199,7 @@ class Applier:
         adapter = self.adapter_for(acc)
         try:
             add = [await self._label_id(adapter, acc.id, n) for n in planned.add_names]
+            add = [x for x in add if x not in labels_now]  # never undo what was already there
             changes = {"add": add, "remove": planned.remove, "trash": planned.trash}
             with self.sf() as db:
                 db.get(RuleDecision, decision_id).changes = changes
@@ -162,9 +211,9 @@ class Applier:
                 new_labels = list(await adapter.modify(pid, add, planned.remove))
             else:
                 new_labels = labels_now
-        except (BudgetReached, RateLimited):
+        except WAIT_ERRORS as e:
             with self.sf() as db:
-                db.get(RuleDecision, decision_id).reason = BUDGET_WAIT
+                db.get(RuleDecision, decision_id).reason = _wait_reason(e)
                 db.commit()
             raise
         except MailNotFound:
@@ -213,9 +262,15 @@ class Applier:
                     else list(labels_now)
                 )
                 new_state = state
-        except MailNotFound:
+        except WAIT_ERRORS as e:
             with self.sf() as db:
-                db.get(RuleDecision, decision_id).reason = "Couldn't undo: " + GONE_MSG
+                db.get(RuleDecision, decision_id).reason = _wait_reason(e)
+                db.commit()
+            raise
+        except MailApiError as e:  # includes MailNotFound
+            msg = GONE_MSG if isinstance(e, MailNotFound) else str(e)
+            with self.sf() as db:
+                db.get(RuleDecision, decision_id).reason = "Couldn't undo: " + msg
                 db.commit()
             return UndoResult(DecisionStatus.APPLIED, [])
         with self.sf() as db:

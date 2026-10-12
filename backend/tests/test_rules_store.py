@@ -224,3 +224,11 @@ def test_copy_creates_named_rules_for_the_target(db, make_account):
     copies = rule_views(db, c.id)
     assert [v.name for v in copies] == ["Newsletters", "Receipts"]
     assert all(get_rule(db, c.id, v.id).account_id == c.id for v in copies)
+
+
+@pytest.mark.parametrize("name", ["TRASH", "spam", "Category_Promotions"])
+def test_gmail_own_label_names_are_refused(db, make_account, name):
+    from app.services.rules.store import clean_actions
+
+    with pytest.raises(RuleProblem, match="Gmail's own labels"):
+        clean_actions([{"kind": "label", "label": name}])

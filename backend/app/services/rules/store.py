@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Rule, RuleDecision, RuleVersion
 from app.models.enums import DecisionStatus, RuleCombine, RuleMode
+from app.services.rules.apply import is_system_label
 from app.services.rules.match import Conditions, RuleView
 
 ACTION_KINDS = ("archive", "label", "mark_read", "star", "delete")
@@ -50,6 +51,8 @@ def clean_actions(actions: list[dict]) -> list[dict]:
             label = " ".join(str(a.get("label") or "").split())[:MAX_LABEL]
             if not label:
                 raise RuleProblem("Give the label a name.")
+            if is_system_label(label):
+                raise RuleProblem(f"{label!r} is one of Gmail's own labels. Pick another name.")
             item = {"kind": "label", "label": label}
         else:
             item = {"kind": kind}
