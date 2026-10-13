@@ -20,8 +20,13 @@ class DecisionProblem(ValueError):
     pass
 
 
-def remembered_senders(db: Session, account_id: int) -> dict[str, int]:
-    rows = db.execute(
+def remembered_senders(
+    db: Session, account_id: int, rule_ids: list[int] | None = None
+) -> dict[str, int]:
+    """Sender -> rule, for senders approved into a rule three times. `rule_ids` keeps only
+    those rules' senders (a run's own rules), so a tie a run's rule loses elsewhere still
+    counts for it here."""
+    q = (
         select(RuleSender.sender, RuleSender.rule_id)
         .join(Rule, Rule.id == RuleSender.rule_id)
         .where(
@@ -29,10 +34,11 @@ def remembered_senders(db: Session, account_id: int) -> dict[str, int]:
             RuleSender.approvals >= REMEMBER_AFTER,
             Rule.enabled.is_(True),
         )
-        .order_by(Rule.position)
-    ).all()
+    )
+    if rule_ids is not None:
+        q = q.where(RuleSender.rule_id.in_(rule_ids))
     out: dict[str, int] = {}
-    for sender, rule_id in rows:
+    for sender, rule_id in db.execute(q.order_by(Rule.position)).all():
         out.setdefault(sender, rule_id)  # the rule higher in the list wins a tie
     return out
 

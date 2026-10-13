@@ -91,7 +91,7 @@ def read(f, sql):
 def test_local_archive_mail_becomes_offloaded(tmp_path):
     f = old_database(tmp_path)
     run_migrations(f)
-    assert read(f, "SELECT version_num FROM alembic_version") == [("0011",)]
+    assert read(f, "SELECT version_num FROM alembic_version") == [("0012",)]
     assert read(f, "SELECT id, state, offload_id FROM mail_messages ORDER BY id") == [
         (1, "offloaded", None),
         (2, "in_mail", None),

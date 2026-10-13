@@ -128,6 +128,11 @@ class RuleJob(Base):
         ForeignKey("accounts.id", ondelete="CASCADE"), index=True
     )
     filter_text: Mapped[str] = mapped_column(Text, default="")
+    # The rules this run decides with (running rules spec §8). [] for runs from before
+    # migration 0012: every enabled rule. `view` and `q` say what it ran on.
+    rule_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    view: Mapped[str] = mapped_column(String(32), default="")
+    q: Mapped[str] = mapped_column(Text, default="")
     state: Mapped[str] = mapped_column(String(12), default=RuleJobState.PREVIEWING)
     total: Mapped[int] = mapped_column(Integer, default=0)
     decided: Mapped[int] = mapped_column(Integer, default=0)

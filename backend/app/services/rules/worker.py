@@ -31,7 +31,7 @@ GIVE_UP_AFTER = 10
 SOMETHING_WRONG = "Something went wrong sorting this mail. CleanSync will try again."
 GAVE_UP = (
     "Something went wrong sorting this mail 10 times, so CleanSync stopped trying. "
-    "Run rules on it again to retry."
+    "Run its rule again to retry."
 )
 
 
@@ -64,6 +64,15 @@ def enqueue_new(db: Session, account_id: int, row: MailMessage) -> None:
     if acc is None or not acc.sorting_enabled:
         return
     db.merge(RuleTodo(account_id=account_id, message_id=row.id, next_try_at=utcnow()))
+
+
+def job_rules(db: Session, job_id: int | None) -> list[int] | None:
+    """The rules a run of rules decides with (running rules spec §8). None means every enabled
+    rule: for new inbox mail, and for runs from before migration 0012 (rule_ids [])."""
+    if job_id is None:
+        return None
+    ids = db.scalar(select(RuleJob.rule_ids).where(RuleJob.id == job_id))
+    return [int(i) for i in ids] if ids else None
 
 
 def wake_waiting(db: Session, now) -> int:
@@ -320,8 +329,9 @@ class SortingWorker:
             done, changed = self._failed_try(account_id, message_id, job_id, reason, reason)
             return done, changed, False
         with self.sf() as db:
-            rules = rule_views(db, account_id)
-            remembered = remembered_senders(db, account_id)
+            only = job_rules(db, job_id)
+            rules = rule_views(db, account_id, rule_ids=only)
+            remembered = remembered_senders(db, account_id, rule_ids=only)
             hints = hints_for(db, account_id, mail.sender)
             labels_seen = list(row.labels or [])
         try:

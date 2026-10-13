@@ -203,10 +203,15 @@ def view_of(rule: Rule) -> RuleView:
     )
 
 
-def rule_views(db: Session, account_id: int, enabled_only: bool = True) -> list[RuleView]:
+def rule_views(
+    db: Session, account_id: int, enabled_only: bool = True, rule_ids: list[int] | None = None
+) -> list[RuleView]:
+    """The mailbox's rules in their order. `rule_ids` keeps only those (a run's own rules)."""
     q = select(Rule).where(Rule.account_id == account_id)
     if enabled_only:
         q = q.where(Rule.enabled.is_(True))
+    if rule_ids is not None:
+        q = q.where(Rule.id.in_(rule_ids))
     return [view_of(r) for r in db.scalars(q.order_by(Rule.position, Rule.id))]
 
 
