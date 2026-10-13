@@ -235,11 +235,9 @@ class Applier:
                 db.commit()
             if planned.trash:
                 removed = await self._take_out(acc, adapter, pid)
-                # Removed for good: no Trash label, and the Inbox label stays so a restore
-                # imports it back where it was.
-                new_labels = (
-                    labels_now if removed else [x for x in labels_now if x != "INBOX"] + ["TRASH"]
-                )
+                # The row keeps the labels Gmail had (Inbox included), trashed or not, so a
+                # restore that has to import the mail again puts it back where it was.
+                new_labels = labels_now
             elif add or planned.remove:
                 new_labels = list(await adapter.modify(pid, add, planned.remove))
             else:

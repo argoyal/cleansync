@@ -227,3 +227,32 @@ async def test_mail_a_rule_removed_for_good_comes_back_in_the_inbox(auth_client,
     back = box.row("Old photos")
     assert back.state == MailState.IN_MAIL and "INBOX" in back.labels
     assert "INBOX" in box.fake.messages[back.provider_id].labels
+
+
+async def test_mail_a_rule_trashed_comes_back_in_the_inbox_after_gmail_purges_it(
+    auth_client, offload_box, app
+):
+    box = offload_box
+    await box.backup()
+    row = box.row("Old photos")
+    with app.state.session_factory() as db:
+        d = RuleDecision(
+            account_id=box.acc.id,
+            message_id=row.id,
+            rule_name="Junk",
+            how=DecisionHow.AI,
+            actions=[{"kind": "offload"}],
+            labels_seen=list(row.labels),
+            status=DecisionStatus.SUGGESTED,
+        )
+        db.add(d)
+        db.commit()
+        did = d.id
+    assert await app.state.rule_applier.apply(did) == "applied"
+    assert "TRASH" in box.fake.messages[row.provider_id].labels
+    box.fake.remove(row.provider_id)  # Gmail emptied its trash
+    assert _restore(auth_client, box, message_ids=[row.id]).status_code == 202
+    await box.run_queued()
+    back = box.row("Old photos")
+    assert back.state == MailState.IN_MAIL and "INBOX" in back.labels
+    assert "INBOX" in box.fake.messages[back.provider_id].labels

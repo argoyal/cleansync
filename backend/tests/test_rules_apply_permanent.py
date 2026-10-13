@@ -1,7 +1,9 @@
 """Bulk offload spec §4: a rule's Offload and Offload on one mail use messages.delete when
 the mailbox allows permanent delete, messages.trash otherwise."""
 
-from app.models import Account, MailMessage, RuleDecision
+from sqlalchemy import select
+
+from app.models import Account, Event, MailMessage, RuleDecision
 from app.models.enums import DecisionHow, DecisionStatus, MailState
 from app.services.accounts.oauth import FULL_MAIL_SCOPE
 from app.services.accounts.permanent import LOST_MSG
@@ -52,6 +54,9 @@ async def test_a_refused_full_permission_falls_back_to_the_trash(gbox):
     with gbox.sf() as db:
         acc = db.get(Account, gbox.acc.id)
         assert acc.permanent_delete is False and acc.permanent_delete_note == LOST_MSG
+        assert (
+            len(db.scalars(select(Event).where(Event.kind == "permanent_delete_lost")).all()) == 1
+        )
 
 
 def test_chips_say_when_undo_cant_help_and_when_it_deletes_forever(gbox):
