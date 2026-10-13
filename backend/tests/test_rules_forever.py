@@ -2,17 +2,27 @@
 """Delete forever as a rule action (bulk offload spec §6)."""
 
 import pytest
+import yaml
 from sqlalchemy import select
 
 from app.devtools.fake_gmail import make_mail
-from app.models import Account, Event, MailMessage, RuleDecision
+from app.models import Account, Event, MailMessage, Rule, RuleDecision
 from app.models.enums import DecisionHow, DecisionStatus, RuleJobState
 from app.services.accounts.oauth import FULL_MAIL_SCOPE
 from app.services.accounts.permanent import NOT_ALLOWED_MSG, turn_off
+from app.services.mail.adapter import MailUnreachable
 from app.services.mail.store import eml_path
+from app.services.rules.apply import UNREACHABLE_WAIT
 from app.services.rules.decisions import DecisionProblem, Decisions
 from app.services.rules.jobs import RuleJobProblem, RunScope
-from app.services.rules.store import RuleIn, RuleProblem, create_rule, update_rule
+from app.services.rules.store import (
+    RuleIn,
+    RuleProblem,
+    copy_rules,
+    create_rule,
+    import_yaml,
+    update_rule,
+)
 from tests.rules_helpers import keep
 from tests.test_rules_apply import decision, get
 from tests.test_rules_apply_permanent import allow
@@ -175,3 +185,77 @@ def test_the_approve_endpoint_checks_the_typed_count_on_the_server(
     assert wrong.status_code == 400
     db.expire_all()
     assert db.get(MailMessage, row.id) is not None  # nothing was deleted
+
+
+async def test_correcting_to_a_delete_forever_rule_only_suggests_it(gbox):
+    allow(gbox)
+    target = rule(gbox, "Junk", actions=FOREVER)
+    row = gbox.add("Junk")
+    first = decision(gbox, row, [{"kind": "archive"}])
+    decisions = Decisions(gbox.sf, gbox.applier)
+    new_id = await decisions.correct(gbox.acc.id, first, target)
+    assert row.provider_id in gbox.fake.messages and get(gbox, MailMessage, row.id) is not None
+    assert eml_path(gbox.layout, gbox.acc.email, row.file_path).exists()
+    assert get(gbox, RuleDecision, new_id).status == DecisionStatus.SUGGESTED
+    with pytest.raises(DecisionProblem):
+        await decisions.approve(gbox.acc.id, [new_id])
+    assert await decisions.approve(gbox.acc.id, [new_id], confirm=1) == {"applied": 1}
+    assert row.provider_id not in gbox.fake.messages and get(gbox, MailMessage, row.id) is None
+
+
+def test_a_yaml_import_with_a_delete_forever_rule_saves_nothing_without_the_permission(
+    db, make_account
+):
+    acc = make_account()
+    text = yaml.safe_dump(
+        {
+            "rules": [
+                {"name": "A", "description": "a", "actions": [{"kind": "archive"}]},
+                {"name": "B", "description": "b", "actions": [{"kind": "star"}]},
+                {"name": "C", "description": "c", "actions": FOREVER},
+            ]
+        }
+    )
+    with pytest.raises(RuleProblem, match=r"^Turn on Allow permanent delete"):
+        import_yaml(db, acc.id, text, "admin")
+    assert db.scalars(select(Rule).where(Rule.account_id == acc.id)).all() == []
+
+
+def test_copying_rules_to_a_mailbox_without_the_permission_copies_none(db, make_account):
+    src, dst = _allowed(db, make_account), make_account("bob@example.com")
+    create_rule(db, src.id, RuleIn(name="A", description="a", actions=[{"kind": "star"}]), "a")
+    create_rule(db, src.id, _rule(), "a")
+    with pytest.raises(RuleProblem, match=r"^Turn on Allow permanent delete"):
+        copy_rules(db, src.id, dst.id, "admin")
+    assert db.scalars(select(Rule).where(Rule.account_id == dst.id)).all() == []
+
+
+def test_updating_a_rule_to_add_delete_forever_needs_the_permission_and_suggest_first(
+    db, make_account
+):
+    acc = make_account()
+    rule_ = create_rule(
+        db, acc.id, RuleIn(name="A", description="a", actions=[{"kind": "star"}]), "a"
+    )
+    with pytest.raises(RuleProblem, match=r"^Turn on Allow permanent delete"):
+        update_rule(db, acc.id, rule_.id, _rule(), "admin")
+    acc.scopes, acc.permanent_delete = FULL_MAIL_SCOPE, True
+    db.commit()
+    with pytest.raises(RuleProblem, match="always suggests first"):
+        update_rule(db, acc.id, rule_.id, _rule(mode="automatic"), "admin")
+
+
+async def test_gmail_unreachable_keeps_the_copy_and_the_decision_waiting(gbox):
+    allow(gbox)
+    row = gbox.add("Junk")
+    did = decision(gbox, row, FOREVER)
+
+    async def down(pid):
+        raise MailUnreachable("down")
+
+    gbox.adapter.delete = down
+    with pytest.raises(MailUnreachable):
+        await gbox.applier.apply(did)
+    assert get(gbox, MailMessage, row.id) is not None
+    d = get(gbox, RuleDecision, did)
+    assert d.status == DecisionStatus.SUGGESTED and d.reason == UNREACHABLE_WAIT

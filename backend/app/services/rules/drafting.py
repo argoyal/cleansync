@@ -106,6 +106,9 @@ async def sentence_to_rule(client: AiClient, target: AiTarget | None, sentence: 
             action_kind(str(k).strip().lower()) for k in data.get("actions") or [] if str(k).strip()
         )
     )
+    if "delete_forever" in kinds:  # never drafted from a sentence (plan decision 17)
+        kinds.remove("delete_forever")
+        notes.append("Delete forever isn't drafted. Add it yourself if you want it.")
     unknown = [k for k in kinds if k not in ACTION_KINDS]
     if unknown:
         notes.append(f"Left out actions a rule can't take: {', '.join(unknown)}.")

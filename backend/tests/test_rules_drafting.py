@@ -207,3 +207,10 @@ async def test_a_delete_answer_is_read_as_offload():
     c = Client({"name": "Junk", "description": "junk mail", "actions": ["delete"]})
     d = await sentence_to_rule(c, T, "get rid of junk")
     assert d.actions == [{"kind": "offload"}] and d.notes == []
+
+
+async def test_a_draft_never_offers_delete_forever():
+    c = Client({"name": "Junk", "description": "Junk", "actions": ["delete_forever", "archive"]})
+    d = await sentence_to_rule(c, T, "delete junk")
+    assert d.actions == [{"kind": "archive"}]
+    assert any("Delete forever" in n for n in d.notes)

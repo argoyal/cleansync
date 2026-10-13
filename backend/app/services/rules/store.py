@@ -326,7 +326,7 @@ def import_yaml(db: Session, account_id: int, text: str, saved_by: str) -> list[
             f"That file has more than {MAX_RULES_IN_FILE} rules. Split it and import the parts."
         )
     for i in items:  # check all before saving any
-        _clean(_from_item(i))
+        _check_forever(db, account_id, _clean(_from_item(i))["actions"], had=False)
     return [_create_from(db, account_id, i, saved_by) for i in items]
 
 
@@ -336,6 +336,8 @@ def copy_rules(db: Session, from_account: int, to_account: int, saved_by: str) -
     rules = list(
         db.scalars(select(Rule).where(Rule.account_id == from_account).order_by(Rule.position))
     )
+    for r in rules:  # check all before copying any
+        _check_forever(db, to_account, list(r.actions or []), had=False)
     for r in rules:
         _create_from(db, to_account, {**_snapshot(r), "enabled": r.enabled}, saved_by)
     return len(rules)
