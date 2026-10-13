@@ -3,7 +3,8 @@ import { expect, type Page, test } from "@playwright/test";
 import { fakeGmailMails, ready } from "./helpers";
 
 // Bulk offload spec §11: with the fake Gmail, offload a search with permanent delete on, see
-// "Removed from Gmail", then restore.
+// "Removed from Gmail", then restore (it is back in the Inbox), then Delete forever of one mail
+// still in Gmail.
 // Runs after the rules test, which has already backed
 // the mailbox up (so no setUpMail here: its count of kept mail no longer holds).
 const SUBJECT = "Holiday plans";
@@ -85,6 +86,28 @@ test("permanent delete: turn it on, offload a search, the space is free at once,
       { timeout: 60_000 },
     )
     .toContain(SUBJECT);
+
+  // The restore put it back where it was: in the Inbox.
+  await page.goto("/mail?view=inbox");
+  const inbox = page.getByRole("list", { name: "Mail" });
+  await expect(inbox.getByRole("link", { name: new RegExp(SUBJECT) })).toBeVisible();
+
+  // Delete forever of one mail still in Gmail: type the count, it is gone from Gmail and here.
+  await page.goto(`/mail?view=all&q=${encodeURIComponent(SUBJECT)}`);
+  await page.getByRole("list", { name: "Mail" }).getByRole("link", { name: new RegExp(SUBJECT) }).click();
+  await page.getByRole("button", { name: "Delete forever…" }).click();
+  const forever = page.getByRole("dialog", { name: "Delete forever" });
+  await expect(forever).toContainText("1 mail in Gmail.");
+  const confirm = forever.getByRole("button", { name: "Delete forever", exact: true });
+  await expect(confirm).toBeDisabled(); // not before the count is typed
+  await forever.getByLabel("Type 1 to delete forever").fill("1");
+  await confirm.click();
+  await expect(forever.getByText("Deleted 1 mail forever.")).toBeVisible({ timeout: 60_000 });
+  await forever.getByRole("button", { name: "Close" }).click();
+  const left = fakeGmailMails();
+  if (left) expect(left.map((m) => m.subject)).not.toContain(SUBJECT);
+  const here = await page.request.get(`/api/mail/threads?account_id=${id}&view=all&q=${encodeURIComponent(SUBJECT)}`);
+  expect(((await here.json()) as { threads: { subject: string }[] }).threads.map((t) => t.subject)).not.toContain(SUBJECT);
 
   // Turn it off again: later runs start from the default.
   await page.goto("/settings?tab=accounts");

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+Small fixes after 0.5.0.
+
+- **Rules.** Smaller fixes to rule runs and to the mail those runs act on.
+- **Mail and offload.** Smaller fixes to the mail list, offloads and the Allow permanent delete switch.
+- **Mail and rules screens.** Smaller fixes to wording and behaviour on both screens.
+- **Delete forever.** When you stop it, the message now gives the server's reason, not a guess about where the rest of the mail is.
+- **Restore.** If Gmail refuses a restored mail's labels, it comes back with the basic ones (Inbox, Unread, Starred, Important). The browser test now also checks the mail is back in the Inbox and that Delete forever works on a mail still in Gmail.
+
 ## 0.5.0 — 2026-10-13
 
 Mail now looks like the mailbox, rules run by hand on what you choose, and offload works in bulk.
