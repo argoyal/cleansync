@@ -251,6 +251,27 @@ class FakeGmail:
             return self._list(request)
         if rest == "/history":
             return self._history(request)
+        if rest == "/messages/batchDelete" and request.method == "POST":
+            ids = [str(x) for x in json.loads(request.content or b"{}").get("ids") or []]
+            if not ids or len(ids) > 1000:
+                return self._error(400, "invalidArgument")
+            for mid in ids:
+                if mid in self.messages:  # Gmail ignores ids it doesn't have
+                    self.remove(mid)
+            return httpx.Response(204)
+        if rest == "/messages/batchModify" and request.method == "POST":
+            body = json.loads(request.content or b"{}")
+            ids = [str(x) for x in body.get("ids") or []]
+            if not ids or len(ids) > 1000 or any(i not in self.messages for i in ids):
+                return self._error(400, "invalidArgument")
+            add = [str(x) for x in body.get("addLabelIds") or []]
+            drop = {str(x) for x in body.get("removeLabelIds") or []}
+            if "TRASH" in add:
+                drop.add("INBOX")  # as the fake's messages.trash does
+            for mid in ids:
+                kept = [x for x in self.messages[mid].labels if x not in drop]
+                self.set_labels(mid, kept + [x for x in add if x not in kept])
+            return httpx.Response(204)
         m = re.fullmatch(r"/messages/([^/]+)(/trash|/untrash|/modify)?", rest)
         if m is None:
             return self._error(404)
@@ -259,6 +280,9 @@ class FakeGmail:
             return self._error(404)
         if request.method == "GET":
             return self._get(msg, params.get("format", "full"))
+        if request.method == "DELETE" and m.group(2) is None:
+            self.remove(msg.id)
+            return httpx.Response(204)
         if m.group(2) == "/trash":
             self.set_labels(
                 msg.id,

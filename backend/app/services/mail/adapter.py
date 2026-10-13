@@ -89,6 +89,11 @@ class MailUnreachable(MailApiError):
     could not be read, or Gmail's own servers failed (5xx)."""
 
 
+class PermanentDeleteRefused(MailApiError):
+    """Google refused the full Gmail permission (bulk offload spec §3): the mailbox no
+    longer allows permanent delete. Not a reason to reconnect mail."""
+
+
 class MailAdapter(Protocol):
     async def profile(self) -> MailboxInfo: ...
 
@@ -103,6 +108,12 @@ class MailAdapter(Protocol):
     async def trash(self, id: str) -> None: ...
 
     async def untrash(self, id: str) -> None: ...
+
+    async def batch_delete(self, ids: list[str]) -> None: ...
+
+    async def batch_trash(self, ids: list[str]) -> None: ...
+
+    async def delete(self, id: str) -> None: ...
 
     async def modify(self, id: str, add: list[str], remove: list[str]) -> tuple[str, ...]: ...
 

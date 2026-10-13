@@ -23,6 +23,7 @@ from app.services.mail.adapter import (
     MailNotFound,
     MailSetupProblem,
     MailUnreachable,
+    PermanentDeleteRefused,
     ProviderLabel,
     ProviderState,
     TooOld,
@@ -47,6 +48,10 @@ API_OFF_MSG = (
     "(APIs & Services → Library → Gmail API) and try again."
 )
 API_OFF_REASONS = frozenset({"accessNotConfigured", "SERVICE_DISABLED"})
+
+# Gmail takes at most 1,000 ids in one batchDelete or batchModify.
+BATCH_MAX = 1000
+PERMANENT_REFUSED_MSG = "Google no longer lets CleanSync delete mail from this Gmail for good."
 
 
 def api_turned_off(resp: httpx.Response) -> bool:
@@ -105,6 +110,13 @@ def _mail_id(value: str) -> str:
     if valid_mail_id(value) is None:
         raise ValueError("not a usable mail id")
     return value
+
+
+def _batch_ids(ids: list[str]) -> list[str]:
+    out = [_mail_id(i) for i in ids]
+    if not 0 < len(out) <= BATCH_MAX:
+        raise ValueError(f"a batch takes 1 to {BATCH_MAX} mail ids")
+    return out
 
 
 def _json(resp: httpx.Response) -> dict:
@@ -299,6 +311,31 @@ class GmailAdapter:
 
     async def untrash(self, id: str) -> None:
         await self._call("gmail.messages.untrash", "POST", f"/messages/{_mail_id(id)}/untrash")
+
+    async def _full(self, op: str, method: str, path: str, **kwargs) -> httpx.Response:
+        """A call that needs the full Gmail permission. Gmail's "insufficient permission"
+        means only that permission is gone, not the mail permission."""
+        try:
+            return await self._call(op, method, path, **kwargs)
+        except MailAuthError as e:
+            if e.login:
+                raise
+            raise PermanentDeleteRefused(PERMANENT_REFUSED_MSG, 403) from None
+
+    async def batch_delete(self, ids: list[str]) -> None:
+        """Remove mail from Gmail for good (bulk offload spec §4). Gmail says nothing about
+        ids it no longer has."""
+        body = {"ids": _batch_ids(ids)}
+        await self._full("gmail.messages.batchDelete", "POST", "/messages/batchDelete", json=body)
+
+    async def batch_trash(self, ids: list[str]) -> None:
+        """Move mail to Gmail's trash in one call (bulk offload spec §4)."""
+        body = {"ids": _batch_ids(ids), "addLabelIds": ["TRASH"], "removeLabelIds": []}
+        await self._call("gmail.messages.batchModify", "POST", "/messages/batchModify", json=body)
+
+    async def delete(self, id: str) -> None:
+        """Remove one mail from Gmail for good (the fallback, and a rule's Delete forever)."""
+        await self._full("gmail.messages.delete", "DELETE", f"/messages/{_mail_id(id)}")
 
     async def modify(self, id: str, add: list[str], remove: list[str]) -> tuple[str, ...]:
         """Add and remove labels on one mail (AI rules spec §6); the labels it has now."""

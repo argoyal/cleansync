@@ -26,6 +26,10 @@ UNIT_COSTS: dict[str, int] = {
     "gmail.messages.trash": 5,
     "gmail.messages.untrash": 5,
     "gmail.messages.modify": 5,
+    # Bulk offload (spec §4): one call for up to 1,000 mails.
+    "gmail.messages.batchDelete": 50,
+    "gmail.messages.batchModify": 50,
+    "gmail.messages.delete": 10,
     "gmail.labels.create": 5,
     "gmail.messages.import": 25,
     "gmail.messages.import.upload": 0,  # the bytes of a resumable import: part of that call
