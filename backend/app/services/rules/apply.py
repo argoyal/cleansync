@@ -16,7 +16,7 @@ from app.core.clock import utcnow
 from app.models import Account, MailLabel, MailMessage, RuleDecision
 from app.models.enums import DecisionHow, DecisionStatus, MailState
 from app.paths import Layout
-from app.services.accounts.permanent import permanent_delete_on, permission_lost
+from app.services.accounts.permanent import NOT_ALLOWED_MSG, permanent_delete_on, permission_lost
 from app.services.events.bus import EventBus
 from app.services.google.client import RateLimited
 from app.services.google.quota import BudgetReached
@@ -27,6 +27,12 @@ from app.services.mail.adapter import (
     MailNotFound,
     MailUnreachable,
     PermanentDeleteRefused,
+)
+from app.services.mail.forever import (
+    mail_record,
+    record_rule_forever,
+    remove_copies,
+    unlink_quietly,
 )
 from app.services.mail.index import save_labels, set_flags
 from app.services.mail.store import check_eml, eml_path
@@ -185,6 +191,51 @@ class Applier:
             db.commit()
         return DecisionStatus.FAILED
 
+    def _not_allowed(self, decision_id: int) -> str:
+        """Permanent delete is off: a suggestion waits with the reason; a planned change of a
+        run fails with it, so the run never comes back to it (plan decision 18)."""
+        with self.sf() as db:
+            d = db.get(RuleDecision, decision_id)
+            d.reason = NOT_ALLOWED_MSG
+            if d.status == DecisionStatus.PLANNED:
+                d.status = DecisionStatus.FAILED
+            db.commit()
+            return d.status
+
+    async def _apply_forever(self, decision_id: int, acc: Account) -> str:
+        """Delete forever (bulk offload spec §6, §5): Gmail first, then CleanSync's copy. The
+        decision goes with the mail (its rule history), so Activity keeps the record."""
+        if not permanent_delete_on(acc):
+            return self._not_allowed(decision_id)
+        with self.sf() as db:
+            d = db.get(RuleDecision, decision_id)
+            msg_id, rule_name = d.message_id, d.rule_name or "A rule"
+            pid = db.get(MailMessage, msg_id).provider_id
+        adapter = self.adapter_for(acc)
+        try:
+            await adapter.delete(pid)
+        except PermanentDeleteRefused:
+            with self.sf() as db:
+                permission_lost(db, self.bus, acc.id)
+            return self._not_allowed(decision_id)
+        except WAIT_ERRORS as e:
+            with self.sf() as db:
+                db.get(RuleDecision, decision_id).reason = _wait_reason(e)
+                db.commit()
+            raise
+        except MailNotFound:
+            pass  # already gone from Gmail: only the copy is left to remove
+        except MailApiError as e:
+            return self._fail(decision_id, str(e))
+        with self.sf() as db:
+            row = db.get(MailMessage, msg_id)
+            if row is not None:
+                record = mail_record([row])
+                paths = remove_copies(db, self.layout, acc.email, [row])
+                record_rule_forever(db, self.bus, acc.id, rule_name, record, self.clock())
+                unlink_quietly(paths)  # after the commit
+        return DecisionStatus.APPLIED
+
     async def _take_out(self, acc: Account, adapter: MailAdapter, pid: str) -> bool:
         """Offload's Gmail step (bulk offload spec §4): for good when the mailbox allows
         permanent delete, else to Gmail's trash. True when it was removed for good."""
@@ -214,6 +265,8 @@ class Applier:
             size, sha = row.file_size, row.sha256
         if state != MailState.IN_MAIL:
             return self._fail(decision_id, NOT_IN_MAIL_MSG)
+        if is_forever(actions):
+            return await self._apply_forever(decision_id, acc)
         planned = plan_changes(actions, labels_now)
         if planned.trash:
             problem = await asyncio.to_thread(

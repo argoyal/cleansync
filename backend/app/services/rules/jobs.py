@@ -533,6 +533,8 @@ class RuleJobs:
     def _withdraw_suggestions(self, db, decision_id: int) -> None:
         """The run changed this mail: older suggestions for it no longer fit."""
         d = db.get(RuleDecision, decision_id)
+        if d is None:
+            return  # deleted forever: the decision went with its mail
         db.execute(
             update(RuleDecision)
             .where(

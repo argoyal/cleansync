@@ -17,6 +17,7 @@ from app.models.enums import AiTaskName, DecisionStatus, RuleJobState
 from app.schemas.ai import PauseOut
 from app.schemas.rules import (
     AccountBody,
+    ApproveBody,
     CopyBody,
     CorrectBody,
     DecisionOut,
@@ -38,6 +39,7 @@ from app.schemas.rules import (
     TryOut,
     YamlBody,
 )
+from app.services.accounts.permanent import NOT_ALLOWED_MSG, allows_permanent_delete
 from app.services.ai.client import AiError, AiPaused
 from app.services.google.client import RateLimited
 from app.services.google.quota import BudgetReached
@@ -45,7 +47,7 @@ from app.services.mail.adapter import MailAuthError, MailUnreachable
 from app.services.mail.forever import ForeverProblem
 from app.services.mail.search import SearchError, mail_conditions
 from app.services.rules import drafting, store
-from app.services.rules.apply import WAIT_ERRORS
+from app.services.rules.apply import WAIT_ERRORS, is_forever
 from app.services.rules.decisions import (
     REMEMBER_AFTER,
     DecisionProblem,
@@ -148,6 +150,11 @@ def _rule_out(db: Session, rule: Rule) -> RuleOut:
         version=rule.version,
         decided_7d=decided,
         senders=senders,
+        blocked=(
+            NOT_ALLOWED_MSG
+            if is_forever(rule.actions) and not allows_permanent_delete(db, rule.account_id)
+            else None
+        ),
     )
 
 
@@ -532,13 +539,18 @@ def decisions(
 
 @router.post("/api/rule-decisions/approve")
 async def approve(
-    body: IdsBody,
+    body: ApproveBody,
     request: Request,
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
     account_or_404(db, body.account_id)
-    out = await request.app.state.rule_decisions.approve(body.account_id, body.ids)
+    try:
+        out = await request.app.state.rule_decisions.approve(
+            body.account_id, body.ids, body.confirm
+        )
+    except PROBLEMS as e:
+        raise _problem(e) from e
     _changed(request, body.account_id)
     return out
 

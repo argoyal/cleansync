@@ -9,11 +9,12 @@ from sqlalchemy.orm import Session
 from app.core.clock import utcnow
 from app.models import MailMessage, Rule, RuleCorrection, RuleDecision, RuleSender
 from app.models.enums import DecisionHow, DecisionStatus
-from app.services.rules.apply import WAIT_ERRORS, Applier, UndoResult
+from app.services.rules.apply import WAIT_ERRORS, Applier, UndoResult, is_forever
 from app.services.rules.mailview import sender_of
 from app.services.rules.store import get_rule
 
 REMEMBER_AFTER = 3
+FOREVER_CONFIRM_MSG = "Type {n} to delete these mails forever."
 
 
 class DecisionProblem(ValueError):
@@ -101,25 +102,33 @@ class Decisions:
             )
         )
 
-    async def approve(self, account_id: int, ids: list[int]) -> dict[str, int]:
+    async def approve(
+        self, account_id: int, ids: list[int], confirm: int | None = None
+    ) -> dict[str, int]:
+        """Delete forever suggestions need their count typed (plan decision 16); the sender
+        is read first because such a mail is gone once applied."""
         with self.sf() as db:
-            todo = [
-                (d.id, d.rule_id, d.message_id)
-                for d in self._mine(db, account_id, ids)
-                if d.status == DecisionStatus.SUGGESTED
-            ]
+            todo = []
+            for d in self._mine(db, account_id, ids):
+                if d.status != DecisionStatus.SUGGESTED:
+                    continue
+                row = db.get(MailMessage, d.message_id)
+                sender = sender_of(row.from_addr) if row is not None else ""
+                todo.append((d.id, d.rule_id, sender, is_forever(d.actions)))
+        forever = sum(1 for t in todo if t[3])
+        if forever and confirm != forever:
+            raise DecisionProblem(FOREVER_CONFIRM_MSG.format(n=f"{forever:,}"))
         counts: Counter = Counter()
-        for did, rule_id, message_id in todo:
+        for did, rule_id, sender, _ in todo:
             try:
                 status = await self.applier.apply(did)
             except WAIT_ERRORS:
                 counts["waiting"] += 1
                 continue
             counts[status] += 1
-            if status == DecisionStatus.APPLIED and rule_id is not None:
+            if status == DecisionStatus.APPLIED and rule_id is not None and sender:
                 with self.sf() as db:
-                    row = db.get(MailMessage, message_id)
-                    learn(db, account_id, rule_id, sender_of(row.from_addr), self.clock())
+                    learn(db, account_id, rule_id, sender, self.clock())
                     db.commit()
         return dict(counts)
 

@@ -36,10 +36,15 @@ class RuleOut(RuleFields):
     version: int
     decided_7d: int
     senders: list[SenderOut]
+    blocked: str | None = None
 
 
 class IdsBody(AccountBody):
     ids: list[int] = Field(max_length=5000)
+
+
+class ApproveBody(IdsBody):
+    confirm: int | None = None  # the count of Delete forever suggestions, typed
 
 
 class NamesBody(AccountBody):

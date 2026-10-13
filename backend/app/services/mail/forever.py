@@ -5,22 +5,24 @@ row. A short record goes to Activity. Mail still in Gmail needs round 3."""
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import MailJob, MailMessage
+from app.core.clock import as_utc
+from app.models import Event, MailJob, MailMessage
 from app.models.enums import JobState, MailJobKind, MailState
 from app.paths import Layout
-from app.services.events.bus import EventBus, record_event
+from app.services.events.bus import EventBus, _redact_value, event_to_dict, record_event
 from app.services.mail.index import delete_search_rows
 from app.services.mail.offload_plan import rows_where_in
 from app.services.mail.search import VIEW_ALIASES, SearchError, mail_conditions
 from app.services.mail.store import eml_path
 
 MAX_RECORDED = 500
+RULE_GROUP = timedelta(minutes=10)
 FOREVER_VIEWS = {"offloaded": MailState.OFFLOADED, "deleted": MailState.DELETED}
 VIEW_NAMES = {"offloaded": "Offloaded", "deleted": "Deleted in Gmail"}
 RESTORE_RUNNING_MSG = "A restore is running for this mailbox. Try again when it's done."
@@ -148,3 +150,44 @@ def delete_forever(
     )  # commits
     unlink_quietly(paths)
     return ForeverResult(len(rows), left)
+
+
+def record_rule_forever(
+    db: Session, bus: EventBus, account_id: int, rule_name: str, mails: list[dict], now: datetime
+) -> None:
+    """One Activity record per rule (plan decision 15): mail its Delete forever removed within
+    10 minutes of the rule's last record joins that record. Commits."""
+    last = db.scalar(
+        select(Event)
+        .where(Event.kind == "rule_deleted_forever", Event.account_id == account_id)
+        .order_by(Event.id.desc())
+        .limit(1)
+    )
+    data = dict(last.data or {}) if last is not None else {}
+    if last is not None and data.get("rule") == rule_name and as_utc(last.ts) >= now - RULE_GROUP:
+        kept = list(data.get("mails") or [])
+        room = max(0, MAX_RECORDED - len(kept))
+        count = int(data.get("count") or 0) + len(mails)
+        last.data = {
+            **data,
+            "count": count,
+            "mails": kept + _redact_value(mails[:room]),
+            "more": int(data.get("more") or 0) + max(0, len(mails) - room),
+        }
+        last.message = f"Rule {rule_name} deleted {_mails(count)} forever"
+        db.commit()
+        bus.publish("activity", event_to_dict(last))
+        return
+    record_event(
+        db,
+        bus,
+        kind="rule_deleted_forever",
+        message=f"Rule {rule_name} deleted {_mails(len(mails))} forever",
+        account_id=account_id,
+        data={
+            "rule": rule_name,
+            "count": len(mails),
+            "mails": mails[:MAX_RECORDED],
+            "more": max(0, len(mails) - MAX_RECORDED),
+        },
+    )

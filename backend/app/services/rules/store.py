@@ -9,17 +9,16 @@ from sqlalchemy.orm import Session
 
 from app.models import Rule, RuleDecision, RuleVersion
 from app.models.enums import DecisionStatus, RuleCombine, RuleMode
-from app.services.rules.apply import is_system_label
+from app.services.accounts.permanent import NOT_ALLOWED_MSG, allows_permanent_delete
+from app.services.rules.apply import is_forever, is_system_label
 from app.services.rules.match import Conditions, RuleView
 
-ACTION_KINDS = ("archive", "label", "mark_read", "star", "offload")
-# Listed in the rule form, but it needs the full Gmail permission (round 3 of 0.5.0).
-NOT_YET_KINDS = {
-    "delete_forever": "Delete forever needs full Gmail access (coming in this release).",
-}
+ACTION_KINDS = ("archive", "label", "mark_read", "star", "offload", "delete_forever")
 # Names older files still use: a 0.4.0 export says "delete" for Offload.
 OLD_ACTION_NAMES = {"delete": "offload"}
-STANDS_ALONE = ("offload",)
+# These each make the whole rule: nothing else can happen to the mail as well.
+STANDS_ALONE = {"offload": "Offload", "delete_forever": "Delete forever"}
+SUGGEST_ONLY_MSG = "A Delete forever rule always suggests first. Pick Suggest first."
 
 
 def action_kind(kind: str) -> str:
@@ -58,8 +57,6 @@ def clean_actions(actions: list[dict]) -> list[dict]:
         if not isinstance(a, dict):
             raise RuleProblem("Each action needs a kind, such as archive or label.")
         kind = str(a.get("kind") or "")
-        if kind in NOT_YET_KINDS:
-            raise RuleProblem(NOT_YET_KINDS[kind])
         if kind not in ACTION_KINDS:
             raise RuleProblem(f"{kind!r} isn't an action a rule can take.")
         if kind == "label":
@@ -75,8 +72,9 @@ def clean_actions(actions: list[dict]) -> list[dict]:
             out.append(item)
     if not out:
         raise RuleProblem("Pick at least one action.")
-    if any(a["kind"] in STANDS_ALONE for a in out) and len(out) > 1:
-        raise RuleProblem("Offload can't be combined with other actions.")
+    for kind, word in STANDS_ALONE.items():
+        if any(a["kind"] == kind for a in out) and len(out) > 1:
+            raise RuleProblem(f"{word} can't be combined with other actions.")
     return out
 
 
@@ -96,12 +94,15 @@ def _clean(data: RuleIn) -> dict:
         raise RuleProblem(
             "Add a description: one sentence on which mail this rule is for; the AI reads it."
         )
+    actions = clean_actions(data.actions)
+    if is_forever(actions) and data.mode == RuleMode.AUTOMATIC:
+        raise RuleProblem(SUGGEST_ONLY_MSG)  # bulk offload spec §6
     return {
         "name": name,
         "description": description,
         "conditions": conditions,
         "combine": str(data.combine),
-        "actions": clean_actions(data.actions),
+        "actions": actions,
         "mode": str(data.mode),
     }
 
@@ -138,8 +139,16 @@ def _unique_name(db: Session, account_id: int, name: str) -> str:
         n += 1
 
 
+def _check_forever(db: Session, account_id: int, actions: list[dict], had: bool) -> None:
+    """Adding Delete forever needs permanent delete on for the mailbox. A rule that already
+    has it can still be edited or turned off after the permission is gone."""
+    if is_forever(actions) and not had and not allows_permanent_delete(db, account_id):
+        raise RuleProblem(NOT_ALLOWED_MSG)
+
+
 def create_rule(db: Session, account_id: int, data: RuleIn, saved_by: str) -> Rule:
     fields = _clean(data)
+    _check_forever(db, account_id, fields["actions"], had=False)
     last = db.scalar(select(func.max(Rule.position)).where(Rule.account_id == account_id))
     rule = Rule(
         account_id=account_id,
@@ -158,6 +167,7 @@ def create_rule(db: Session, account_id: int, data: RuleIn, saved_by: str) -> Ru
 def update_rule(db: Session, account_id: int, rule_id: int, data: RuleIn, saved_by: str) -> Rule:
     rule = get_rule(db, account_id, rule_id)
     fields = _clean(data)
+    _check_forever(db, account_id, fields["actions"], had=is_forever(rule.actions))
     rule.enabled = bool(data.enabled)
     if fields != _snapshot(rule):
         for k, v in fields.items():

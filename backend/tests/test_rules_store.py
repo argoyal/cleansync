@@ -234,15 +234,6 @@ def test_gmail_own_label_names_are_refused(db, make_account, name):
         clean_actions([{"kind": "label", "label": name}])
 
 
-def test_delete_forever_is_listed_but_not_yet_allowed(db, make_account):
-    acc = make_account()
-    data = RuleIn(name="x", description="d", actions=[{"kind": "delete_forever"}])
-    with pytest.raises(
-        RuleProblem, match=r"^Delete forever needs full Gmail access \(coming in this release\)\.$"
-    ):
-        create_rule(db, acc.id, data, "admin")
-
-
 def test_the_old_name_delete_is_refused_when_saving(db, make_account):
     acc = make_account()
     with pytest.raises(RuleProblem, match="isn't an action"):
