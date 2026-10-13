@@ -16,7 +16,7 @@ from app.core.clock import utcnow
 from app.models import Account, MailMessage, RuleAccount, RuleDecision, RuleJob, RuleTodo
 from app.models.enums import DecisionHow, DecisionStatus, MailState, RuleJobState, RuleMode
 from app.paths import Layout
-from app.services.ai.client import AiError
+from app.services.ai.client import AiError, AiPaused
 from app.services.events.bus import EventBus
 from app.services.rules.apply import WAIT_ERRORS, WAITING_REASONS, Applier
 from app.services.rules.decisions import hints_for, remembered_senders
@@ -326,6 +326,19 @@ class SortingWorker:
             labels_seen = list(row.labels or [])
         try:
             verdict = await decide(rules, mail, remembered=remembered, chooser=chooser, hints=hints)
+        except AiPaused as e:
+            # Model limits spec §8: a paused model costs the mail nothing. It waits for the
+            # pause to end and the batch goes on, since the next mail may need no model.
+            until = e.pause.until or now + timedelta(hours=1)
+            with self.sf() as db:
+                db.execute(
+                    update(RuleTodo)
+                    .where(*self._mine(account_id, message_id, job_id))
+                    .values(next_try_at=until)
+                    .execution_options(synchronize_session=False)
+                )
+                db.commit()
+            return 0, True, False
         except AiError as e:
             with self.sf() as db:
                 attempts = self._attempts(db, account_id, message_id, job_id)

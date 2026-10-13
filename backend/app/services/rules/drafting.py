@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from app.models.enums import RuleCombine
-from app.services.ai.client import AiClient
+from app.services.ai.client import AiClient, AiPaused
 from app.services.ai.connections import AiTarget
 from app.services.rules.chooser import fence_safe
 from app.services.rules.mailview import MailForModel, domain_of
@@ -86,14 +86,17 @@ async def sentence_to_rule(client: AiClient, target: AiTarget | None, sentence: 
         return RuleDraft(
             _short_name(sentence), sentence, {}, RuleCombine.AI_ONLY, [], [NO_MODEL_NOTE]
         )
-    ans = await client.ask(
-        target,
-        system=DRAFT_SYSTEM,
-        user=f"Sentence: {sentence}",
-        schema=DRAFT_SCHEMA,
-        schema_name="rule_draft",
-        parse_text=lambda _t: None,
-    )
+    try:
+        ans = await client.ask(
+            target,
+            system=DRAFT_SYSTEM,
+            user=f"Sentence: {sentence}",
+            schema=DRAFT_SCHEMA,
+            schema_name="rule_draft",
+            parse_text=lambda _t: None,
+        )
+    except AiPaused as e:
+        return RuleDraft(_short_name(sentence), sentence, {}, RuleCombine.AI_ONLY, [], [str(e)])
     data = ans.data or {}
     notes: list[str] = []
     if not ans.data:
@@ -161,14 +164,17 @@ async def rule_from_mails(
         return f"<<<EMAIL\n{body}\nEMAIL>>>"
 
     sample = "\n\n".join(one(m) for m in mails[:10])
-    ans = await client.ask(
-        target,
-        system=DESCRIBE_SYSTEM,
-        user=sample,
-        schema=DESCRIBE_SCHEMA,
-        schema_name="rule_description",
-        parse_text=lambda _t: None,
-    )
+    try:
+        ans = await client.ask(
+            target,
+            system=DESCRIBE_SYSTEM,
+            user=sample,
+            schema=DESCRIBE_SCHEMA,
+            schema_name="rule_description",
+            parse_text=lambda _t: None,
+        )
+    except AiPaused as e:
+        return RuleDraft(name or "New rule", "", conditions, _combine(conditions), [], [str(e)])
     data = ans.data or {}
     notes = [] if ans.data else ["The model's answer couldn't be read; describe the mail yourself."]
     return RuleDraft(

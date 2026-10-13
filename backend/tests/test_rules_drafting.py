@@ -1,8 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.models.enums import RuleCombine
-from app.services.ai.client import AiAnswer
+from app.services.ai.client import AiAnswer, AiPaused
 from app.services.ai.connections import AiTarget
+from app.services.ai.limits import LIMITED, Pause
 from app.services.rules.drafting import rule_from_mails, sentence_to_rule, try_rule
 from app.services.rules.mailview import MailForModel
 from app.services.rules.match import Choice, Conditions, RuleView
@@ -179,3 +180,24 @@ async def test_try_stops_at_the_limit():
     new = RuleView(-1, 0, "New", "new", Conditions(), "ai_only")
     out = await try_rule(new, [], [mail(i) for i in range(60)], AllNew(), {}, lambda s: [])
     assert len(out) == 50
+
+
+class PausedClient:
+    async def ask(self, *a, **kw):
+        now = datetime(2026, 10, 13, tzinfo=UTC)
+        raise AiPaused(
+            Pause(
+                LIMITED, now + timedelta(hours=3), "The model's usage limit is used up.", None, now
+            )
+        )
+
+
+async def test_sentence_while_paused_opens_the_form_with_a_note():
+    d = await sentence_to_rule(PausedClient(), T, "Archive receipts from shop.example.com")
+    assert d.description == "Archive receipts from shop.example.com"
+    assert d.notes and "usage limit is used up" in d.notes[0]
+
+
+async def test_mails_while_paused_keep_the_shared_conditions():
+    d = await rule_from_mails(PausedClient(), T, [mail(1), mail(2)])
+    assert d.conditions and "usage limit is used up" in d.notes[0]

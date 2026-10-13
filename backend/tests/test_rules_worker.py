@@ -7,8 +7,9 @@ from sqlalchemy import select
 
 from app.core.clock import as_utc, utcnow
 from app.models import MailMessage, RuleAccount, RuleDecision, RuleJob, RuleTodo
-from app.models.enums import DecisionStatus, MailState, RuleJobState, RuleMode
-from app.services.ai.client import AiUnreachable
+from app.models.enums import DecisionStatus, MailState, RuleCombine, RuleJobState, RuleMode
+from app.services.ai.client import AiPaused, AiUnreachable
+from app.services.ai.limits import LIMITED, NEEDS_YOU, Pause
 from app.services.mail.store import eml_path
 from app.services.rules.apply import BUDGET_WAIT
 from app.services.rules.match import Choice
@@ -522,3 +523,78 @@ def test_wake_waiting_makes_later_rows_due(gbox):
         assert wake_waiting(db, now) == 1
         db.commit()
     assert all(as_utc(t.next_try_at) <= now + timedelta(seconds=1) for t in todos(gbox))
+
+
+def _paused(until):
+    return AiPaused(
+        Pause(
+            LIMITED if until else NEEDS_YOU,
+            until,
+            "The model's usage limit is used up.",
+            None,
+            utcnow(),
+        )
+    )
+
+
+async def test_paused_model_keeps_mail_waiting_without_counting_a_try(gbox):
+    _rule(gbox)
+    a, b = gbox.add("One"), gbox.add("Two")
+    queue(gbox, a, b)
+    until = utcnow() + timedelta(hours=10)
+    pick = Pick(error=_paused(until))
+    assert await worker(gbox, pick).run_once(gbox.acc.id) == 0
+    assert pick.calls == 2  # the batch goes on: the gate refuses each one at no cost
+    for t in todos(gbox):
+        assert t.attempts == 0 and t.last_error is None
+        assert abs((as_utc(t.next_try_at) - until).total_seconds()) < 1
+    with gbox.sf() as db:
+        assert db.get(RuleAccount, gbox.acc.id).failing_since is None
+    assert decisions(gbox) == []
+
+
+async def test_needs_you_pause_waits_an_hour(gbox):
+    _rule(gbox)
+    a = gbox.add("One")
+    queue(gbox, a)
+    before = utcnow()
+    await worker(gbox, Pick(error=_paused(None))).run_once(gbox.acc.id)
+    (t,) = todos(gbox)
+    assert as_utc(t.next_try_at) >= before + timedelta(minutes=59)
+
+
+async def test_fixed_only_rule_still_sorts_while_paused(gbox):
+    with gbox.sf() as db:
+        create_rule(
+            db,
+            gbox.acc.id,
+            RuleIn(
+                name="Shop",
+                description="d",
+                actions=[{"kind": "archive"}],
+                conditions={"subject_contains": ["Receipt"]},
+                combine=RuleCombine.FIXED_ONLY,
+            ),
+            "a",
+        )
+        create_rule(
+            db, gbox.acc.id, RuleIn(name="AI", description="d", actions=[{"kind": "star"}]), "a"
+        )
+    receipt, other = gbox.add("Receipt 42"), gbox.add("Hello")
+    queue(gbox, receipt, other)
+    await worker(gbox, Pick(error=_paused(utcnow() + timedelta(hours=1)))).run_once(gbox.acc.id)
+    (d,) = decisions(gbox)
+    assert d.message_id == receipt.id and d.rule_name == "Shop"
+    assert [t.message_id for t in todos(gbox)] == [other.id]
+
+
+async def test_queue_drains_after_the_pause_ends(gbox):
+    _rule(gbox)
+    a = gbox.add("One")
+    queue(gbox, a)
+    await worker(gbox, Pick(error=_paused(utcnow() + timedelta(hours=1)))).run_once(gbox.acc.id)
+    with gbox.sf() as db:
+        wake_waiting(db, utcnow())  # as Resume now does, or the clock passing the end
+        db.commit()
+    assert await worker(gbox, Pick()).run_once(gbox.acc.id) == 1
+    assert todos(gbox) == []
