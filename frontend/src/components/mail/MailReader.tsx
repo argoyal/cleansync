@@ -24,6 +24,8 @@ export const RULE_FROM_AT_MOST = 10;
 type PickedAction = "offload" | "rule" | null;
 type Forever = { message_ids: number[] } | "all";
 
+const WHOLE_MAILBOX_MSG = "Search or pick a label first: Offload never takes the whole mailbox.";
+
 /** What the bar says after Pick all (mail panel spec §6). */
 export function allPickedText(total: number | undefined, searching: boolean): string {
   const where = searching ? "this search" : "this view";
@@ -108,6 +110,8 @@ export function MailReader({ account }: { account: Account }) {
   const restorePicked = () =>
     restore.mutate(all ? { accountId: account.id, start: pickAll } : { accountId: account.id, start: { thread_ids: [...picked] }, view }, { onSuccess: clearPicks });
   const searching = q.trim() !== "";
+  // Pick all of All mail with no search and no label is the whole mailbox: Offload refuses it.
+  const wholeMailbox = all && view === "all" && !label && !searching;
   const title = searching ? "Search results" : viewTitle(view, label ? (labelName ?? label) : null);
   const scope = label ? (labelName ?? label) : view !== "all" ? viewTitle(view) : null;
   return (
@@ -146,7 +150,10 @@ export function MailReader({ account }: { account: Account }) {
           </span>
           {kind === "gmail" && (
             <>
-              <Button onClick={() => setPickedAction("offload")}>Offload</Button>
+              <Button disabled={wholeMailbox} onClick={() => setPickedAction("offload")}>
+                Offload
+              </Button>
+              {wholeMailbox && <span className="text-table text-ink-2">{WHOLE_MAILBOX_MSG}</span>}
               <Button onClick={() => setPickedAction("rule")}>Make a rule…</Button>
             </>
           )}

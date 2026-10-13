@@ -531,6 +531,16 @@ describe("Pick all and the actions of each view", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/offloads/preview")?.body).toEqual({ account_id: 1, view: "inbox", q: "from:shop" }));
   });
 
+  it("disables Offload after Pick all of All mail with no search and no label, and says why", async () => {
+    api();
+    open("/mail");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick all" }));
+    expect(within(bar()).getByRole("button", { name: "Offload" })).toBeDisabled();
+    expect(within(bar()).getByText("Search or pick a label first: Offload never takes the whole mailbox.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Pick One" })); // a few picked by hand: fine
+    expect(within(bar()).getByRole("button", { name: "Offload" })).toBeEnabled();
+  });
+
   it("restores a pick-all of Offloaded as the view and search", async () => {
     const { calls } = api({ "POST /api/mail/restore": { queued: "queued", count: 2 } });
     open("/mail?view=offloaded&label=Label_2");

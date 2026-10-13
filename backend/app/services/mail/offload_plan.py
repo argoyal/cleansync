@@ -11,7 +11,7 @@ from app.core.clock import as_utc, utcnow
 from app.models import Account, MailJob, MailLabel, MailMessage, MailOffload
 from app.models.enums import JobState, MailJobKind, MailOffloadState, MailState
 from app.paths import Layout
-from app.services.mail.search import SearchError, mail_conditions
+from app.services.mail.search import SearchError, mail_conditions, parse_query
 from app.services.mail.store import eml_path
 
 GMAIL_TRASH_DAYS = 30  # Gmail empties its trash after this many days (spec 5.4)
@@ -173,7 +173,8 @@ def candidates(db: Session, account_id: int, pick: Pick, now: datetime) -> list[
     if pick.thread_ids:
         return rows_where_in(db, account_id, MailMessage.thread_id, pick.thread_ids)
     q = (pick.q or "").strip()
-    if not q and pick.view == "all" and not pick.label:
+    # "" (an empty phrase) is an empty search too, so ask the parser, not the raw text
+    if parse_query(q, now=now).is_empty() and pick.view == "all" and not pick.label:
         raise SearchError(NO_FILTER_MSG)  # one tick never offloads a whole mailbox
     stmt = (
         select(MailMessage)

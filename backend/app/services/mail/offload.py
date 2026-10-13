@@ -78,6 +78,7 @@ COUNT_CHANGED_MSG = (
 SKIP_NOT_IN_GMAIL = "It was no longer in Gmail."
 SKIP_TOO_NEW = "It is newer than {days} days, so it stayed in Gmail."
 SKIP_BAD_COPY = "The copy on this server didn't check out ({problem}), so it stayed in Gmail."
+SKIP_ITEM_GONE = "The mail was deleted forever while this offload was waiting."
 SKIP_GONE = "Gmail no longer has this mail. The copy here is kept."
 SKIP_OUTSIDE_TRASH = (
     "Gmail shows it outside its trash (maybe in Spam), so CleanSync left it as it is."
@@ -383,6 +384,12 @@ class MailOffloads:
         with self.sf() as db:
             min_age = self._min_age(db)  # as set now: the owner may change it during a run
             item = db.get(MailOffloadItem, item_id)
+            if item is None:  # Delete forever took the mail (and so this item) while we waited
+                off = db.get(MailOffload, off_id)
+                off.skipped += 1
+                db.commit()
+                job_log(log_path, f"skipped mail {item_id}: {SKIP_ITEM_GONE}")
+                return None
             row = db.get(MailMessage, item.message_id)
             if row is None or row.account_id != acc.id:
                 return self._skip(off_id, item_id, SKIP_NOT_IN_GMAIL, log_path)

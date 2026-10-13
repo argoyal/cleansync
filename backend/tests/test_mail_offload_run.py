@@ -428,3 +428,26 @@ async def test_an_offload_whose_job_cannot_start_ends_failed(
     db.refresh(off)
     assert off.state == MailOffloadState.FAILED and "disk full" in off.reason
     assert _trash_calls(box) == []
+
+
+async def test_a_mail_whose_item_is_gone_mid_run_is_skipped_and_the_rest_go_on(
+    auth_client, offload_box, db, session_factory
+):
+    """Delete forever on a paused offload's mail removes its item (ON DELETE CASCADE)."""
+    box = offload_box
+    await box.backup()
+    assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
+    second_id = box.row("Old photos").id
+
+    def drop_item(_id, n):
+        if n == 1:
+            with session_factory() as s2:
+                s2.query(MailOffloadItem).filter_by(message_id=second_id).delete()
+                s2.commit()
+
+    _wrap(box, drop_item)
+    await box.run_queued()
+    off = db.query(MailOffload).one()
+    assert off.state == MailOffloadState.DONE_WITH_SKIPS
+    assert off.done == 2 and off.skipped == 1
+    assert box.row("Old photos").state == MailState.IN_MAIL

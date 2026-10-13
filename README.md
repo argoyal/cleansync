@@ -21,7 +21,7 @@ CleanSync is a control panel around [rclone](https://rclone.org) `bisync`. rclon
 - **Mail backup:** every Gmail message except Spam and Trash is kept on the server as its original `.eml`, kept up to date every few minutes. Set it up from the Mail section: [docs/mail-backup.md](docs/mail-backup.md).
 - **Mail reader:** views, labels, conversations, search with operators, mail shown safely (no scripts, images only on request), attachments.
 - **Mail offload and restore:** move old or large mail to Gmail's trash (Gmail empties it after 30 days) after checking the copy here, and put it back any time without duplicates.
-- **Mail rules:** write rules in your own words ("archive newsletters I never read") and a model you choose (Ollama, a LiteLLM gateway, OpenRouter…) sorts new inbox mail by them. Rules suggest first, every change can be undone, and Delete keeps CleanSync's copy in a Local archive: [docs/mail-rules.md](docs/mail-rules.md).
+- **Mail rules:** write rules in your own words ("archive newsletters I never read") and a model you choose (Ollama, a LiteLLM gateway, OpenRouter…) sorts new inbox mail by them. Rules suggest first, every change can be undone, and Offload takes mail out of Gmail and keeps CleanSync's copy in Offloaded, and Delete forever removes that copy: [docs/mail-rules.md](docs/mail-rules.md).
 - **Recovery:** every copy CleanSync kept, with where it came from and when it is cleaned up. Restore one or many (never overwrites), or download them.
 - In 0.2.0 the + New button (new folders, uploads, blank Office files, Google Docs/Sheets/Slides) is hidden while Files and Mail settle into one app. Its code stays, and it comes back in a later release.
 

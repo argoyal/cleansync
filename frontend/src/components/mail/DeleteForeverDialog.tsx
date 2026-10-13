@@ -66,7 +66,7 @@ export function DeleteForeverDialog({
       <p>
         {mails(count)} from {PLACES[start.view] ?? start.view}.
       </p>
-      <p className="text-ink-2">This removes CleanSync's own copy. The mail is already gone from Gmail, so afterwards it exists nowhere. This can't be undone.</p>
+      <p className="text-ink-2">This removes CleanSync's own copy. The mail is already out of Gmail, though mail offloaded in the last 30 days may still be in Gmail's trash until Gmail empties it. This can't be undone.</p>
       {count > 0 && (
         <Field label={`Type ${count.toLocaleString()} to delete forever`}>
           <input className={`${inputClass} w-40`} inputMode="numeric" autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />

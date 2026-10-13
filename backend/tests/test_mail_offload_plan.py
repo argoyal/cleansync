@@ -146,3 +146,13 @@ async def test_the_minimum_age_setting_sets_the_cut_off(auth_client, offload_box
             "text": "3 mails left out: newer than 365 days. Recent mail always stays in Gmail.",
         }
     ]
+
+
+async def test_an_empty_search_in_quotes_is_still_no_filter(auth_client, offload_box):
+    box = offload_box
+    await box.backup()
+    for q in ('""', '  ""  ', '"" ""'):
+        r = _preview(auth_client, box.acc, q=q)
+        assert r.status_code == 422, q
+        assert r.json()["detail"] == "Choose at least one filter, or pick mails in the list."
+    assert _preview(auth_client, box.acc, q="older_than:1y").status_code == 200

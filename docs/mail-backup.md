@@ -50,7 +50,7 @@ Offloads wait while the mail backup is still checking your mailbox (the first ba
 
 ## Delete forever
 
-In Offloaded and Deleted in Gmail, **Delete forever** removes CleanSync's own copy: the `.eml` file, its search entry and its rule history. The mail is already gone from Gmail, so afterwards it exists nowhere. You type the number of mails to confirm. Activity keeps a short record (sender, subject and date of up to 500 of them, and how many more). It refuses while a restore is running for that mailbox.
+In Offloaded and Deleted in Gmail, **Delete forever** removes CleanSync's own copy: the `.eml` file, its search entry and its rule history. The mail is already out of Gmail, though mail offloaded in the last 30 days may still sit in Gmail's trash until Gmail empties it. Once it is gone from there too, nothing is left. You type the number of mails to confirm. Activity keeps a short record (sender, subject and date of up to 500 of them, and how many more). It refuses while a restore is running for that mailbox.
 
 ## Cost
 
