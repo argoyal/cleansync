@@ -65,6 +65,7 @@ def test_sorting_switch_and_status(auth_client, acc):
         "last_error": None,
         "warning": False,
         "model_set": False,
+        "paused": None,
     }
     s = auth_client.put("/api/rules/sorting", json={"account_id": acc.id, "enabled": True}).json()
     assert s["enabled"] is True
@@ -366,3 +367,45 @@ def test_the_open_run_of_rules_can_be_found_again(auth_client, acc, db, layout):
     assert p["job_id"] == jid and p["state"] == "PREVIEWING" and p["total"] == 1
     auth_client.post(f"/api/rule-jobs/{jid}/stop", json=B)
     assert auth_client.get("/api/rule-jobs/open", params=B).json() is None
+
+
+def _pause_sorting_connection(app):
+    from app.core.clock import utcnow
+    from app.models.enums import AiTaskName
+    from app.services.ai.limits import LIMITED
+
+    conn = app.state.ai.create("Groq", "https://api.groq.com/openai/v1")
+    app.state.ai.set_task(AiTaskName.SORTING, conn.id, "m")
+    return conn, lambda: app.state.ai.set_pause(
+        conn.id,
+        LIMITED,
+        utcnow() + timedelta(hours=2),
+        "The model's usage limit is used up.",
+        None,
+        utcnow(),
+    )
+
+
+def test_sorting_status_shows_the_sorting_connections_pause(auth_client, app, acc):
+    _, pause = _pause_sorting_connection(app)
+    assert (
+        auth_client.get("/api/rules/sorting", params={"account_id": acc.id}).json()["paused"]
+        is None
+    )
+    pause()
+    p = auth_client.get("/api/rules/sorting", params={"account_id": acc.id}).json()["paused"]
+    assert p["kind"] == "limited" and p["connection_name"] == "Groq"
+
+
+def test_rule_job_preview_carries_the_pause(auth_client, app, acc, db, layout):
+    from app.devtools.fake_gmail import make_mail
+    from tests.rules_helpers import keep
+
+    _, pause = _pause_sorting_connection(app)
+    keep(db, layout, acc, make_mail("Old one"))
+    jid = auth_client.post(
+        "/api/rule-jobs", json={"account_id": acc.id, "q": "", "view": "inbox"}
+    ).json()["job_id"]
+    pause()
+    p = auth_client.get(f"/api/rule-jobs/{jid}", params={"account_id": acc.id}).json()
+    assert p["paused"]["kind"] == "limited"

@@ -13,7 +13,8 @@ from app.api.mail_reader import account_or_404
 from app.auth.deps import AuthContext, get_db, require_user
 from app.core.clock import as_utc, utcnow
 from app.models import MailMessage, Rule, RuleAccount, RuleDecision, RuleSender, RuleTodo
-from app.models.enums import AiTaskName, DecisionStatus
+from app.models.enums import AiTaskName, DecisionStatus, RuleJobState
+from app.schemas.ai import PauseOut
 from app.schemas.rules import (
     AccountBody,
     CopyBody,
@@ -36,7 +37,7 @@ from app.schemas.rules import (
     TryOut,
     YamlBody,
 )
-from app.services.ai.client import AiError
+from app.services.ai.client import AiError, AiPaused
 from app.services.google.client import RateLimited
 from app.services.google.quota import BudgetReached
 from app.services.mail.adapter import MailAuthError, MailUnreachable
@@ -62,6 +63,8 @@ WARN_AFTER = timedelta(hours=1)
 def _problem(e: Exception) -> HTTPException:
     if isinstance(e, store.RuleNotFound):
         return HTTPException(404, str(e))
+    if isinstance(e, AiPaused):
+        return HTTPException(503, str(e))
     if isinstance(e, AiError):
         return HTTPException(502, str(e))
     return HTTPException(400, str(e))
@@ -172,6 +175,27 @@ def create_rule(
         raise _problem(e) from e
 
 
+def _sorting_pause(request: Request) -> PauseOut | None:
+    found = request.app.state.ai.pause_for_task(AiTaskName.SORTING)
+    if found is None:
+        return None
+    cid, name, p = found
+    return PauseOut(
+        kind=p.kind,
+        until=p.until,
+        reason=p.reason,
+        detail=p.detail,
+        since=p.since,
+        connection_id=cid,
+        connection_name=name,
+    )
+
+
+def _preview_out(request: Request, preview) -> JobPreviewOut:
+    paused = _sorting_pause(request) if preview.state == RuleJobState.PREVIEWING else None
+    return JobPreviewOut(**asdict(preview), paused=paused)
+
+
 # Declared before /api/rules/{rule_id} on purpose: otherwise PUT /api/rules/sorting is read as a rule id.
 # ---- sorting status ----------------------------------------------------------------------------
 def _sorting_out(db: Session, request: Request, account_id: int) -> SortingOut:
@@ -195,6 +219,7 @@ def _sorting_out(db: Session, request: Request, account_id: int) -> SortingOut:
         last_error=ra.last_error if ra else None,
         warning=bool(failing and now - failing > WARN_AFTER),
         model_set=request.app.state.ai.target(AiTaskName.SORTING) is not None,
+        paused=_sorting_pause(request),
     )
 
 
@@ -597,7 +622,7 @@ def open_job(
     account_or_404(db, account_id)
     jobs = request.app.state.rule_jobs
     jid = jobs.open_job(account_id)
-    return None if jid is None else JobPreviewOut(**asdict(jobs.preview(account_id, jid)))
+    return None if jid is None else _preview_out(request, jobs.preview(account_id, jid))
 
 
 @router.get("/api/rule-jobs/{job_id}", response_model=JobPreviewOut)
@@ -610,7 +635,7 @@ def job(
 ):
     account_or_404(db, account_id)
     try:
-        return JobPreviewOut(**asdict(request.app.state.rule_jobs.preview(account_id, job_id)))
+        return _preview_out(request, request.app.state.rule_jobs.preview(account_id, job_id))
     except PROBLEMS as e:
         raise _problem(e) from e
 

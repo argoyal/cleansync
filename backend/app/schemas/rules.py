@@ -1,6 +1,7 @@
 # backend/app/schemas/rules.py
 from pydantic import BaseModel, Field
 
+from app.schemas.ai import PauseOut
 from app.schemas.common import UtcDatetime
 
 
@@ -100,6 +101,7 @@ class SortingOut(BaseModel):
     last_error: str | None
     warning: bool
     model_set: bool
+    paused: PauseOut | None = None
 
 
 class DecisionOut(BaseModel):
@@ -147,3 +149,4 @@ class JobPreviewOut(BaseModel):
     skipped: int
     failed: int
     reason: str | None
+    paused: PauseOut | None = None

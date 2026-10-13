@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import httpx
 import pytest
 import respx
@@ -139,3 +141,72 @@ def test_changes_need_the_csrf_header(auth_client):
         )
     finally:
         auth_client.headers["X-CSRF-Token"] = token
+
+
+from app.core.clock import utcnow  # noqa: E402
+from app.services.ai.limits import LIMITED, NEEDS_YOU  # noqa: E402
+
+
+def test_connection_shows_reset_time_and_no_pause(auth_client):
+    c = make(auth_client)
+    assert (c["resets_at"], c["resets_tz"], c["pause"]) == ("00:00", "UTC", None)
+
+
+def test_patch_reset_time_and_bad_zone(auth_client):
+    c = make(auth_client)
+    r = auth_client.patch(
+        f"/api/ai/connections/{c['id']}",
+        json={"resets_at": "00:00", "resets_tz": "America/Los_Angeles"},
+    )
+    assert r.status_code == 200 and r.json()["resets_tz"] == "America/Los_Angeles"
+    bad = auth_client.patch(f"/api/ai/connections/{c['id']}", json={"resets_tz": "Nowhere/Land"})
+    assert bad.status_code == 400 and "time zone" in bad.json()["detail"]
+
+
+def test_pause_is_listed_and_resume_clears_it(auth_client, app):
+    c = make(auth_client, api_key="sk-api-secret-1")
+    app.state.ai.set_pause(
+        c["id"],
+        LIMITED,
+        utcnow() + timedelta(hours=5),
+        "The model's usage limit is used up.",
+        "Rate limit reached",
+        utcnow(),
+    )
+    listed = auth_client.get("/api/ai/connections").json()[0]
+    assert listed["pause"]["kind"] == LIMITED and listed["pause"]["detail"] == "Rate limit reached"
+    assert listed["pause"]["connection_name"] == "Ollama"
+    r = auth_client.post(f"/api/ai/connections/{c['id']}/resume")
+    assert r.status_code == 200 and r.json()["pause"] is None
+    assert auth_client.post("/api/ai/connections/9999/resume").status_code == 404
+
+
+@respx.mock
+def test_test_button_ignores_a_pause_and_clears_it_on_success(auth_client, app):
+    c = make(auth_client)
+    app.state.ai.set_pause(
+        c["id"], NEEDS_YOU, None, "The model's server refused the API key.", None, utcnow()
+    )
+    respx.post(f"{URL}/chat/completions").mock(
+        return_value=httpx.Response(
+            200, json={"choices": [{"message": {"content": '{"rule": 2, "why": "digest"}'}}]}
+        )
+    )
+    r = auth_client.post("/api/ai/test", json={"connection_id": c["id"], "model": "llama3.1:8b"})
+    assert r.json()["ok"] is True
+    assert app.state.ai.pause_of(c["id"]) is None
+
+
+@respx.mock
+def test_test_button_shows_the_providers_message(auth_client):
+    c = make(auth_client, api_key="sk-api-secret-1")
+    respx.post(f"{URL}/chat/completions").mock(
+        return_value=httpx.Response(
+            429, json={"error": {"message": "Daily limit hit for sk-api-secret-1"}}
+        )
+    )
+    r = auth_client.post(
+        "/api/ai/test", json={"connection_id": c["id"], "model": "llama3.1:8b"}
+    ).json()
+    assert r["ok"] is False and r["detail"].startswith("Daily limit hit")
+    assert "sk-api-secret-1" not in str(r)

@@ -1,26 +1,30 @@
 """Settings → Models (AI rules spec §4): connections and which model each task uses.
 Keys and header values go in, never come back out."""
 
+import dataclasses
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.auth.deps import AuthContext, require_user
+from app.core.clock import utcnow
 from app.models.enums import AiTaskName
 from app.schemas.ai import (
     ConnectionIn,
     ConnectionOut,
     ConnectionPatch,
+    PauseOut,
     TaskIn,
     TaskOut,
     TestIn,
     TestOut,
 )
-from app.services.ai.client import AiError
+from app.services.ai.client import AiError, AiPaused
 from app.services.ai.connections import KEEP, ConnectionError_, ConnectionNotFound
 from app.services.rules.chooser import AiChooser
 from app.services.rules.mailview import MailForModel
 from app.services.rules.match import Conditions, RuleView
+from app.services.rules.worker import wake_waiting
 
 router = APIRouter(prefix="/api/ai")
 
@@ -55,13 +59,30 @@ def _ai(request: Request):
     return request.app.state.ai
 
 
-def _out(c) -> ConnectionOut:
+def _pause_out(conn_id: int, name: str, p) -> PauseOut | None:
+    if p is None:
+        return None
+    return PauseOut(
+        kind=p.kind,
+        until=p.until,
+        reason=p.reason,
+        detail=p.detail,
+        since=p.since,
+        connection_id=conn_id,
+        connection_name=name,
+    )
+
+
+def _out(request: Request, c) -> ConnectionOut:
     return ConnectionOut(
         id=c.id,
         name=c.name,
         base_url=c.base_url,
         has_key=c.has_key,
         header_names=list(c.header_names or []),
+        resets_at=c.resets_at,
+        resets_tz=c.resets_tz,
+        pause=_pause_out(c.id, c.name, _ai(request).pause_of(c.id)),
     )
 
 
@@ -74,13 +95,23 @@ def _task_name(task: str) -> AiTaskName:
 
 @router.get("/connections", response_model=list[ConnectionOut])
 def connections(request: Request, ctx: AuthContext = Depends(require_user)):
-    return [_out(c) for c in _ai(request).connections()]
+    return [_out(request, c) for c in _ai(request).connections()]
 
 
 @router.post("/connections", response_model=ConnectionOut, status_code=201)
 def create(body: ConnectionIn, request: Request, ctx: AuthContext = Depends(require_user)):
     try:
-        return _out(_ai(request).create(body.name, body.base_url, body.api_key, body.headers))
+        return _out(
+            request,
+            _ai(request).create(
+                body.name,
+                body.base_url,
+                body.api_key,
+                body.headers,
+                resets_at=body.resets_at,
+                resets_tz=body.resets_tz,
+            ),
+        )
     except ConnectionError_ as e:
         raise HTTPException(400, str(e)) from e
 
@@ -90,20 +121,37 @@ def update(
     conn_id: int, body: ConnectionPatch, request: Request, ctx: AuthContext = Depends(require_user)
 ):
     given = body.model_fields_set
+    ai = _ai(request)
     try:
-        return _out(
-            _ai(request).update(
-                conn_id,
-                name=body.name,
-                base_url=body.base_url,
-                api_key=body.api_key if "api_key" in given else KEEP,
-                headers=(body.headers or {}) if "headers" in given else KEEP,
-            )
+        conn = ai.update(
+            conn_id,
+            name=body.name,
+            base_url=body.base_url,
+            api_key=body.api_key if "api_key" in given else KEEP,
+            headers=(body.headers or {}) if "headers" in given else KEEP,
         )
+        if "resets_at" in given or "resets_tz" in given:
+            saved_at, saved_tz, _ = ai.limits_of(conn_id)
+            conn = ai.set_resets(conn_id, body.resets_at or saved_at, body.resets_tz or saved_tz)
+        return _out(request, conn)
     except ConnectionNotFound as e:
         raise HTTPException(404, str(e)) from e
     except ConnectionError_ as e:
         raise HTTPException(400, str(e)) from e
+
+
+@router.post("/connections/{conn_id}/resume", response_model=ConnectionOut)
+def resume(conn_id: int, request: Request, ctx: AuthContext = Depends(require_user)):
+    ai = _ai(request)
+    conn = next((c for c in ai.connections() if c.id == conn_id), None)
+    if conn is None:
+        raise HTTPException(404, "That connection isn't saved.")
+    ai.clear_pause(conn_id)
+    with request.app.state.session_factory() as db:
+        wake_waiting(db, utcnow())
+        db.commit()
+    request.app.state.rule_worker.poke()
+    return _out(request, conn)
 
 
 @router.delete("/connections/{conn_id}", status_code=204)
@@ -171,11 +219,17 @@ async def test(body: TestIn, request: Request, ctx: AuthContext = Depends(requir
         )
     except ConnectionNotFound as e:
         raise HTTPException(404, str(e)) from e
+    target = dataclasses.replace(target, skip_pause=True)
     chooser = AiChooser(request.app.state.ai_client, lambda: target)
     try:
         choice = await chooser.choose(SAMPLE_RULES, SAMPLE_MAIL, [])
     except AiError as e:
-        return TestOut(ok=False, error=str(e))
+        paused = isinstance(e, AiPaused)
+        return TestOut(
+            ok=False,
+            error=e.pause.reason if paused else str(e),
+            detail=e.pause.detail if paused else None,
+        )
     chose = next((r.name for r in SAMPLE_RULES if r.id == choice.rule_id), None)
     mode = _ai(request).remembered_mode(body.connection_id, body.model)
     return TestOut(

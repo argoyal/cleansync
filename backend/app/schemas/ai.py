@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.common import UtcDatetime
+
 MAX_HEADERS = 20
 
 
@@ -21,6 +23,8 @@ class ConnectionIn(BaseModel):
     base_url: str = Field(max_length=500)
     api_key: str | None = Field(None, max_length=4000)
     headers: dict[str, str] = Field(default_factory=dict)
+    resets_at: str = Field("00:00", max_length=5)
+    resets_tz: str = Field("UTC", max_length=64)
 
     _headers = field_validator("headers")(_check_headers)
 
@@ -30,8 +34,20 @@ class ConnectionPatch(BaseModel):
     base_url: str | None = Field(None, max_length=500)
     api_key: str | None = Field(None, max_length=4000)
     headers: dict[str, str] | None = None
+    resets_at: str | None = Field(None, max_length=5)
+    resets_tz: str | None = Field(None, max_length=64)
 
     _headers = field_validator("headers")(_check_headers)
+
+
+class PauseOut(BaseModel):
+    kind: str
+    until: UtcDatetime | None
+    reason: str
+    detail: str | None
+    since: UtcDatetime
+    connection_id: int
+    connection_name: str
 
 
 class ConnectionOut(BaseModel):
@@ -40,6 +56,9 @@ class ConnectionOut(BaseModel):
     base_url: str
     has_key: bool
     header_names: list[str]
+    resets_at: str
+    resets_tz: str
+    pause: PauseOut | None = None
 
 
 class TaskIn(BaseModel):
@@ -66,3 +85,4 @@ class TestOut(BaseModel):
     chose: str | None = None
     why: str = ""
     error: str | None = None
+    detail: str | None = None
