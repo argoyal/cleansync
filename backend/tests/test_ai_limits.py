@@ -178,3 +178,23 @@ def test_check_reset():
         check_reset("25:00", "UTC")
     with pytest.raises(ValueError):
         check_reset("00:00", "Mars/Olympus")
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("Retry-After", "inf"),
+        ("Retry-After", "nan"),
+        ("Retry-After", "1e12"),
+        ("x-ratelimit-reset", "1e15"),
+    ],
+)
+def test_provider_wait_ignores_odd_values(name, value):
+    assert provider_wait({name: value}, NOW) is None
+
+
+@pytest.mark.parametrize("value", ["inf", "nan", "1e12"])
+def test_pause_end_odd_retry_after_falls_back_to_daily_reset(value):
+    assert pause_end(LIMITED, NOW, {"Retry-After": value}, "00:00", "UTC", 0) == datetime(
+        2026, 10, 14, tzinfo=UTC
+    )

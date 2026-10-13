@@ -3,6 +3,7 @@
 connection pauses for it. Pure functions; the pause itself is saved by AiSettings."""
 
 import json
+import math
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -72,9 +73,11 @@ def parse_duration(value: str) -> float | None:
     if not v:
         return None
     try:
-        return float(v)
+        num = float(v)
     except ValueError:
         pass
+    else:
+        return num if math.isfinite(num) else None  # "inf" and "nan" are not waits
     m = _DURATION.match(v)
     if not m or not any(m.groups()):
         return None
@@ -83,21 +86,26 @@ def parse_duration(value: str) -> float | None:
 
 
 def _one_wait(name: str, value: str, now: datetime) -> datetime | None:
-    if name == "retry-after":
+    # A header is untrusted input. A huge or odd value must not raise here, because this runs
+    # while a failed model reply is being handled and the pause still has to be saved.
+    try:
+        if name == "retry-after":
+            secs = parse_duration(value)
+            if secs is not None:
+                return now + timedelta(seconds=secs)
+            try:
+                when = parsedate_to_datetime(value)
+            except (TypeError, ValueError):
+                return None
+            return when if when.tzinfo else when.replace(tzinfo=UTC)
         secs = parse_duration(value)
-        if secs is not None:
-            return now + timedelta(seconds=secs)
-        try:
-            when = parsedate_to_datetime(value)
-        except (TypeError, ValueError):
+        if secs is None:
             return None
-        return when if when.tzinfo else when.replace(tzinfo=UTC)
-    secs = parse_duration(value)
-    if secs is None:
+        if secs > 1_000_000_000:  # a Unix time, not a number of seconds
+            return datetime.fromtimestamp(secs, tz=UTC)
+        return now + timedelta(seconds=secs)
+    except (OverflowError, ValueError, OSError):
         return None
-    if secs > 1_000_000_000:  # a Unix time, not a number of seconds
-        return datetime.fromtimestamp(secs, tz=UTC)
-    return now + timedelta(seconds=secs)
 
 
 def provider_wait(headers: Mapping[str, str], now: datetime) -> datetime | None:
