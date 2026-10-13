@@ -96,12 +96,32 @@ async def test_answers_over_http_like_a_real_server():
                 pass
 
         client = AiClient(Modes(), retry_pause_s=0)
-        assert await client.list_models(t) == ["fake-sorter"]
+        assert await client.list_models(t) == ["fake-limited", "fake-sorter"]
         choice = await AiChooser(client, lambda: t).choose(RULES, mail("Travel plans"), [])
         assert choice.rule_id == 3
         draft = await drafting.sentence_to_rule(client, t, "Archive newsletters")
         assert draft.description == "Archive newsletters" and draft.notes == []
         assert draft.actions == [{"kind": "archive"}]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_fake_limited_model_answers_429():
+    import httpx
+
+    server = make_server(0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/v1"
+        r = httpx.post(
+            f"{url}/chat/completions",
+            json={"model": "fake-limited", "messages": [{"role": "user", "content": "x"}]},
+        )
+        assert r.status_code == 429 and r.headers["Retry-After"] == "3600"
+        assert "Rate limit reached" in r.json()["error"]["message"]
+        models = httpx.get(f"{url}/models").json()["data"]
+        assert {"id": "fake-limited"} in models
     finally:
         server.shutdown()
         server.server_close()

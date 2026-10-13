@@ -99,3 +99,36 @@ test("a rule written in a sentence previews, applies, undoes; Delete keeps a cop
 
   expect(problems, problems.join("\n")).toEqual([]);
 });
+
+test("a model that hits its limit pauses its connection until Resume now", async ({ page }) => {
+  test.setTimeout(120_000);
+  await ready(page);
+  await page.goto("/settings?tab=models");
+  await page.getByRole("button", { name: "Add connection" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add connection" });
+  await dialog.getByLabel("Name").fill("Limited");
+  await dialog.getByLabel("Address").fill(FAKE_MODEL_URL);
+  await dialog.getByRole("button", { name: "Save connection" }).click();
+  await expect(dialog).toBeHidden();
+
+  // The model "fake-limited" always says its daily limit is used up; Test shows the server's words.
+  const writing = page.getByRole("group", { name: "Writing rules" });
+  await writing.getByLabel("Connection").selectOption({ label: "Limited" });
+  await writing.getByLabel("Model").fill("fake-limited");
+  await writing.getByRole("button", { name: "Test", exact: true }).click();
+  await expect(writing.getByText(/The server said: Rate limit reached for requests per day/)).toBeVisible();
+
+  // The connection is now paused: the row says until when, and Resume now ends the pause.
+  const row = page.getByRole("listitem").filter({ hasText: "Limited" });
+  await expect(row.getByText(/Paused until/)).toBeVisible();
+  await row.getByRole("button", { name: "Show the server's message" }).click();
+  await expect(row.getByText(/Try again tomorrow/)).toBeVisible();
+  await row.getByRole("button", { name: "Resume now" }).click();
+  await expect(row.getByText(/Paused until/)).toBeHidden();
+
+  // Leave the settings as the first test expects them.
+  await writing.getByLabel("Connection").selectOption({ label: "None" });
+  await writing.getByRole("button", { name: "Save", exact: true }).click();
+  await row.getByRole("button", { name: "Remove Limited" }).click();
+  await expect(row).toBeHidden();
+});

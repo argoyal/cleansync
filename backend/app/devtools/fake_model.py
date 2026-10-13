@@ -10,6 +10,7 @@ three questions CleanSync asks, without any real AI:
   else the first rule with a word of its description in the subject, else 0;
 - a sentence to a rule: the sentence as the description, and Archive as the action;
 - picked mails to a name and description: from their first subject and their senders.
+The model "fake-limited" always answers HTTP 429 (a used-up daily limit), to try the pause.
 """
 
 import argparse
@@ -22,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from app.services.rules import chooser, drafting
 
 MODEL = "fake-sorter"
+LIMITED_MODEL = "fake-limited"  # always answers "daily limit used up" (HTTP 429)
 RULE_LINE = re.compile(r"^(\d+)\. ([^:\n]+): ?(.*)$", re.MULTILINE)
 SUBJECT = re.compile(r"^Subject: (.*)$", re.MULTILINE)
 ADDRESS = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
@@ -95,17 +97,19 @@ def answer(system: str, user: str) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _send(self, body: dict, status: int = 200) -> None:
+    def _send(self, body: dict, status: int = 200, headers: dict | None = None) -> None:
         data = json.dumps(body).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(data)
 
     def do_GET(self):  # noqa: N802
         if self.path.rstrip("/").endswith("/models"):
-            self._send({"data": [{"id": MODEL}]})
+            self._send({"data": [{"id": MODEL}, {"id": LIMITED_MODEL}]})
         else:
             self._send({"error": "not found"}, 404)
 
@@ -118,6 +122,17 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             self._send({"error": "not JSON"}, 400)
+            return
+        if body.get("model") == LIMITED_MODEL:
+            self._send(
+                {
+                    "error": {
+                        "message": "Rate limit reached for requests per day. Try again tomorrow."
+                    }
+                },
+                429,
+                {"Retry-After": "3600"},
+            )
             return
         msgs = body.get("messages") or [{}]
         system = next((m.get("content", "") for m in msgs if m.get("role") == "system"), "")

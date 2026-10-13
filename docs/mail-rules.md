@@ -23,6 +23,10 @@ Open **Settings → Models**.
    **List models** asks the server which models it has. Temperature 0 and a 60-second timeout are good defaults.
 3. Press **Save**, then **Test**. Test sends one made-up mail (a weekly digest) and two made-up rules (Receipts and Newsletters) to the model. It shows how long the answer took, which rule it picked, and which way of answering worked. A good model picks Newsletters.
 
+Many free models have a daily limit. If yours does, set **Daily limit resets at** (and its **Time zone**) in the connection. CleanSync uses it when the provider says the limit is used up but doesn't say when it starts again. Most providers reset at 00:00 UTC, which is the default. Gemini resets at midnight Pacific time, so for Gemini choose 00:00 and the time zone `America/Los_Angeles`.
+
+If you paste an address that ends in `/chat/completions`, CleanSync shortens it to the part before it.
+
 CleanSync talks to any server that speaks the OpenAI chat API. It first asks for a strict JSON answer; if the server can't do that, it asks for plain JSON, then for a plain line like `Rule: 2`. It remembers which one worked for each model.
 
 ## 2. Write rules
@@ -104,9 +108,22 @@ All of this comes from CleanSync's own copy of the mail; Gmail is never read for
 
 ## 7. When the model is down
 
-No mail is ever sorted on a guess. If the model can't be reached or doesn't answer in time, the mail simply waits and is tried again later, waiting a bit longer each time. After about an hour of failures, the Mail status line shows a warning with the reason. An answer that can't be read, or that names a rule that isn't on the list, counts as "no rule".
+No mail is ever sorted on a guess. When the model can't answer, CleanSync stops calling that connection for a while, and the mail waits. How long depends on what went wrong:
 
-Rules with only fixed conditions, and remembered senders, keep working without a model.
+- **The provider says its limit is used up.** CleanSync stops calling the connection until the time the provider gave. If the provider gave none, it waits until the connection's daily reset time (see "Set up a model"). If the provider only asks for a short wait, such as a minute, CleanSync waits just that long.
+- **The model can't be reached** (the server is off, the network is down, or it is too slow). CleanSync waits 1 minute, then 5, 15 and 60 minutes, and then 6 hours between tries. The first answer that works starts the count again.
+- **The settings are wrong** (the key is refused, there is no model with that name, or the address is wrong). Waiting won't fix this, so CleanSync stops until you change the connection or the task, or press **Resume now** or **Test**.
+
+While a connection is paused:
+
+- The whole connection is paused, for every mailbox and every task that uses it. Run rules, Try it and Write the rule use it too: they tell you the model is paused and change nothing.
+- Mail doesn't use up its tries, and nothing is lost. The mail is sorted when the pause ends.
+- Rules with only fixed conditions, and remembered senders, keep working without a model.
+- The pause is saved. It is still there after CleanSync restarts.
+
+You see a pause in three places: the Mail status line ("Sorting is waiting. …", with the reason and the time), the Run rules window, and Settings → Models, next to the connection ("Paused until …"). Press **Show the server's message** there to read exactly what the provider said. **Resume now** ends the pause at once and makes the waiting mail due again. A working **Test** does the same.
+
+An answer that can't be read, or that names a rule that isn't on the list, counts as "no rule".
 
 ## Limits to know about
 

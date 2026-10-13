@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added: a model connection now pauses when the provider says its limit is used up, until the time the provider gave or the connection's **Daily limit resets at** time. The pause is saved and survives a restart. **Resume now** ends it, and Settings → Models shows the server's own message (Test shows it too).
+- Changed: a 429 reply is no longer retried at once. A limit error no longer tries every answer format. An address ending in `/chat/completions` is shortened to the part before it. A 405 reply now explains that the address usually ends in `/v1`.
+
 ## 0.3.1 — 2026-10-12
 
 - Fix: starting a new "Run rules on…" right after closing a preview that was still deciding could leave a mail out of the new run, and turning sorting off while a mail is being sorted no longer sorts it.

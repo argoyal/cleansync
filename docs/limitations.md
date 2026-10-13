@@ -56,4 +56,6 @@ When a new version changes the list of files that never sync (for example, the v
 - A run of rules on older mail covers at most 20,000 mails at a time.
 - The record a Delete forever leaves in the Activity log keeps the mail's sender, subject and date.
 - Only new inbox mail is sorted automatically; mail a Gmail filter sends straight to a label is not.
+- A paused connection pauses every task that uses it; there are no backup models yet.
+- CleanSync doesn't count requests itself: it only reacts when the provider says the limit is used up.
 - The model's server sees the text CleanSync sends it (up to 2,000 characters per mail). Use a local model if that matters.
