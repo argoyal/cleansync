@@ -409,3 +409,15 @@ def test_rule_job_preview_carries_the_pause(auth_client, app, acc, db, layout):
     pause()
     p = auth_client.get(f"/api/rule-jobs/{jid}", params={"account_id": acc.id}).json()
     assert p["paused"]["kind"] == "limited"
+
+
+def test_try_it_says_why_while_the_sorting_model_is_paused(auth_client, app, acc, db, layout):
+    from app.devtools.fake_gmail import make_mail
+    from tests.rules_helpers import keep
+
+    _, pause = _pause_sorting_connection(app)
+    pause()
+    keep(db, layout, acc, make_mail("Weekly digest"))
+    rule = {**RULE, "combine": "ai_only"}
+    r = auth_client.post("/api/rules/try", json={"account_id": acc.id, "rule": rule})
+    assert r.status_code == 503 and "usage limit" in r.json()["detail"]

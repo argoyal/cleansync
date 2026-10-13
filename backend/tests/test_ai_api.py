@@ -210,3 +210,14 @@ def test_test_button_shows_the_providers_message(auth_client):
     ).json()
     assert r["ok"] is False and r["detail"].startswith("Daily limit hit")
     assert "sk-api-secret-1" not in str(r)
+
+
+def test_rejected_reset_time_changes_nothing(auth_client):
+    c = make(auth_client)
+    bad = auth_client.patch(
+        f"/api/ai/connections/{c['id']}", json={"name": "Renamed", "resets_tz": "Nowhere/Land"}
+    )
+    assert bad.status_code == 400
+    assert auth_client.get("/api/ai/connections").json()[0]["name"] == "Ollama"
+    odd = auth_client.patch(f"/api/ai/connections/{c['id']}", json={"resets_at": "25:99"})
+    assert odd.status_code == 400

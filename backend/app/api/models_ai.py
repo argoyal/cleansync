@@ -21,6 +21,7 @@ from app.schemas.ai import (
 )
 from app.services.ai.client import AiError, AiPaused
 from app.services.ai.connections import KEEP, ConnectionError_, ConnectionNotFound
+from app.services.ai.limits import check_reset
 from app.services.rules.chooser import AiChooser
 from app.services.rules.mailview import MailForModel
 from app.services.rules.match import Conditions, RuleView
@@ -123,6 +124,13 @@ def update(
     given = body.model_fields_set
     ai = _ai(request)
     try:
+        if "resets_at" in given or "resets_tz" in given:
+            # Check first, so a rejected request changes nothing.
+            saved_at, saved_tz, _ = ai.limits_of(conn_id)
+            try:
+                check_reset(body.resets_at or saved_at, body.resets_tz or saved_tz)
+            except ValueError as e:
+                raise ConnectionError_(str(e)) from None
         conn = ai.update(
             conn_id,
             name=body.name,
@@ -131,7 +139,6 @@ def update(
             headers=(body.headers or {}) if "headers" in given else KEEP,
         )
         if "resets_at" in given or "resets_tz" in given:
-            saved_at, saved_tz, _ = ai.limits_of(conn_id)
             conn = ai.set_resets(conn_id, body.resets_at or saved_at, body.resets_tz or saved_tz)
         return _out(request, conn)
     except ConnectionNotFound as e:
