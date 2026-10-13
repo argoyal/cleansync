@@ -53,6 +53,13 @@ describe("the search form's words", () => {
     }
   });
 
+  it("keeps every date keyword when several are typed (the server intersects them, so order doesn't matter)", () => {
+    for (const text of ["older_than:1y older_than:30d", "before:2024-01-01 after:2023-01-01", "newer_than:2y older_than:30d before:2024-01-01"]) {
+      const written = writeSearch(readSearch(text));
+      expect(written.split(" ").sort()).toEqual(text.split(" ").sort());
+    }
+  });
+
   it("round-trips To and Label values with spaces, and drops quote marks", () => {
     const text = 'to:"Jane Doe" label:"My Label"';
     const f = readSearch(text, ["My Label"]);
