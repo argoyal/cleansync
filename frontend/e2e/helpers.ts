@@ -58,16 +58,16 @@ export async function ready(page: Page) {
   await expect(page.getByRole("button", { name: "Welcome.txt", exact: true })).toBeVisible();
 }
 
-/** Mail set up for alice and its first backup done (the sample mailbox: 24 kept of 26). */
+/** Mail set up for alice and its first backup done (the sample mailbox: 26 kept of 28). */
 export async function setUpMail(page: Page) {
   await page.goto("/mail");
-  const status = page.getByText(/^24 mails · .* · checked/);
+  const status = page.getByText(/^26 mails · .* · checked/);
   const setUp = page.getByRole("button", { name: "Set up mail backup" }).first();
   await expect(status.or(setUp)).toBeVisible(); // wait for the page to settle before choosing
   if (await status.isVisible()) return;
   await setUp.click();
   await expect(page.getByRole("heading", { name: "Start mail backup" })).toBeVisible();
-  await expect(page.getByText("About 26 mails. The first backup takes a few hours. Nothing in Gmail changes.")).toBeVisible();
+  await expect(page.getByText("About 28 mails. The first backup takes a few hours. Nothing in Gmail changes.")).toBeVisible();
   await page.getByRole("button", { name: "Start", exact: true }).click();
   await expect(status).toBeVisible({ timeout: 120_000 });
 }

@@ -307,7 +307,7 @@ test("mail backup of the pretend account, with its job on Sync activity", async 
 
   await rail(page).getByRole("link", { name: /^Mail/ }).click();
   await page.getByRole("button", { name: "Check now" }).click();
-  await expect(page.getByText(/^24 mails · .* · checked/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/^26 mails · .* · checked/)).toBeVisible({ timeout: 60_000 });
 
   // The click made a new job: one more log than before.
   await rail(page).getByRole("link", { name: /^Activity/ }).click();
@@ -360,9 +360,9 @@ test("read mail safely: threads, a hostile mail, images on request, attachments,
   await ready(page);
   await setUpMail(page);
 
-  // All mail lists the 24 kept mails as threads (two of them are two-mail threads).
-  await expect(page.getByText(/^24 mails · /).first()).toBeVisible();
-  await expect(page.getByRole("list", { name: "Mail" }).getByRole("listitem")).toHaveCount(22);
+  // All mail lists the 26 kept mails as threads (two of them are two-mail threads).
+  await expect(page.getByText(/^26 mails · /).first()).toBeVisible();
+  await expect(page.getByRole("list", { name: "Mail" }).getByRole("listitem")).toHaveCount(24);
 
   // A mail with a script and an onclick: the text shows, nothing runs.
   const hostile = await openMailNamed(page, "Weekly digest #52");

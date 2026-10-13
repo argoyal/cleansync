@@ -443,8 +443,8 @@ def make_mail(
     return msg.as_bytes(policy=msg.policy.clone(linesep="\r\n"))
 
 
-SAMPLE_KEPT = 24
-SAMPLE_TOTAL = 26  # with one Spam and one draft, which are never kept
+SAMPLE_KEPT = 26
+SAMPLE_TOTAL = 28  # with one Spam and one draft, which are never kept
 SAMPLE_OLDER_THAN_A_YEAR = 13
 
 
@@ -474,6 +474,18 @@ def sample_mailbox(fake: FakeGmail, now: datetime) -> None:
         labels=("INBOX",),
         when=days(5),
     )
+    # Mail the Marketing starter rule fits (an unsubscribe link, an offer in the subject).
+    for subject, age in (("Big sale: 30% off shoes", 15), ("Spring offers just for you", 25)):
+        add(
+            make_mail(
+                subject,
+                sender="deals@shop.example.com",
+                when=days(age),
+                headers={"List-Unsubscribe": "<mailto:unsubscribe@shop.example.com>"},
+            ),
+            labels=("INBOX",),
+            when=days(age),
+        )
     add(
         make_mail(
             "Trip photos",

@@ -15,7 +15,7 @@ async function rows(page: Page, view: string) {
   return list;
 }
 
-test("a rule written in a sentence previews, applies, undoes; a search offloads, restores and deletes forever", async ({ page }) => {
+test("a rule written in a sentence runs from its card, applies, undoes; a search offloads, restores and deletes forever", async ({ page }) => {
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   const problems: string[] = [];
@@ -52,17 +52,18 @@ test("a rule written in a sentence previews, applies, undoes; a search offloads,
   await write.getByRole("button", { name: "Save rule" }).click();
   await expect(page.getByText("Rule “Invoice” saved.")).toBeVisible();
 
-  // 3. Run the rules on the inbox: a preview that changes nothing, then the typed count.
-  await page.getByRole("button", { name: "Run rules on…" }).click();
+  // 3. Run the rule from its card: it decides the Inbox with this rule alone, lists what it
+  //    matched (all picked), and archives the mail on approval. No typed count for Archive.
+  await page.getByRole("button", { name: "Run, Invoice" }).click();
   const run = page.getByRole("dialog", { name: "Run rules" });
-  const typeIt = run.getByLabel("Type 1 to make these changes");
-  await expect(typeIt).toBeVisible({ timeout: 60_000 });
-  const examples = run.getByRole("list", { name: "Examples for Invoice" });
-  await expect(examples).toContainText("Invoice October");
-  await expect(examples).toContainText("subject mentions Invoice");
-  await typeIt.fill("1");
-  await run.getByRole("button", { name: "Change 1 mail" }).click();
-  await expect(run.getByText("Done. Applied 1, skipped 0, failed 0.")).toBeVisible({ timeout: 60_000 });
+  const matched = run.getByRole("list", { name: "Matched mail" });
+  await expect(matched.getByRole("listitem")).toHaveCount(1, { timeout: 60_000 });
+  await expect(matched).toContainText("Invoice October");
+  await expect(matched).toContainText("subject mentions Invoice");
+  await expect(run.getByText(/^Invoice would archive 1 mail\./)).toBeVisible();
+  await expect(run.getByRole("checkbox", { name: "Pick all" })).toBeChecked();
+  await run.getByRole("button", { name: "Archive 1 mail" }).click();
+  await expect(run.getByText("Done. Applied 1, skipped 0, failed 0, left out 0.")).toBeVisible({ timeout: 60_000 });
   await run.getByRole("button", { name: "Close" }).click();
   await expect((await rows(page, "inbox")).getByRole("link", { name: /Invoice October/ })).toHaveCount(0); // archived
 
@@ -128,6 +129,65 @@ test("a rule written in a sentence previews, applies, undoes; a search offloads,
     await expect(page.getByText("Deleted 1 mail forever.")).toBeVisible();
     await expect(page.getByText("No mail here.")).toBeVisible();
   }
+
+  expect(problems, problems.join("\n")).toEqual([]);
+});
+
+// Runs after the first test, which points Sorting at the pretend model and backs up the sample
+// mailbox. It doesn't call setUpMail: the first test's Delete forever can change the kept count.
+test("Run rules on a search leaves out an unticked mail; Run on the Marketing card archives it", async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const problems: string[] = [];
+  page.on("pageerror", (e) => problems.push(e.message));
+  await ready(page);
+
+  // 1. Add the starter rule Marketing.
+  await page.goto("/mail/rules");
+  await page.getByRole("button", { name: "Starter rules…" }).click();
+  const starters = page.getByRole("dialog", { name: "Starter rules" });
+  await starters.getByRole("checkbox", { name: /^Marketing/ }).check();
+  await starters.getByRole("button", { name: "Add" }).click();
+  await expect(page.getByText("Added 1 rule.")).toBeVisible();
+
+  // 2. A search in the Inbox, Run rules with Marketing ticked, one mail unticked.
+  await page.goto("/mail?view=inbox&q=from%3Adeals");
+  await expect(page.getByRole("list", { name: "Mail" }).getByRole("listitem")).toHaveCount(2);
+  await page.getByRole("button", { name: "Run rules", exact: true }).click();
+  const picker = page.getByRole("dialog", { name: "Run rules" });
+  await expect(picker.getByText("Run on: 2 mails matching from:deals")).toBeVisible();
+  await expect(picker.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
+  await picker.getByRole("checkbox", { name: /^Marketing/ }).check();
+  await picker.getByRole("button", { name: "Run", exact: true }).click();
+  const run = page.getByRole("dialog", { name: "Run rules" });
+  const matched = run.getByRole("list", { name: "Matched mail" });
+  await expect(matched.getByRole("listitem")).toHaveCount(2, { timeout: 60_000 });
+  await expect(run.getByText(/^Marketing would change 2 mails: Label Marketing, Archive\./)).toBeVisible();
+  await run.getByRole("checkbox", { name: "Pick Spring offers just for you" }).uncheck();
+  await expect(run.getByRole("checkbox", { name: "Pick all" })).not.toBeChecked();
+  await run.getByRole("button", { name: "Apply 1 change" }).click();
+  await expect(run.getByText("Done. Applied 1, skipped 0, failed 0, left out 1.")).toBeVisible({ timeout: 60_000 });
+  await run.getByRole("button", { name: "Close" }).click();
+  const inbox = await rows(page, "inbox");
+  await expect(inbox.getByRole("link", { name: /Big sale/ })).toHaveCount(0);
+  await expect(inbox.getByRole("link", { name: /Spring offers just for you/ })).toBeVisible(); // left alone
+
+  // 3. Run on the Marketing card covers the Inbox: it finds the mail left out before.
+  await page.goto("/mail/rules");
+  await page.getByRole("button", { name: "Run, Marketing" }).click();
+  const cardRun = page.getByRole("dialog", { name: "Run rules" });
+  const list = cardRun.getByRole("list", { name: "Matched mail" });
+  await expect(list.getByRole("listitem")).toHaveCount(1, { timeout: 60_000 });
+  await expect(list).toContainText("Spring offers just for you");
+  await cardRun.getByRole("button", { name: "Apply 1 change" }).click();
+  await expect(cardRun.getByText("Done. Applied 1, skipped 0, failed 0, left out 0.")).toBeVisible({ timeout: 60_000 });
+  await cardRun.getByRole("button", { name: "Close" }).click();
+
+  // 4. Both marketing mails are archived: in Archived, not in the Inbox.
+  const archived = await rows(page, "archived");
+  await expect(archived.getByRole("link", { name: /Big sale/ })).toBeVisible();
+  await expect(archived.getByRole("link", { name: /Spring offers just for you/ })).toBeVisible();
+  await expect((await rows(page, "inbox")).getByRole("link", { name: /Spring offers/ })).toHaveCount(0);
 
   expect(problems, problems.join("\n")).toEqual([]);
 });

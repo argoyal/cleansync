@@ -342,3 +342,23 @@ async def test_the_typed_count_is_asked_only_for_picked_offloads(gbox, monkeypat
     jobs.run(gbox.acc.id, jid, 1, left_out=[ids["Junk b"]])
     await jobs.wait(jid)
     assert sorted(applied) == sorted([ids["News a"], ids["Junk a"]])
+
+
+def test_the_sample_mailbox_has_mail_the_marketing_starter_fits():
+    import email
+    from datetime import UTC, datetime
+
+    from app.devtools import fake_model
+    from app.devtools.fake_gmail import SAMPLE_TOTAL, FakeGmail, sample_mailbox
+    from app.services.rules.store import STARTERS
+
+    fake = FakeGmail("alice@example.com")
+    sample_mailbox(fake, datetime(2026, 10, 13, tzinfo=UTC))
+    assert len(fake.messages) == SAMPLE_TOTAL == 28
+    heads = [email.message_from_bytes(m.raw) for m in fake.messages.values()]
+    lists = sorted(str(h["Subject"]) for h in heads if h["List-Unsubscribe"])
+    assert lists == ["Big sale: 30% off shoes", "Spring offers just for you"]
+    marketing = STARTERS["Marketing"].description
+    for subject in lists:  # the pretend model picks Marketing for both, as the browser test needs
+        asked = f"1. Marketing: {marketing}\n<<<EMAIL\nSubject: {subject}\n"
+        assert fake_model._choose(asked)["rule"] == 1
