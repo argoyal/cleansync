@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api, query } from "./client";
 
-export type RuleAction = { kind: "archive" | "mark_read" | "star" | "delete" } | { kind: "label"; label: string };
+export type RuleAction = { kind: "archive" | "mark_read" | "star" | "offload" | "delete_forever" } | { kind: "label"; label: string };
 export type RuleConditions = {
   senders_in?: string[];
   senders_not_in?: string[];
@@ -112,7 +112,7 @@ export type AiTaskName = "sorting" | "writing_rules";
 export type AiTask = { task: AiTaskName; connection_id: number | null; model: string; temperature: number; timeout_s: number };
 export type AiTest = { ok: boolean; took_ms: number; mode: string | null; chose: string | null; why: string; error: string | null; detail?: string | null };
 
-const ACTION_WORDS = { archive: "Archive", mark_read: "Mark read", star: "Star", delete: "Delete" } as const;
+const ACTION_WORDS = { archive: "Archive", mark_read: "Mark read", star: "Star", offload: "Offload", delete_forever: "Delete forever" } as const;
 
 export function describeAction(a: RuleAction): string {
   return a.kind === "label" ? `Label ${a.label}` : ACTION_WORDS[a.kind];

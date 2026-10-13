@@ -74,11 +74,11 @@ export function RuleForm({
   const c0 = initial.conditions;
   const [name, setName] = useState(initial.name);
   const [description, setDescription] = useState(initial.description);
-  const [simple, setSimple] = useState<Set<Simple>>(new Set(initial.actions.flatMap((a) => (a.kind === "label" || a.kind === "delete" ? [] : [a.kind]))));
+  const [simple, setSimple] = useState<Set<Simple>>(new Set(initial.actions.flatMap((a) => (SIMPLE.some(([k]) => k === a.kind) ? [a.kind as Simple] : []))));
   const firstLabel = initial.actions.find((a) => a.kind === "label");
   const [labelOn, setLabelOn] = useState(firstLabel !== undefined);
   const [labelName, setLabelName] = useState(firstLabel && "label" in firstLabel ? firstLabel.label : "");
-  const [del, setDel] = useState(initial.actions.some((a) => a.kind === "delete"));
+  const [off, setOff] = useState(initial.actions.some((a) => a.kind === "offload"));
   const [text, setText] = useState<Text>({
     senders_in: (c0.senders_in ?? []).join(", "),
     senders_not_in: (c0.senders_not_in ?? []).join(", "),
@@ -105,9 +105,9 @@ export function RuleForm({
     setAddressed(a);
   };
 
-  // Delete stands alone: ticking it clears the others, and ticking another clears it.
-  const pickDelete = (on: boolean) => {
-    setDel(on);
+  // Offload stands alone: ticking it clears the others, and ticking another clears it.
+  const pickOffload = (on: boolean) => {
+    setOff(on);
     if (on) {
       setSimple(new Set());
       setLabelOn(false);
@@ -118,15 +118,15 @@ export function RuleForm({
     if (on) next.add(kind);
     else next.delete(kind);
     setSimple(next);
-    if (on) setDel(false);
+    if (on) setOff(false);
   };
   const pickLabel = (on: boolean) => {
     setLabelOn(on);
-    if (on) setDel(false);
+    if (on) setOff(false);
   };
 
-  const actions: RuleAction[] = del
-    ? [{ kind: "delete" }]
+  const actions: RuleAction[] = off
+    ? [{ kind: "offload" }]
     : [...SIMPLE.filter(([k]) => simple.has(k)).map(([kind]) => ({ kind })), ...(labelOn ? [{ kind: "label" as const, label: labelName.trim() }] : [])];
   const rule: RuleFields = {
     name: name.trim(),
@@ -157,7 +157,8 @@ export function RuleForm({
       <fieldset>
         <legend className="mb-1 text-table font-medium text-ink-2">What it does</legend>
         <div className="flex flex-wrap gap-x-5 gap-y-2">
-          {SIMPLE.map(([kind, label]) => (
+          {/* Mail panel spec §8: Archive, Label, Mark read, Star, Offload, Delete forever. */}
+          {[SIMPLE[0]].map(([kind, label]) => (
             <label key={kind} className="flex items-center gap-2">
               <input type="checkbox" checked={simple.has(kind)} onChange={(e) => pickSimple(kind, e.target.checked)} />
               {label}
@@ -167,9 +168,20 @@ export function RuleForm({
             <input type="checkbox" checked={labelOn} onChange={(e) => pickLabel(e.target.checked)} />
             Label
           </label>
+          {SIMPLE.slice(1).map(([kind, label]) => (
+            <label key={kind} className="flex items-center gap-2">
+              <input type="checkbox" checked={simple.has(kind)} onChange={(e) => pickSimple(kind, e.target.checked)} />
+              {label}
+            </label>
+          ))}
           <label className="flex items-center gap-2">
-            <input type="checkbox" checked={del} aria-describedby={`${id}-del`} onChange={(e) => pickDelete(e.target.checked)} />
-            Delete
+            <input type="checkbox" checked={off} aria-describedby={`${id}-off`} onChange={(e) => pickOffload(e.target.checked)} />
+            Offload
+          </label>
+          {/* Round 3 of 0.5.0 turns this on, with the full Gmail permission. */}
+          <label className="flex items-center gap-2 text-ink-2">
+            <input type="checkbox" checked={false} disabled aria-describedby={`${id}-forever`} onChange={() => undefined} />
+            Delete forever
           </label>
         </div>
         {labelOn && (
@@ -179,8 +191,11 @@ export function RuleForm({
             </Field>
           </div>
         )}
-        <p id={`${id}-del`} className="mt-1 text-meta text-ink-2">
-          Delete moves mail to Gmail's trash; CleanSync keeps it in the Local archive.
+        <p id={`${id}-off`} className="mt-1 text-meta text-ink-2">
+          Offload checks CleanSync's copy, moves the mail out of Gmail and keeps the copy in Offloaded. You can restore it later.
+        </p>
+        <p id={`${id}-forever`} className="mt-1 text-meta text-ink-2">
+          Needs full Gmail access (coming in this release)
         </p>
       </fieldset>
 

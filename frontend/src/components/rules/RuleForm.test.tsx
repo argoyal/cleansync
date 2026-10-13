@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -17,7 +17,7 @@ const DRAFT: RuleDraft = {
 const SAVED = { ...DRAFT, mode: "suggest", enabled: true, id: 5, position: 0, version: 1, decided_7d: 0, senders: [] };
 
 describe("RuleForm", () => {
-  it("fills from a draft, keeps Delete on its own, and saves the right body", async () => {
+  it("fills from a draft, keeps Offload on its own, and saves the right body", async () => {
     const { calls } = mockApi({ "POST /api/rules": SAVED });
     const onSaved = vi.fn();
     renderApp(<RuleForm accountId={1} initial={DRAFT} onSaved={onSaved} onCancel={() => {}} />);
@@ -27,14 +27,14 @@ describe("RuleForm", () => {
     expect(screen.getByLabelText("From")).toHaveValue("news@example.com");
     expect(screen.getByLabelText("How these work with the description")).toHaveValue("fixed_then_ai");
 
-    await userEvent.click(screen.getByRole("checkbox", { name: "Delete" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Offload" }));
     expect(screen.getByRole("checkbox", { name: "Archive" })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Star" })).not.toBeChecked();
-    expect(screen.getByText(/Delete moves mail to Gmail's trash; CleanSync keeps it in the Local archive/)).toBeInTheDocument();
+    expect(screen.getByText(/Offload checks CleanSync's copy, moves the mail out of Gmail and keeps the copy in Offloaded/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("checkbox", { name: "Mark read" }));
-    expect(screen.getByRole("checkbox", { name: "Delete" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Offload" })).not.toBeChecked();
     await userEvent.click(screen.getByRole("checkbox", { name: "Mark read" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Delete" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Offload" }));
 
     await userEvent.clear(screen.getByLabelText("From"));
     await userEvent.type(screen.getByLabelText("From"), " a@example.com , ,b.example.com ");
@@ -48,12 +48,30 @@ describe("RuleForm", () => {
         description: "Newsletters I signed up for",
         conditions: { senders_in: ["a@example.com", "b.example.com"], subject_contains: ["digest", "weekly"] },
         combine: "fixed_then_ai",
-        actions: [{ kind: "delete" }],
+        actions: [{ kind: "offload" }],
         mode: "automatic",
         enabled: true,
       }),
     );
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  });
+
+  it("lists the actions in order, with Delete forever shown but not yet available", () => {
+    mockApi({});
+    renderApp(<RuleForm accountId={1} initial={DRAFT} onSaved={() => {}} onCancel={() => {}} />);
+    const what = screen.getByRole("group", { name: "What it does" });
+    expect(within(what).getAllByRole("checkbox").map((c) => c.closest("label")?.textContent?.trim())).toEqual([
+      "Archive",
+      "Label",
+      "Mark read",
+      "Star",
+      "Offload",
+      "Delete forever",
+    ]);
+    const forever = within(what).getByRole("checkbox", { name: "Delete forever" });
+    expect(forever).toBeDisabled();
+    expect(forever).toHaveAccessibleDescription("Needs full Gmail access (coming in this release)");
+    expect(within(what).queryByRole("checkbox", { name: "Delete" })).not.toBeInTheDocument();
   });
 
   it("hides how conditions combine until one is filled, and sends ai_only without any", async () => {
