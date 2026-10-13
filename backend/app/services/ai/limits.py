@@ -63,7 +63,7 @@ def has_limit_words(text: str) -> bool:
 def kind_of(status: int, text: str) -> str:
     if status in (429, 402):
         return LIMITED
-    if status >= 500:
+    if status == 408 or status >= 500:  # a request timeout is the server's trouble, not yours
         return DOWN
     return LIMITED if has_limit_words(text) else NEEDS_YOU
 

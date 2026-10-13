@@ -221,3 +221,79 @@ def test_rejected_reset_time_changes_nothing(auth_client):
     assert auth_client.get("/api/ai/connections").json()[0]["name"] == "Ollama"
     odd = auth_client.patch(f"/api/ai/connections/{c['id']}", json={"resets_at": "25:99"})
     assert odd.status_code == 400
+
+
+# ---- every way a pause is cleared wakes waiting mail (final fix 1) -------------------
+
+
+@pytest.fixture
+def parked(make_account, db, layout):
+    """A to-do row parked five hours ahead, as if waiting on a paused model."""
+    from app.devtools.fake_gmail import make_mail
+    from app.models import RuleTodo
+    from tests.rules_helpers import keep
+
+    acc = make_account()
+    row = keep(db, layout, acc, make_mail("Waiting"))
+    db.add(
+        RuleTodo(account_id=acc.id, message_id=row.id, next_try_at=utcnow() + timedelta(hours=5))
+    )
+    db.commit()
+
+    def next_try():
+        from app.core.clock import as_utc
+        from app.models import RuleTodo
+
+        db.expire_all()
+        return as_utc(db.get(RuleTodo, (acc.id, row.id)).next_try_at)
+
+    return next_try
+
+
+def _is_due(next_try):
+    return next_try() <= utcnow() + timedelta(seconds=1)
+
+
+@respx.mock
+def test_a_working_test_makes_waiting_mail_due(auth_client, app, parked):
+    c = make(auth_client)
+    app.state.ai.set_pause(c["id"], NEEDS_YOU, None, "r", None, utcnow())
+    respx.post(f"{URL}/chat/completions").mock(
+        return_value=httpx.Response(
+            200, json={"choices": [{"message": {"content": '{"rule": 2, "why": "digest"}'}}]}
+        )
+    )
+    assert not _is_due(parked)
+    r = auth_client.post("/api/ai/test", json={"connection_id": c["id"], "model": "llama3.1:8b"})
+    assert r.json()["ok"] is True
+    assert _is_due(parked)
+
+
+def test_a_new_key_makes_waiting_mail_due(auth_client, app, parked):
+    c = make(auth_client, api_key="sk-old-key-123456")
+    app.state.ai.set_pause(c["id"], NEEDS_YOU, None, "r", None, utcnow())
+    assert not _is_due(parked)
+    r = auth_client.patch(f"/api/ai/connections/{c['id']}", json={"api_key": "sk-new-key-654321"})
+    assert r.status_code == 200
+    assert _is_due(parked)
+
+
+def test_saving_a_task_makes_waiting_mail_due(auth_client, app, parked):
+    c = make(auth_client)
+    app.state.ai.set_pause(c["id"], NEEDS_YOU, None, "r", None, utcnow())
+    assert not _is_due(parked)
+    r = auth_client.put("/api/ai/tasks/sorting", json={"connection_id": c["id"], "model": "m"})
+    assert r.status_code == 200
+    assert _is_due(parked)
+
+
+# ---- a failed Test never pauses the live connection for a model typo (final fix 2) ----
+
+
+@respx.mock
+def test_a_mistyped_model_in_test_does_not_pause_the_connection(auth_client, app):
+    c = make(auth_client)
+    respx.post(f"{URL}/chat/completions").mock(return_value=httpx.Response(404, text="no model"))
+    r = auth_client.post("/api/ai/test", json={"connection_id": c["id"], "model": "typo"}).json()
+    assert r["ok"] is False and "no model called" in r["error"]
+    assert app.state.ai.pause_of(c["id"]) is None

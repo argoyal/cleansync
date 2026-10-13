@@ -210,7 +210,7 @@ class AiClient:
                     )
                 if code >= 500 and shaped and attempt == 2:
                     raise _ShapeRefused()
-                if code >= 500:
+                if code >= 500 or code == 408:
                     last = f"the model's server is failing (HTTP {code})"
                 elif code >= 400:
                     raise _Failed(
@@ -263,16 +263,21 @@ class AiClient:
         try:
             answer = await self._ask(target, **kw)
         except _Failed as f:
-            raise AiPaused(self._pause(cid, f)) from None
+            # A Test with typed-in values must not stop live sorting for a typo'd model or a
+            # server blip. Only a used-up limit is saved: that is per key, not per model.
+            save = not target.skip_pause or f.kind == LIMITED
+            raise AiPaused(self._pause(cid, f, save=save)) from None
         self.limits.clear_pause(cid)
         return answer
 
-    def _pause(self, cid: int, f: _Failed) -> Pause:
+    def _pause(self, cid: int, f: _Failed, *, save: bool = True) -> Pause:
         now = self.clock()
         resets_at, resets_tz, streak = self.limits.limits_of(cid)
         until = pause_end(f.kind, now, f.headers, resets_at, resets_tz, streak)
         reason = limited_reason(now, until) if f.kind == LIMITED else f.message
         detail = clean_detail(f.body, self.limits.secrets_of(cid)) if f.body else None
+        if not save:
+            return Pause(f.kind, until, reason, detail, now)
         return self.limits.set_pause(cid, f.kind, until, reason, detail, now)
 
     async def _ask(

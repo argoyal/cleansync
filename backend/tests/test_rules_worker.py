@@ -598,3 +598,37 @@ async def test_queue_drains_after_the_pause_ends(gbox):
         db.commit()
     assert await worker(gbox, Pick()).run_once(gbox.acc.id) == 1
     assert todos(gbox) == []
+
+
+async def test_a_saved_pause_survives_a_restart_and_mail_keeps_waiting(gbox, layout):
+    """Spec §12: after a restart the pause is still there. The fresh client makes no call,
+    the mail keeps its tries and waits for the pause's end."""
+    import httpx
+    import respx
+
+    from app.models.enums import AiTaskName
+    from app.services.ai.client import AiClient
+    from app.services.ai.connections import AiSettings
+    from app.services.rules.chooser import AiChooser
+
+    _rule(gbox)
+    a = gbox.add("One")
+    queue(gbox, a)
+    before = AiSettings(gbox.sf, layout.secrets_dir)
+    conn = before.create("Groq", "https://api.groq.com/openai/v1")
+    before.set_task(AiTaskName.SORTING, conn.id, "llama-3.1-8b-instant")
+    until = utcnow() + timedelta(hours=10)
+    before.set_pause(conn.id, LIMITED, until, "The model's usage limit is used up.", None, utcnow())
+
+    settings = AiSettings(gbox.sf, layout.secrets_dir)  # as after a restart
+    client = AiClient(settings, limits=settings)
+    chooser = AiChooser(client, lambda: settings.target(AiTaskName.SORTING))
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post("https://api.groq.com/openai/v1/chat/completions").mock(
+            return_value=httpx.Response(500)
+        )
+        assert await worker(gbox, chooser).run_once(gbox.acc.id) == 0
+        assert route.call_count == 0
+    (t,) = todos(gbox)
+    assert t.attempts == 0 and t.last_error is None
+    assert abs((as_utc(t.next_try_at) - until).total_seconds()) < 1

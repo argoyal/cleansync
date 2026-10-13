@@ -324,6 +324,25 @@ class AiSettings:
                 return "00:00", "UTC", 0
             return c.resets_at or "00:00", c.resets_tz or "UTC", c.down_streak or 0
 
+    @staticmethod
+    def _running_pause(c: AiConnection, new_until: datetime | None, now: datetime) -> Pause | None:
+        """The saved pause when it is still running and ends later than the new one (no end,
+        needs_you, counts as the latest). None when the new pause should replace it."""
+        if c.pause_kind is None:
+            return None
+        old = as_utc(c.paused_until) if c.paused_until else None
+        if old is not None and old <= now:
+            return None
+        if old is None or (new_until is not None and new_until <= old):
+            return Pause(
+                c.pause_kind,
+                old,
+                c.pause_reason or "",
+                c.pause_detail,
+                as_utc(c.paused_at) if c.paused_at else now,
+            )
+        return None
+
     def set_pause(
         self,
         connection_id: int,
@@ -336,10 +355,14 @@ class AiSettings:
         with self.sf() as db:
             c = db.get(AiConnection, connection_id)
             if c is not None:
-                c.pause_kind, c.paused_until, c.pause_reason = kind, until, reason
-                c.pause_detail, c.paused_at = detail, now
                 if kind == DOWN:
                     c.down_streak = (c.down_streak or 0) + 1
+                kept = self._running_pause(c, until, now)
+                if kept is not None:  # the later end wins: a shorter pause never cuts it short
+                    db.commit()
+                    return kept
+                c.pause_kind, c.paused_until, c.pause_reason = kind, until, reason
+                c.pause_detail, c.paused_at = detail, now
                 db.commit()
         return Pause(kind, until, reason, detail, now)
 

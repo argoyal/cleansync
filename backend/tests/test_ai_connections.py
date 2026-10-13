@@ -206,3 +206,40 @@ def test_secrets_of(ai):
         "GW", "https://gw.example.com/v1", api_key="sk-gw-123456789", headers={"X-T": "hv-secret-1"}
     )
     assert sorted(ai.secrets_of(c.id)) == ["hv-secret-1", "sk-gw-123456789"]
+
+
+def test_changing_the_address_or_headers_clears_the_pause(ai):
+    c = ai.create("Groq", "https://api.groq.com/openai/v1")
+    ai.set_pause(c.id, NEEDS_YOU, None, "r", None, T0)
+    ai.update(c.id, base_url="https://other.example.com/v1")
+    assert ai.pause_of(c.id) is None
+    ai.set_pause(c.id, NEEDS_YOU, None, "r", None, T0)
+    ai.update(c.id, headers={"X-Team": "t-secret-22"})
+    assert ai.pause_of(c.id) is None
+
+
+def test_the_later_pause_end_wins(ai):
+    c = ai.create("Groq", "https://api.groq.com/openai/v1")
+    long_ = T0 + timedelta(hours=14)
+    ai.set_pause(c.id, LIMITED, long_, "daily", "d1", T0)
+    # A shorter pause on top keeps the longer one.
+    p = ai.set_pause(c.id, DOWN, T0 + timedelta(minutes=1), "down", None, T0)
+    assert p.kind == LIMITED and p.until == long_
+    assert ai.pause_of(c.id, now=T0).detail == "d1"
+    assert ai.limits_of(c.id)[2] == 1  # the down streak still counts
+    # A later end replaces it.
+    p = ai.set_pause(c.id, LIMITED, T0 + timedelta(hours=20), "later", None, T0)
+    assert p.until == T0 + timedelta(hours=20)
+    # Needs you (no end) beats any timed pause, and nothing replaces it with a timed one.
+    ai.set_pause(c.id, NEEDS_YOU, None, "key", None, T0)
+    assert ai.pause_of(c.id, now=T0).kind == NEEDS_YOU
+    p = ai.set_pause(c.id, LIMITED, T0 + timedelta(days=3), "x", None, T0)
+    assert p.kind == NEEDS_YOU and ai.pause_of(c.id, now=T0).kind == NEEDS_YOU
+
+
+def test_an_ended_pause_is_replaced_by_a_shorter_one(ai):
+    c = ai.create("Groq", "https://api.groq.com/openai/v1")
+    ai.set_pause(c.id, LIMITED, T0 + timedelta(hours=1), "old", None, T0)
+    later = T0 + timedelta(hours=2)
+    p = ai.set_pause(c.id, DOWN, later + timedelta(minutes=1), "new", None, later)
+    assert p.kind == DOWN and p.reason == "new"

@@ -51,6 +51,7 @@ def test_no_limit_words():
         (401, "", NEEDS_YOU),
         (404, "", NEEDS_YOU),
         (422, "bad field", NEEDS_YOU),
+        (408, "", DOWN),
         (500, "", DOWN),
         (503, "quota service down", DOWN),
     ],

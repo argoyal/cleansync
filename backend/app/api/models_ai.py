@@ -60,6 +60,14 @@ def _ai(request: Request):
     return request.app.state.ai
 
 
+def _wake(request: Request) -> None:
+    """A pause just ended: waiting mail is due now, and the worker is told."""
+    with request.app.state.session_factory() as db:
+        wake_waiting(db, utcnow())
+        db.commit()
+    request.app.state.rule_worker.poke()
+
+
 def _pause_out(conn_id: int, name: str, p) -> PauseOut | None:
     if p is None:
         return None
@@ -140,6 +148,8 @@ def update(
         )
         if "resets_at" in given or "resets_tz" in given:
             conn = ai.set_resets(conn_id, body.resets_at or saved_at, body.resets_tz or saved_tz)
+        if given & {"base_url", "api_key", "headers"}:
+            _wake(request)  # a new address, key or headers may have ended the pause
         return _out(request, conn)
     except ConnectionNotFound as e:
         raise HTTPException(404, str(e)) from e
@@ -154,10 +164,7 @@ def resume(conn_id: int, request: Request, ctx: AuthContext = Depends(require_us
     if conn is None:
         raise HTTPException(404, "That connection isn't saved.")
     ai.clear_pause(conn_id)
-    with request.app.state.session_factory() as db:
-        wake_waiting(db, utcnow())
-        db.commit()
-    request.app.state.rule_worker.poke()
+    _wake(request)
     return _out(request, conn)
 
 
@@ -209,6 +216,7 @@ def set_task(task: str, body: TaskIn, request: Request, ctx: AuthContext = Depen
         raise HTTPException(404, str(e)) from e
     except ConnectionError_ as e:
         raise HTTPException(400, str(e)) from e
+    _wake(request)  # saving a task ends its connection's pause
     return TaskOut(
         task=t.task,
         connection_id=t.connection_id,
@@ -239,6 +247,8 @@ async def test(body: TestIn, request: Request, ctx: AuthContext = Depends(requir
         )
     chose = next((r.name for r in SAMPLE_RULES if r.id == choice.rule_id), None)
     mode = _ai(request).remembered_mode(body.connection_id, body.model)
+    if choice.raw is None:
+        _wake(request)  # a working Test ended the pause
     return TestOut(
         ok=choice.raw is None,
         took_ms=choice.took_ms,

@@ -12,7 +12,7 @@ describe("pauseLine", () => {
   });
   it("says when an outage is tried again", () => {
     expect(pauseLine({ ...base, kind: "down", reason: "Couldn't reach x.", until: "2026-10-13T12:05:00Z" }, now)).toMatch(
-      /^Groq isn't answering \(Couldn't reach x\.\)\. CleanSync tries again at .+\.$/,
+      /^Groq isn't answering: couldn't reach x\. CleanSync tries again at .+\.$/,
     );
   });
   it("points to the settings when the owner must act", () => {

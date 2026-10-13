@@ -112,7 +112,7 @@ No mail is ever sorted on a guess. When the model can't answer, CleanSync stops 
 
 - **The provider says its limit is used up.** CleanSync stops calling the connection until the time the provider gave. If the provider gave none, it waits until the connection's daily reset time (see "Set up a model"). If the provider only asks for a short wait, such as a minute, CleanSync waits just that long.
 - **The model can't be reached** (the server is off, the network is down, or it is too slow). CleanSync waits 1 minute, then 5, 15 and 60 minutes, and then 6 hours between tries. The first answer that works starts the count again.
-- **The settings are wrong** (the key is refused, there is no model with that name, or the address is wrong). Waiting won't fix this, so CleanSync stops until you change the connection or the task, or press **Resume now** or **Test**.
+- **The settings are wrong** (the key is refused, there is no model with that name, or the address is wrong). Waiting won't fix this, so CleanSync stops until you change the connection or the task, or press **Resume now**, or run a **Test** that works.
 
 While a connection is paused:
 
@@ -121,7 +121,7 @@ While a connection is paused:
 - Rules with only fixed conditions, and remembered senders, keep working without a model.
 - The pause is saved. It is still there after CleanSync restarts.
 
-You see a pause in three places: the Mail status line ("Sorting is waiting. …", with the reason and the time), the Run rules window, and Settings → Models, next to the connection ("Paused until …"). Press **Show the server's message** there to read exactly what the provider said. **Resume now** ends the pause at once and makes the waiting mail due again. A working **Test** does the same.
+You see a pause in three places: the Mail status line ("Sorting is waiting. …", with the reason and the time), the Run rules window, and Settings → Models, next to the connection ("Paused until …"). Press **Show the server's message** there to read exactly what the provider said. **Resume now** ends the pause at once and makes the waiting mail due again. A working **Test** also ends the pause and makes waiting mail due. A failed **Test** shows the reason but doesn't stop sorting, unless the provider says its limit is used up.
 
 An answer that can't be read, or that names a rule that isn't on the list, counts as "no rule".
 

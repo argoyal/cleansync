@@ -438,3 +438,40 @@ def test_paused_message_shapes():
         str(you)
         == "The model's server refused the API key. Check Settings → Models. The server said: bad key"
     )
+
+
+@respx.mock
+async def test_a_failed_test_call_saves_no_needs_you_or_down_pause():
+    # Test (skip_pause) must not stop live sorting for a typo'd model.
+    limits = Limits()
+    respx.post(f"{URL}/chat/completions").mock(return_value=httpx.Response(404, text="nope"))
+    t = dataclasses.replace(target(), skip_pause=True)
+    with pytest.raises(AiPaused) as e:
+        await ask(limited_client(limits), t)
+    assert e.value.pause.kind == NEEDS_YOU and "no model called" in e.value.pause.reason
+    assert limits.pause is None
+    respx.post(f"{URL}/chat/completions").mock(return_value=httpx.Response(503))
+    with pytest.raises(AiPaused) as e:
+        await ask(limited_client(limits), t)
+    assert e.value.pause.kind == DOWN and limits.pause is None and limits.streak == 0
+
+
+@respx.mock
+async def test_a_failed_test_call_still_saves_a_limit_pause():
+    limits = Limits()
+    respx.post(f"{URL}/chat/completions").mock(return_value=httpx.Response(429))
+    t = dataclasses.replace(target(), skip_pause=True)
+    with pytest.raises(AiPaused) as e:
+        await ask(limited_client(limits), t)
+    assert e.value.pause.kind == LIMITED and limits.pause is e.value.pause
+
+
+@respx.mock
+async def test_408_is_retried_then_down():
+    limits = Limits()
+    m = Modes()
+    m.saved[(1, "llama3.1:8b")] = "text"
+    route = respx.post(f"{URL}/chat/completions").mock(return_value=httpx.Response(408))
+    with pytest.raises(AiPaused) as e:
+        await ask(AiClient(m, limits=limits, retry_pause_s=0, clock=lambda: NOW))
+    assert route.call_count == 2 and e.value.pause.kind == DOWN
