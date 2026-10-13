@@ -2,9 +2,12 @@
 """Offload in bulk (bulk offload spec §4): batches of up to 1,000 mails, one Gmail call
 each, the copy here checked first."""
 
+from datetime import timedelta
+
 import pytest
 from sqlalchemy import select
 
+from app.core.clock import utcnow
 from app.models import Account, Event, MailMessage, MailOffload, MailOffloadItem
 from app.models.enums import MailItemResult, MailOffloadState, MailState, ServiceKind, ServiceState
 from app.services.accounts.oauth import FULL_MAIL_SCOPE
@@ -219,6 +222,7 @@ async def test_server_trouble_that_lasts_pauses_the_offload_and_the_next_run_cou
     assert results == {MailItemResult.PENDING}
     for s_ in OLD:  # Gmail did it though it never answered
         box.fake.remove(box.row(s_).provider_id)
+    box.offloads.clock = lambda: utcnow() + timedelta(minutes=2)  # past the 1 minute back-off
     await box.mail.tick()
     await box.run_queued()
     db.refresh(off)

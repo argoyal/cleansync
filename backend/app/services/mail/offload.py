@@ -55,6 +55,7 @@ from app.services.mail.index import delete_search_rows, mark_restored, set_flags
 from app.services.mail.jobs import finish_mail_job, job_log, start_mail_job, update_mail_job
 from app.services.mail.offload_plan import (
     GMAIL_TRASH_DAYS,
+    STOPPED_MSG,
     OffloadPreview,
     Pick,
     chunked,
@@ -93,6 +94,7 @@ OFFLOAD_MAIL_OFF_MSG = f"Mail backup isn't on for this account any more. {REST_S
 OFFLOAD_TROUBLE_MSG = (
     "CleanSync couldn't reach Gmail ({error}). " + REST_STAYED + " Start a new offload to go on."
 )
+NO_ANSWER_RETRY_MINUTES = (1, 5, 15, 60)  # then every 60: Gmail's silence is retried slower
 OFFLOAD_NO_ANSWER_MSG = "Gmail didn't answer; CleanSync will try again."
 OFFLOAD_SLOW_MSG = (
     "Gmail asked CleanSync to slow down. The offload goes on by itself in a minute or so."
@@ -261,6 +263,9 @@ class MailOffloads:
         # the paused jobs they came from. Kept in memory: at startup recover_mail_restores
         # closes those jobs, and the mails, still offloaded, can be restored again.
         self._restores_waiting: dict[int, dict[str, list[int]]] = {}
+        # Offloads put back to waiting because Gmail didn't answer: id -> (times in a row, not
+        # before). In memory: after a restart the first retry is simply immediate.
+        self._no_answer: dict[int, tuple[int, datetime]] = {}
 
     def _min_age(self, db) -> int:
         return int(get_setting(db, "mail_min_age_days"))  # type: ignore[arg-type]
@@ -346,12 +351,41 @@ class MailOffloads:
         one_call = max(cost("gmail.messages.batchDelete"), cost("gmail.messages.batchModify"))
         if budget.used_today() + one_call > budget.budget():
             rows = []
+        now = self.clock()
         for off_id, account_id in rows:
+            _, not_before = self._no_answer.get(off_id, (0, now))
+            if now < not_before:
+                continue  # Gmail didn't answer last time: wait a little longer each time
             self.mail.queue.request(account_id, "offload", {"offload_id": off_id})
         waiting, self._restores_waiting = self._restores_waiting, {}
         for account_id, w in waiting.items():
             args = {"message_ids": w["ids"], "after_jobs": w["jobs"]}
             self.mail.queue.request(account_id, "restore", args)
+
+    def stop(self, off_id: int) -> None:
+        """Stop (plan decision 9): a waiting one ends now; a running one before its next
+        batch. What wasn't reached stays in Gmail."""
+        with self.sf() as db:
+            off = db.get(MailOffload, off_id)
+            if off is None:
+                raise LookupError("That offload doesn't exist.")
+            if off.state == MailOffloadState.WAITING:
+                off.state, off.reason, off.finished_at = (
+                    MailOffloadState.FAILED,
+                    STOPPED_MSG,
+                    self.clock(),
+                )
+                self._no_answer.pop(off_id, None)
+            elif off.state == MailOffloadState.RUNNING:
+                off.stop_asked = True
+            db.commit()
+            account_id = off.account_id
+        self._changed(account_id, off_id)
+
+    def _no_answer_pause(self, off_id: int) -> None:
+        tries = self._no_answer.get(off_id, (0, self.clock()))[0]
+        wait = NO_ANSWER_RETRY_MINUTES[min(tries, len(NO_ANSWER_RETRY_MINUTES) - 1)]
+        self._no_answer[off_id] = (tries + 1, self.clock() + timedelta(minutes=wait))
 
     # ---- one mail ------------------------------------------------------------------------
     def _skip(self, off_id: int, item_id: int, reason: str, log_path: str | None) -> None:
@@ -579,8 +613,11 @@ class MailOffloads:
                             .limit(GMAIL_BATCH)
                         )
                     )
+                    stop = db.get(MailOffload, off_id).stop_asked
                 if not items:
                     break
+                if stop:
+                    raise _Refusing(STOPPED_MSG)
                 if await self.mail.stopped():  # before every batch (spec 3.4)
                     raise Paused(self.mail.stop_message() or MISSING_DISK_MSG)
                 await self._offload_batch(acc, adapter, off_id, items, job.log_path)
@@ -596,6 +633,7 @@ class MailOffloads:
             # Gmail may have done the call without answering: the next run checks the copies
             # again and sends the batch again (Gmail ignores mail it no longer has).
             state, reason = MailOffloadState.WAITING, OFFLOAD_NO_ANSWER_MSG
+            self._no_answer_pause(off_id)
         except (Paused, _Refusing) as e:
             state, reason = MailOffloadState.FAILED, str(e)
         except MailAuthError as e:
@@ -614,6 +652,8 @@ class MailOffloads:
             # Never leave it RUNNING. (The mail queue closes a job row left RUNNING.)
             log.exception("could not close mail offload %s", off_id)
             self._never_running(off_id)
+        if state != MailOffloadState.WAITING or reason != OFFLOAD_NO_ANSWER_MSG:
+            self._no_answer.pop(off_id, None)  # an answer came, or it ended
         self._changed(account_id, off_id)
         self.mail.budget.flush()
 

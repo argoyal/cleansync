@@ -2,7 +2,7 @@
 
 from dataclasses import asdict
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -116,6 +116,15 @@ def get_offload(
             for reason, mid, subj, frm, when in skipped
         ],
     )
+
+
+@router.post("/api/mail/offloads/{offload_id}/stop", status_code=204)
+def stop_offload(offload_id: int, request: Request, ctx: AuthContext = Depends(require_user)):
+    try:
+        _offloads(request).stop(offload_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    return Response(status_code=204)
 
 
 @router.post("/api/mail/restore", status_code=202, response_model=RestoreQueuedOut)

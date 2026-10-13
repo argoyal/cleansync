@@ -153,7 +153,9 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 logger.exception("could not close mail restores a restart cut short")
             with session_factory() as db:
                 try:
-                    recover_mail_offloads(db)  # first: it closes its own job as failed
+                    recover_mail_offloads(
+                        db
+                    )  # first: it closes its own job, so the offload can wait to go on
                 except Exception:
                     db.rollback()
                     logger.exception("could not mark mail offloads a stop cut short")
@@ -175,7 +177,9 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 for pair_id in recover_interrupted(db):
                     app.state.queue.request(pair_id, "RECOVERY")
                 try:
-                    recover_mail_offloads(db)  # before recover_mail_jobs: it closes its job
+                    recover_mail_offloads(
+                        db
+                    )  # first: it closes its own job, so the offload can wait to go on
                 except Exception:
                     db.rollback()
                     logger.exception("could not mark mail offloads a stop cut short")

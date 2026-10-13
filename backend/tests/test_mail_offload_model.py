@@ -4,7 +4,7 @@ import pytest
 
 from app.models import MailMessage, MailOffload, MailOffloadItem
 from app.models.enums import MailItemResult, MailOffloadState
-from app.services.mail.offload_plan import INTERRUPTED_OFFLOAD_MSG, recover_mail_offloads
+from app.services.mail.offload_plan import RESTARTED_OFFLOAD_MSG, recover_mail_offloads
 
 
 def _message(db, acc):
@@ -37,29 +37,35 @@ def test_an_offload_and_its_items_have_sensible_defaults(db, make_account):
     assert item.result == MailItemResult.PENDING
 
 
-def test_a_stop_fails_a_running_offload_but_a_waiting_one_keeps_waiting(db, make_account):
+def test_a_restart_puts_a_running_offload_back_to_waiting(db, make_account):
+    """Bulk offload spec §4.4: a batch Gmail did but CleanSync never recorded is sent again."""
     acc = make_account()
     rows = {
         s: MailOffload(account_id=acc.id, filter_text="x", total=3, state=s)
         for s in (MailOffloadState.WAITING, MailOffloadState.RUNNING, MailOffloadState.DONE)
     }
-    db.add_all(rows.values())
+    stopping = MailOffload(
+        account_id=acc.id, filter_text="y", total=3, state=MailOffloadState.RUNNING, stop_asked=True
+    )
+    db.add_all([*rows.values(), stopping])
     db.commit()
-    assert recover_mail_offloads(db) == 1
+    assert recover_mail_offloads(db) == 2
     db.expire_all()
     running = rows[MailOffloadState.RUNNING]
-    assert running.state == MailOffloadState.FAILED and running.reason == INTERRUPTED_OFFLOAD_MSG
-    assert running.finished_at is not None
+    assert running.state == MailOffloadState.WAITING and running.reason == RESTARTED_OFFLOAD_MSG
+    assert running.finished_at is None
+    assert stopping.state == MailOffloadState.FAILED and stopping.reason.startswith(
+        "Stopped by you."
+    )
     for s in (MailOffloadState.WAITING, MailOffloadState.DONE):
-        assert rows[s].state == s and rows[s].reason is None and rows[s].finished_at is None
+        assert rows[s].state == s and rows[s].reason is None
 
 
 @pytest.mark.parametrize("disk_missing", [False, True])
-def test_at_startup_a_cut_short_offload_and_its_job_both_end_failed(
+def test_at_startup_a_cut_short_offload_waits_and_its_job_is_interrupted(
     settings, make_account, db, disk_missing
 ):
-    """Activity and the offload's page agree: the job is FAILED with the offload's reason,
-    not 'interrupted, goes on at the next check'."""
+    """Activity and the offload's page agree: the offload waits to go on, its job says why."""
     from fastapi.testclient import TestClient
 
     from app.main import create_app
@@ -86,9 +92,9 @@ def test_at_startup_a_cut_short_offload_and_its_job_both_end_failed(
     app.state.mail.queue = StubMailQueue()
     with TestClient(app):
         db.expire_all()
-        assert db.get(MailOffload, off.id).state == MailOffloadState.FAILED
+        assert db.get(MailOffload, off.id).state == MailOffloadState.WAITING
         row = db.get(MailJob, job.id)
-        assert row.state == JobState.FAILED and row.message == INTERRUPTED_OFFLOAD_MSG
+        assert row.state == JobState.INTERRUPTED and row.message == RESTARTED_OFFLOAD_MSG
         assert row.completed_at is not None
         assert db.get(MailJob, backup.id).state == JobState.INTERRUPTED  # other jobs as before
 

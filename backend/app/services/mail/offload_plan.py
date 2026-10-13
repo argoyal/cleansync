@@ -15,37 +15,34 @@ from app.services.mail.search import SearchError, mail_conditions, parse_query
 from app.services.mail.store import eml_path
 
 GMAIL_TRASH_DAYS = 30  # Gmail empties its trash after this many days (spec 5.4)
-INTERRUPTED_OFFLOAD_MSG = (
-    "CleanSync stopped during this offload. Mails already offloaded stay offloaded; "
-    "the rest stayed in Gmail."
-)
+RESTARTED_OFFLOAD_MSG = "CleanSync restarted during this offload. It goes on by itself."
+STOPPED_MSG = "Stopped by you. What wasn't offloaded yet stayed in Gmail."
 
 
 def recover_mail_offloads(db: Session) -> int:
-    """At startup: an offload a stop cut short ends as FAILED, with the reason, and so does
-    its mail job (runs before recover_mail_jobs, which would call it interrupted and going
-    on, so Activity and the offload's page agree).
-
-    Only RUNNING ones. A WAITING offload (not started yet, or paused by the budget until
-    the next UTC day) keeps waiting.
-    """
+    """At startup: an offload a restart cut short waits again, and the minute tick starts it.
+    A batch Gmail did but CleanSync never recorded is then sent again (bulk offload spec
+    §4.4). Its mail job ends INTERRUPTED with the same words, so Activity and the offload's
+    page agree (runs before recover_mail_jobs, which would say something else). One the owner
+    asked to stop ends stopped. A WAITING offload keeps waiting."""
     rows = list(
         db.scalars(select(MailOffload).where(MailOffload.state == MailOffloadState.RUNNING))
     )
     now = utcnow()
     for off in rows:
-        off.state = MailOffloadState.FAILED
-        off.reason = INTERRUPTED_OFFLOAD_MSG
-        off.finished_at = now
+        if off.stop_asked:
+            off.state, off.reason, off.finished_at = MailOffloadState.FAILED, STOPPED_MSG, now
+        else:
+            off.state, off.reason = MailOffloadState.WAITING, RESTARTED_OFFLOAD_MSG
         # One mail job runs at a time per account: its running offload job is this one's.
         for job in db.scalars(
             select(MailJob).where(
                 MailJob.account_id == off.account_id,
-                MailJob.kind == MailJobKind.OFFLOAD,
+                MailJob.kind.in_([MailJobKind.OFFLOAD, MailJobKind.DELETE_FOREVER]),
                 MailJob.state == JobState.RUNNING,
             )
         ):
-            job.state, job.message, job.completed_at = JobState.FAILED, INTERRUPTED_OFFLOAD_MSG, now
+            job.state, job.message, job.completed_at = JobState.INTERRUPTED, off.reason, now
     db.commit()
     return len(rows)
 
