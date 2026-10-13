@@ -410,7 +410,7 @@ class MailBackup:
         parsed = await asyncio.to_thread(parse_eml, raw)
 
         def adopt(db):
-            adopted = adopt_restored_copy(db, r.account_id, parsed.message_id, meta)
+            adopted = adopt_restored_copy(db, r.account_id, parsed.message_id, meta, self.clock())
             if adopted is None:
                 return None
             clear_failure(db, r.account_id, mid)

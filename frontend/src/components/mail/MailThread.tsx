@@ -7,13 +7,13 @@ import type { Account } from "../../api/types";
 import { mailHref, mailView } from "../../lib/mail";
 import { Icon } from "../Icon";
 import { Notice } from "../ui";
-import { MessageMailActions } from "./MailActions";
+import { type ForeverOne, MessageMailActions } from "./MailActions";
 import { MessageView } from "./MessageView";
 
 /** Wide screens show the list beside the open mail (the xl breakpoint); phones one at a time. */
 export const isNarrow = () => !(window.matchMedia?.("(min-width: 1280px)").matches ?? false);
 
-export function MailThread({ account, threadId, onBack }: { account: Account; threadId: string; onBack?: () => void }) {
+export function MailThread({ account, threadId, onBack, onForever }: { account: Account; threadId: string; onBack?: () => void; onForever: (start: ForeverOne) => void }) {
   const [params] = useSearchParams();
   const thread = useMailThread(account.id, threadId, mailView(params.get("view")));
   const messages = thread.data ?? [];
@@ -42,7 +42,7 @@ export function MailThread({ account, threadId, onBack }: { account: Account; th
             key={m.id}
             message={m}
             open={open.has(m.id)}
-            actions={<MessageMailActions account={account} message={m} />}
+            actions={<MessageMailActions account={account} message={m} onForever={onForever} />}
             onToggle={() => {
               const next = new Set(open);
               if (next.has(m.id)) next.delete(m.id);

@@ -457,6 +457,12 @@ class RuleJobs:
                     )
                 ).all()
             )
+            # Nothing left to run: the pick names no planned change (a rule deleted meanwhile
+            # withdrew them), or the left-out ones are every planned change.
+            if only is not None and not set(only) & set(planned):
+                raise RuleJobProblem(NOTHING_PICKED_MSG)
+            if only is None and planned and set(planned) <= set(left_out):
+                raise RuleJobProblem(NOTHING_PICKED_MSG)
             # A planned change whose rule was deleted meanwhile is left out, with its reason.
             gone = db.execute(
                 update(RuleDecision)

@@ -16,12 +16,13 @@ const NO_SUCH_OFFLOAD = "That offload doesn't exist.";
 export const TRASH_NOTE = "Offloaded mail sits in Gmail's trash. Gmail empties its trash on its own after 30 days; that's when the space comes back.";
 
 /** What happened to the mails a failed offload didn't finish. The server's reason says it when the
- * last batch may already be out of Gmail (after a stop or a restart), and a stop has its own words:
- * then this line only counts them and doesn't say where they are. Otherwise they were never touched. */
+ * last batch may already be out of Gmail after a stop, and a stop has its own words: then this
+ * line only counts them (in the words of the job's kind) and doesn't say where they are.
+ * Otherwise they were never touched. */
 function notDoneLine(o: MailOffload): string {
   const n = o.not_done.toLocaleString();
-  const explained = o.stopped || (o.reason ?? "").includes("may already be out of Gmail");
-  return explained ? `${n} weren't counted as offloaded.` : `${n} weren't reached and stayed in Gmail.`;
+  const what = o.kind === "delete_forever" ? "deleted forever" : "offloaded";
+  return o.stopped ? `${n} weren't counted as ${what}.` : `${n} weren't reached and stayed in Gmail.`;
 }
 
 /** Spec §5.3–5.5: one offload — its state, what was skipped and why, when Gmail frees the space, restore. */

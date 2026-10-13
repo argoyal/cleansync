@@ -306,8 +306,10 @@ class Applier:
             if planned.trash:
                 try:
                     removed = await self._take_out(acc, adapter, pid)
-                except BaseException:
-                    self._clear_removed(decision_id)  # the call failed: nothing was removed
+                except Exception:
+                    # The call failed: nothing was removed. A shutdown or cancel mid-call
+                    # (BaseException) is not caught, so the mark stays: the outcome is unknown.
+                    self._clear_removed(decision_id)
                     raise
                 if not removed:  # the permission was refused: it went to the trash instead
                     self._clear_removed(decision_id)

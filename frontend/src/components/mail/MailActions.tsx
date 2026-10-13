@@ -5,7 +5,7 @@ import { useOffloadOne, useRestoreMail } from "../../hooks/useMailOffload";
 import { hasSearch, viewKind } from "../../lib/mail";
 import { runOnText } from "../../lib/ruleRuns";
 import { Button, Dialog } from "../ui";
-import { DeleteForeverDialog, ForeverButton } from "./DeleteForeverDialog";
+import { ForeverButton } from "./DeleteForeverDialog";
 import { MakeRuleDialog } from "./MakeRuleDialog";
 import { OffloadMailDialog } from "./OffloadMailDialog";
 import { RuleChip } from "./RuleChip";
@@ -81,16 +81,21 @@ export function OffloadOneDialog({ account, messageId, onClose }: { account: Acc
   );
 }
 
-type Open = "offload" | "rule" | "forever" | null;
+type Open = "offload" | "rule" | null;
+
+/** What one mail's Delete forever starts from. */
+export type ForeverOne = { view: string; message_ids: number[] };
 
 /** Mail panel spec §8: a mail in Gmail offers Offload and Make a rule…; one out of Gmail
  * (offloaded, or deleted in Gmail) is read-only, with Restore to Gmail and Delete forever…. */
-export function MessageMailActions({ account, message }: { account: Account; message: MailMessageInfo }) {
+export function MessageMailActions({ account, message, onForever }: { account: Account; message: MailMessageInfo; onForever: (start: ForeverOne) => void }) {
   const [open, setOpen] = useState<Open>(null);
   const restore = useRestoreMail();
   if (message.file_missing) return null; // nothing here to offload from or restore with
   const ids = [message.id];
   const close = () => setOpen(null);
+  // The Delete forever dialog is owned by the reader: it has to outlive this mail, which leaves the list once deleted.
+  const forever = () => onForever({ view, message_ids: ids });
   const view = message.state === "in_mail" ? "all" : message.state === "deleted_in_provider" ? "deleted" : "offloaded";
   return (
     <>
@@ -99,19 +104,18 @@ export function MessageMailActions({ account, message }: { account: Account; mes
         <>
           <Button onClick={() => setOpen("offload")}>Offload</Button>
           <Button onClick={() => setOpen("rule")}>Make a rule…</Button>
-          <ForeverButton account={account} onClick={() => setOpen("forever")} />
+          <ForeverButton account={account} onClick={forever} />
         </>
       ) : (
         <>
           <Button disabled={restore.isPending} onClick={() => restore.mutate({ accountId: account.id, start: { message_ids: ids } })}>
             Restore to Gmail
           </Button>
-          <Button onClick={() => setOpen("forever")}>Delete forever…</Button>
+          <Button onClick={forever}>Delete forever…</Button>
         </>
       )}
       {open === "offload" && <OffloadOneDialog account={account} messageId={message.id} onClose={close} />}
       {open === "rule" && <MakeRuleDialog account={account} messageIds={ids} onClose={close} />}
-      {open === "forever" && <DeleteForeverDialog account={account} start={{ view, message_ids: ids }} count={1} onClose={close} />}
     </>
   );
 }

@@ -230,13 +230,14 @@ def test_the_match_list_and_approving_it_from_the_api(auth_client, acc, db, layo
     bob = {"account_id": make_account("bob@example.com").id}
     assert auth_client.get(f"{url}/matches", params=bob).status_code in (400, 404)
     r = auth_client.post(f"{url}/run", json={**B, "left_out": [m["id"] for m in got]})
+    assert r.status_code == 400  # leaving out every match leaves nothing to run
+    assert "Pick at least one mail" in r.json()["detail"]
+    assert auth_client.get(url, params=B).json()["state"] == "PREVIEWED"
+    r = auth_client.post(f"{url}/run", json={**B, "left_out": [got[0]["id"]]})
     assert r.status_code == 202, r.text
-    for _ in range(50):  # the run is a task on the app's loop: give it a moment
-        p = auth_client.get(url, params=B).json()
-        if p["state"] == "DONE":
-            break
-        time.sleep(0.05)
-    assert (p["state"], p["applied"], p["left_out"]) == ("DONE", 0, 2)
+    p = auth_client.get(url, params=B).json()
+    assert p["left_out"] == 1  # the run's own task goes on without a mailbox here; stop it
+    auth_client.post(f"{url}/stop", params=B)
 
 
 def test_correct_waits_become_503_and_changes_are_published(auth_client, acc, app, monkeypatch):

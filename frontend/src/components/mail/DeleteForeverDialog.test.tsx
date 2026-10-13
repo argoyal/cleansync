@@ -108,7 +108,7 @@ describe("Delete forever on mail in Gmail", () => {
       },
     });
     await open();
-    expect(await screen.findByText("Stopped. Deleted 330 mails forever.")).toBeInTheDocument();
+    expect(await screen.findByText("Deleted 330 mails forever.")).toBeInTheDocument();
     expect(screen.getByText("Stopped by you. What wasn't deleted yet stays in Gmail, with CleanSync's copy.")).toBeInTheDocument();
     expect(screen.queryByText(/the rest are still in Gmail/)).not.toBeInTheDocument();
   });
@@ -121,7 +121,7 @@ describe("Delete forever on mail in Gmail", () => {
       "GET /api/mail/offloads/7": { ...JOB, state: "FAILED", done: 330, skipped: 0, stopped: true, reason },
     });
     await open();
-    expect(await screen.findByText("Stopped. Deleted 330 mails forever.")).toBeInTheDocument();
+    expect(await screen.findByText("Deleted 330 mails forever.")).toBeInTheDocument();
     expect(screen.getByText(reason)).toBeInTheDocument();
     expect(screen.queryByText(/the rest are still in Gmail/)).not.toBeInTheDocument();
   });
@@ -132,7 +132,7 @@ describe("Delete forever on mail in Gmail", () => {
       "GET /api/mail/offloads/7": { ...JOB, state: "FAILED", done: 330, skipped: 0, stopped: true, reason: "You pressed Stop. The rest stays in Gmail." },
     });
     await open();
-    expect(await screen.findByText("Stopped. Deleted 330 mails forever.")).toBeInTheDocument();
+    expect(await screen.findByText("Deleted 330 mails forever.")).toBeInTheDocument();
     expect(screen.getByText("You pressed Stop. The rest stays in Gmail.")).toBeInTheDocument();
   });
 

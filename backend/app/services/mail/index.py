@@ -143,7 +143,11 @@ def mark_restored(db: Session, row: MailMessage, now: datetime | None = None) ->
 
 
 def adopt_restored_copy(
-    db: Session, account_id: int, message_id: str | None, meta: MailMeta
+    db: Session,
+    account_id: int,
+    message_id: str | None,
+    meta: MailMeta,
+    now: datetime | None = None,
 ) -> MailMessage | None:
     """A new mail in Gmail that is a restore's own import whose answer got lost: the row
     that started that import (same Message-ID, still marked) takes Gmail's new id, so the
@@ -164,7 +168,7 @@ def adopt_restored_copy(
     if row is None:
         return None
     row.provider_id = meta.id  # the file stays where it is (row.file_path)
-    mark_restored(db, row)
+    mark_restored(db, row, now)
     set_flags(row, meta.labels)
     db.commit()
     return row

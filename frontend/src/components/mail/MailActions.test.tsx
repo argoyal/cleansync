@@ -1,6 +1,6 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { MailMessageInfo } from "../../api/types";
 import { ACCOUNT, mockApi, renderApp } from "../../test/utils";
@@ -37,16 +37,12 @@ describe("one mail in the reader", () => {
     expect(await screen.findByText("It wasn't offloaded: This mail is no longer in Gmail.")).toBeInTheDocument();
   });
 
-  it("deletes it forever with permanent delete on: its view, its id and the typed 1", async () => {
-    const { calls } = mockApi({
-      "POST /api/mail/delete-forever": { deleted: 0, left: 1, job_id: 3 },
-      "GET /api/mail/offloads/3": { id: 3, account_id: 1, filter_text: "Inbox", state: "RUNNING", total: 1, done: 0, skipped: 0, not_done: 1, bytes: 0, reason: null, created_at: "2026-10-10T09:00:00Z", finished_at: null, kind: "delete_forever", removed: 0, trashed: 0, trash_until: "2026-11-09", google_emptied: false, stopped: false, skipped_items: [] },
-    });
-    renderApp(<MessageMailActions account={{ ...ACCOUNT, permanent_delete: true }} message={MESSAGE} />);
+  it("hands Delete forever to the reader with the mail's view and id, and opens no dialog itself", async () => {
+    mockApi({});
+    const onForever = vi.fn();
+    renderApp(<MessageMailActions account={{ ...ACCOUNT, permanent_delete: true }} message={MESSAGE} onForever={onForever} />);
     await userEvent.click(screen.getByRole("button", { name: "Delete forever…" }));
-    const dialog = screen.getByRole("dialog", { name: "Delete forever" });
-    await userEvent.type(within(dialog).getByLabelText("Type 1 to delete forever"), "1");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Delete forever" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/delete-forever")?.body).toEqual({ account_id: 1, view: "all", message_ids: [9], confirm: 1 }));
+    expect(onForever).toHaveBeenCalledWith({ view: "all", message_ids: [9] });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

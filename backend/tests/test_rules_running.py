@@ -461,6 +461,38 @@ async def test_an_empty_pick_at_approve_is_refused_and_starts_nothing(gbox):
     assert jobs.preview(gbox.acc.id, jid).left_out == 0
 
 
+NOTHING_PICKED = r"^Pick at least one mail, or close this to leave them all\.$"
+
+
+async def test_a_pick_of_only_withdrawn_changes_is_refused_and_starts_nothing(gbox):
+    news = rule(gbox, "News")
+    gone = gbox.add("News gone")
+    gbox.add("News stays")
+    worker, jobs = jobs_for(gbox)
+    jid = await decided(gbox, worker, jobs, [news], RunScope(inbox=True))
+    with gbox.sf() as db:  # its rule disappeared from one decision, still PLANNED
+        d = db.scalar(select(RuleDecision).where(RuleDecision.message_id == gone.id))
+        d.rule_id = None
+        db.commit()
+        withdrawn = d.id
+    with pytest.raises(RuleJobProblem, match=NOTHING_PICKED):
+        jobs.run(gbox.acc.id, jid, only=[withdrawn, 999_999])
+    assert jobs.preview(gbox.acc.id, jid).state == RuleJobState.PREVIEWED
+
+
+async def test_leaving_out_every_planned_change_is_refused_and_starts_nothing(gbox):
+    news = rule(gbox, "News")
+    gbox.add("News one")
+    gbox.add("News two")
+    worker, jobs = jobs_for(gbox)
+    jid = await decided(gbox, worker, jobs, [news], RunScope(inbox=True))
+    everything = [m.id for m in jobs.matches(gbox.acc.id, jid)]
+    with pytest.raises(RuleJobProblem, match=NOTHING_PICKED):
+        jobs.run(gbox.acc.id, jid, left_out=everything)
+    p = jobs.preview(gbox.acc.id, jid)
+    assert (p.state, p.left_out) == (RuleJobState.PREVIEWED, 0)
+
+
 async def test_two_kinds_of_pick_at_once_are_refused(gbox):
     news = rule(gbox, "News")
     m = gbox.add("News one")
@@ -489,17 +521,19 @@ def test_the_start_endpoint_answers_400_for_two_kinds_of_pick(auth_client, db, m
     assert r.json()["detail"].startswith("Pick one thing to run on")
 
 
-async def test_a_run_whose_row_is_missing_decides_with_no_rules(gbox):
+async def test_a_run_whose_row_is_missing_decides_no_rule_and_offers_the_chooser_nothing(gbox):
     rule(gbox, "News")
     m = gbox.add("News one")
-    with gbox.sf() as db:
-        db.add(RuleTodo(account_id=gbox.acc.id, message_id=m.id, job_id=None))
+    with gbox.sf() as db:  # a to-do row of a run whose RuleJob row is gone
+        db.add(RuleTodo(account_id=gbox.acc.id, message_id=m.id, job_id=9999))
         db.commit()
-    from app.services.rules.worker import job_rules
-
+    chooser = ByName()
+    await decide_all(gbox, chooser)
+    assert all(offered == [] for offered in chooser.offered)  # no rule was offered
     with gbox.sf() as db:
-        assert job_rules(db, 9999) == []  # no such run: no rules, not every rule
-        assert job_rules(db, None) is None
+        (d,) = db.scalars(select(RuleDecision).where(RuleDecision.message_id == m.id))
+        assert (d.status, d.rule_id) == (DecisionStatus.NO_RULE, None)
+        assert db.scalars(select(RuleTodo)).all() == []  # settled, not left to retry
 
 
 async def test_a_sorting_todo_next_to_a_run_with_rule_ids_still_uses_every_rule(gbox):
@@ -507,7 +541,7 @@ async def test_a_sorting_todo_next_to_a_run_with_rule_ids_still_uses_every_rule(
     in_run = gbox.add("Shops and News run")
     plain = gbox.add("Shops and News plain")
     chooser = ByName()
-    jid = job_with(gbox, [news], in_run)
+    job_with(gbox, [news], in_run)
     with gbox.sf() as db:  # new-mail sorting: a to-do row with no job
         from app.models import RuleAccount
 
@@ -525,7 +559,6 @@ async def test_a_sorting_todo_next_to_a_run_with_rule_ids_still_uses_every_rule(
             ).all()
         )
     assert by_subject == {"Shops and News run": news, "Shops and News plain": shops}
-    assert jid
 
 
 async def test_a_rule_turned_off_or_deleted_mid_run_decides_no_rule(gbox):

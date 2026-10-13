@@ -106,8 +106,10 @@ test("permanent delete: turn it on, offload a search, the space is free at once,
   await forever.getByRole("button", { name: "Close" }).click();
   const left = fakeGmailMails();
   if (left) expect(left.map((m) => m.subject)).not.toContain(SUBJECT);
-  const here = await page.request.get(`/api/mail/threads?account_id=${id}&view=all&q=${encodeURIComponent(SUBJECT)}`);
-  expect(((await here.json()) as { threads: { subject: string }[] }).threads.map((t) => t.subject)).not.toContain(SUBJECT);
+  for (const view of ["all", "deleted", "offloaded"]) {
+    const here = await page.request.get(`/api/mail/threads?account_id=${id}&view=${view}&q=${encodeURIComponent(SUBJECT)}`);
+    expect(((await here.json()) as { threads: { subject: string }[] }).threads.map((t) => t.subject), `gone from ${view}`).not.toContain(SUBJECT);
+  }
 
   // Turn it off again: later runs start from the default.
   await page.goto("/settings?tab=accounts");

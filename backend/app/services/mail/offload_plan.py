@@ -29,6 +29,7 @@ UNKNOWN_REST = (
 )
 STOPPED_UNKNOWN_MSG = f"Stopped by you. {UNKNOWN_REST} The rest stayed in Gmail."
 FOREVER_STOPPED_UNKNOWN_MSG = f"Stopped by you. {UNKNOWN_REST} The rest stays in Gmail."
+# Older wordings must stay in this tuple so old rows still read as stopped.
 STOPPED_MESSAGES = (
     STOPPED_MSG,
     FOREVER_STOPPED_MSG,

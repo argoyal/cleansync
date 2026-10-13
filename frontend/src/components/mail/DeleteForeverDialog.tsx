@@ -75,7 +75,7 @@ function ForeverJob({ jobId, count, onClose }: { jobId: number; count: number; o
         </>
       ) : stopped ? (
         <>
-          <p>Stopped. Deleted {mails(job.done)} forever.</p>
+          <p>Deleted {mails(job.done)} forever.</p>
           {job.reason && <p>{job.reason}</p>}
         </>
       ) : (

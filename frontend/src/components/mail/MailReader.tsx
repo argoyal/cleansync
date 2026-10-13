@@ -25,7 +25,7 @@ import { RulePickerDialog } from "./RulePickerDialog";
 /** "Make a rule…" drafts from at most this many picked mails (mail panel spec §6). */
 export const RULE_FROM_AT_MOST = 10;
 type PickedAction = "offload" | "rule" | "rules" | null;
-type Forever = { message_ids: number[] } | "all";
+type Forever = { message_ids: number[]; view?: string } | "all"; // `view`: one open mail's own view
 
 const WHOLE_MAILBOX_MSG = "Search or pick a label first: Offload never takes the whole mailbox.";
 
@@ -220,7 +220,7 @@ export function MailReader({ account }: { account: Account }) {
       {forever && (
         <DeleteForeverDialog
           account={account}
-          start={forever === "all" ? pickAll : { view, message_ids: forever.message_ids }}
+          start={forever === "all" ? pickAll : { view: forever.view ?? view, message_ids: forever.message_ids }}
           count={forever === "all" ? (totals?.total ?? 0) : forever.message_ids.length}
           onDone={clearPicks}
           onClose={() => setForever(null)}
@@ -246,7 +246,7 @@ export function MailReader({ account }: { account: Account }) {
             />
           </section>
           <section aria-label="Open mail" className={`min-w-0 flex-1 overflow-y-auto ${thread ? "" : "hidden xl:block"}`}>
-            {thread ? <MailThread account={account} threadId={thread} onBack={() => (backFrom.current = thread)} /> : <p className="p-6 text-ink-2">Pick a mail to read it.</p>}
+            {thread ? <MailThread account={account} threadId={thread} onBack={() => (backFrom.current = thread)} onForever={(s) => setForever(s)} /> : <p className="p-6 text-ink-2">Pick a mail to read it.</p>}
           </section>
         </div>
       )}

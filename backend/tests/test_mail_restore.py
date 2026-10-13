@@ -761,6 +761,38 @@ async def test_restoring_marks_a_rules_decision_with_the_service_clock(
     assert db.get(RuleDecision, d.id).moved_back_at.replace(tzinfo=UTC) == fixed
 
 
+async def test_adopting_a_lost_import_marks_a_rules_decision_with_the_service_clock(
+    auth_client, offload_box, db
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old photos")
+    rule = create_rule(
+        db,
+        box.acc.id,
+        RuleIn(name="Old", description="old mail", actions=[{"kind": "offload"}]),
+        "a",
+    )
+    d = RuleDecision(
+        account_id=box.acc.id,
+        message_id=row.id,
+        rule_id=rule.id,
+        status="applied",
+        changes={"trash": True},
+    )
+    db.add(d)
+    db.commit()
+    box.fake.remove(row.provider_id)
+    _lose_first_import_answer(box)
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    fixed = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
+    box.mail.backup.clock = lambda: fixed
+    await box.backup()  # the check adopts the lost import
+    db.expire_all()
+    assert db.get(RuleDecision, d.id).moved_back_at.replace(tzinfo=UTC) == fixed
+
+
 async def test_restore_of_the_kept_view_honours_the_label(auth_client, offload_box):
     box = offload_box
     await _offloaded(auth_client, box)

@@ -205,6 +205,32 @@ describe("reading a mail", () => {
     expect(screen.getByText("Receipts")).toBeInTheDocument();
   });
 
+  it("keeps the Delete forever dialog and its result when the deleted mail leaves the list", async () => {
+    let gone = false;
+    const job = { ...JOB_OFF, state: "DONE", kind: "delete_forever", total: 1, done: 1, not_done: 0, removed: 1 };
+    const account = { ...ACTIVE, permanent_delete: true };
+    const { calls } = mockApi({
+      "GET /api/accounts": [account],
+      "GET /api/mail/threads": () => ({ threads: gone ? [] : [thread({ thread_id: "t1" })], next_cursor: null, total: gone ? 0 : 1, total_bytes: 1 }),
+      "GET /api/mail/threads/t1": () => (gone ? [] : [msg({ id: 1 })]),
+      "POST /api/mail/delete-forever": () => {
+        gone = true; // the mail is deleted: the list and the reader refetch without it
+        return { deleted: 0, left: 1, job_id: 3 };
+      },
+      "GET /api/mail/offloads/3": job,
+    });
+    renderApp(<MailReader account={account} />, { withAccount: true, route: "/mail?thread=t1" });
+    await userEvent.click(await screen.findByRole("button", { name: "Delete forever…" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete forever" });
+    await userEvent.type(within(dialog).getByLabelText("Type 1 to delete forever"), "1");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete forever" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/delete-forever")?.body).toEqual({ account_id: 1, view: "all", message_ids: [1], confirm: 1 }));
+    expect(await screen.findByText("Deleted 1 mail forever.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete forever…" })).not.toBeInTheDocument()); // the mail is gone
+    expect(screen.getByRole("dialog", { name: "Delete forever" })).toBeInTheDocument();
+    expect(screen.getByText("Deleted 1 mail forever.")).toBeInTheDocument();
+  });
+
   it("frames the mail with no referrer and never puts the mail's HTML in the page", async () => {
     open([msg({ id: 1 })]);
     const frame = await screen.findByTitle("Mail: Your order has shipped");

@@ -139,8 +139,13 @@ export function RunRulesDialog({ account, start, jobId: existing, onClose }: Pro
   const deciding = !begin.isError && (!job || state === "PREVIEWING");
   const planned = job?.planned ?? 0;
   const listing = job !== undefined && state === "PREVIEWED" && planned > 0;
-  const perRule = (job?.per_rule ?? []).map((r) => ({ ...r, picked: pickedOf(picks, r.rule_id, r.count) }));
-  const pickedTotal = picks.mode === "all" ? planned - picks.ids.size : picks.ids.size;
+  // A rule deleted since the picks were made is no longer in per_rule: its picked and left-out
+  // mails are dropped here, so the counts, the button and the request only speak of live rules.
+  const live = new Set((job?.per_rule ?? []).map((r) => r.rule_id));
+  const liveIds = new Map([...picks.ids].filter(([, ruleId]) => live.has(ruleId)));
+  const livePicks: Picks = { mode: picks.mode, ids: liveIds };
+  const perRule = (job?.per_rule ?? []).map((r) => ({ ...r, picked: pickedOf(livePicks, r.rule_id, r.count) }));
+  const pickedTotal = picks.mode === "all" ? planned - liveIds.size : liveIds.size;
   // Every match picked is "all", whether Pick all is still on or each was ticked by hand.
   const pickState: PickState = planned > 0 && pickedTotal === planned ? "all" : pickedTotal > 0 ? "some" : "none";
   const heavy = heavyKinds(perRule);
@@ -166,7 +171,7 @@ export function RunRulesDialog({ account, start, jobId: existing, onClose }: Pro
       {
         accountId: account.id,
         jobId: job!.job_id,
-        ...(picks.mode === "all" ? { leftOut: [...picks.ids.keys()] } : { only: [...picks.ids.keys()] }),
+        ...(picks.mode === "all" ? { leftOut: [...liveIds.keys()] } : { only: [...liveIds.keys()] }),
         ...(heavy.count > 0 ? { confirm: heavy.count } : {}),
       },
       { onError: () => setTyped("") },

@@ -312,6 +312,59 @@ describe("the Run rules window", () => {
     await waitFor(() => expect(runBody(calls)).toEqual({ account_id: ACCOUNT.id, left_out: [11, 13] }));
   });
 
+  describe("a rule deleted while the list is open", () => {
+    const TWO = {
+      ...JOB,
+      planned: 3,
+      rule_ids: [5, 6],
+      per_rule: [
+        { rule: "Newsletters", rule_id: 5, count: 2, actions: [{ kind: "archive" }], examples: [] },
+        { rule: "Receipts", rule_id: 6, count: 1, actions: [{ kind: "archive" }], examples: [] },
+      ],
+    };
+    const ONE = { ...TWO, planned: 2, rule_ids: [5], per_rule: [TWO.per_rule[0]] };
+    const RECEIPTS = { rule_id: 6, rule_name: "Receipts", actions: [{ kind: "archive" }] };
+    const rows = [match(13, "Bill", RECEIPTS), match(12, "Digest two"), match(11, "Digest one")];
+
+    it("ignores picks of the deleted rule: the button counts the rest and the request leaves them out", async () => {
+      let current = TWO;
+      const { calls } = mockApi({
+        "GET /api/rule-jobs/9": () => current,
+        "GET /api/rule-jobs/9/matches": rows,
+        "POST /api/rule-jobs/9/run": { job_id: 9 },
+      });
+      const r = renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+      await screen.findByRole("checkbox", { name: "Pick Bill" });
+      await userEvent.click(screen.getByRole("checkbox", { name: "Pick Bill" })); // leaves the deleted rule's mail out
+      current = ONE;
+      await r.client.invalidateQueries({ queryKey: ["rule-job", 9] });
+      const all = await screen.findByRole("checkbox", { name: "Pick all" });
+      await waitFor(() => expect(screen.getByRole("button", { name: "Archive 2 mails" })).toBeEnabled());
+      expect(all).toBeChecked();
+      await userEvent.click(screen.getByRole("button", { name: "Archive 2 mails" }));
+      await waitFor(() => expect(runBody(calls)).toEqual({ account_id: ACCOUNT.id, left_out: [] }));
+    });
+
+    it("does not send ticked mails of the deleted rule as the only ones", async () => {
+      let current = TWO;
+      const { calls } = mockApi({
+        "GET /api/rule-jobs/9": () => current,
+        "GET /api/rule-jobs/9/matches": rows,
+        "POST /api/rule-jobs/9/run": { job_id: 9 },
+      });
+      const r = renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+      await screen.findByRole("checkbox", { name: "Pick Bill" });
+      await userEvent.click(screen.getByRole("checkbox", { name: "Pick all" }));
+      await userEvent.click(screen.getByRole("checkbox", { name: "Pick Bill" }));
+      await userEvent.click(screen.getByRole("checkbox", { name: "Pick Digest one" }));
+      current = ONE;
+      await r.client.invalidateQueries({ queryKey: ["rule-job", 9] });
+      await waitFor(() => expect(screen.getByRole("button", { name: "Archive 1 mail" })).toBeEnabled());
+      await userEvent.click(screen.getByRole("button", { name: "Archive 1 mail" }));
+      await waitFor(() => expect(runBody(calls)).toEqual({ account_id: ACCOUNT.id, left_out: [], only: [11] }));
+    });
+  });
+
   it("asks for the typed count only for picked offloads", async () => {
     const mixed = {
       ...JOB,

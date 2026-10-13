@@ -95,14 +95,21 @@ describe("an offload's page", () => {
     expect(screen.getByText("40 weren't counted as offloaded.")).toBeInTheDocument();
   });
 
-  it("also leaves out where the rest is when the reason itself says the last batch may be out", async () => {
+  it("words the count of a stopped Delete forever as deleted forever, not offloaded", async () => {
     mockApi({
       "GET /api/accounts": [ACCOUNT],
-      "GET /api/mail/offloads/7": { ...OFF, state: "FAILED", not_done: 40, stopped: false, reason: "CleanSync restarted. The last batch may already be out of Gmail." },
+      "GET /api/mail/offloads/7": {
+        ...OFF,
+        kind: "delete_forever",
+        state: "FAILED",
+        not_done: 40,
+        stopped: true,
+        reason: "Stopped by you. The last batch may already be out of Gmail.",
+      },
     });
     open();
-    expect(await screen.findByText(/CleanSync restarted/)).toBeInTheDocument();
-    expect(screen.queryByText(/weren't reached/)).not.toBeInTheDocument();
+    expect(await screen.findByText("40 weren't counted as deleted forever.")).toBeInTheDocument();
+    expect(screen.queryByText(/offloaded\./)).not.toBeInTheDocument();
   });
 
   it("lists every offload batch", async () => {

@@ -132,6 +132,23 @@ async def test_the_removed_mark_is_cleared_when_gmail_cannot_be_reached(gbox):
     assert "removed" not in get(gbox, RuleDecision, did).changes
 
 
+async def test_the_removed_mark_stays_when_the_call_is_cancelled_midway(gbox):
+    """A shutdown or cancel during the Gmail call: the outcome is unknown, so the mark stays."""
+    import asyncio
+
+    allow(gbox)
+    row = gbox.add("Promo")
+    did = decision(gbox, row, [{"kind": "offload"}])
+
+    async def cancelled(pid):
+        raise asyncio.CancelledError
+
+    gbox.adapter.delete = cancelled
+    with pytest.raises(asyncio.CancelledError):
+        await gbox.applier.apply(did)
+    assert get(gbox, RuleDecision, did).changes["removed"] is True
+
+
 async def test_offload_by_hand_on_mail_that_is_not_in_gmail_is_refused_before_a_decision(gbox):
     row = gbox.add("Promo")
     with gbox.sf() as db:
