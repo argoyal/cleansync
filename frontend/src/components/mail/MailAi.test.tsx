@@ -3,6 +3,7 @@ import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
+import { pauseLine } from "../../lib/pause";
 import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
 import { DeleteForeverDialog } from "./DeleteForeverDialog";
 import { MakeRuleDialog } from "./MakeRuleDialog";
@@ -133,6 +134,13 @@ describe("AI in mail", () => {
     expect(await screen.findByText("It keeps going if you close this.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(running.calls.some((c) => c.path === "/api/rule-jobs/9/stop")).toBe(false);
+  });
+
+  it("shows why deciding is slow when the model is paused", async () => {
+    const paused = { kind: "down" as const, until: "2026-10-14T00:00:00Z", reason: "Couldn't reach x.", detail: null, since: "2026-10-13T10:00:00Z", connection_id: 1, connection_name: "Groq" };
+    mockApi({ "GET /api/rule-jobs/9": { job_id: 9, state: "PREVIEWING", total: 10, decided: 4, planned: 0, no_rule: 0, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [], paused } });
+    renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+    expect(await screen.findByText(pauseLine(paused))).toBeInTheDocument();
   });
 
   it("reopens a run that is already there instead of starting another", async () => {

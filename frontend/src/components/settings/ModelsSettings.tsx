@@ -1,16 +1,19 @@
 import { useId, useState } from "react";
 
 import { friendlyError } from "../../api/client";
-import type { AiConnection, AiTask, AiTaskName, AiTest } from "../../api/rules";
+import type { AiConnection, AiPause, AiTask, AiTaskName, AiTest } from "../../api/rules";
 import { useAiConnections, useAiTasks } from "../../api/rules";
-import { useDeleteConnection, useListModels, useSaveConnection, useSaveTask, useTestModel } from "../../hooks/useRules";
+import { useDeleteConnection, useListModels, useResumeConnection, useSaveConnection, useSaveTask, useTestModel } from "../../hooks/useRules";
+import { formatWhen } from "../../lib/format";
 import { Button, Dialog, Field, inputClass, Notice } from "../ui";
 
 const TASK_TITLES: Record<AiTaskName, string> = { sorting: "Sorting", writing_rules: "Writing rules" };
 const TASK_ORDER: AiTaskName[] = ["sorting", "writing_rules"];
 
 const tested = (t: AiTest) =>
-  t.ok ? `Answered in ${(t.took_ms / 1000).toFixed(1)} s · picked ${t.chose ?? "none"} · answer mode ${t.mode}` : (t.error ?? "It didn't work.");
+  t.ok
+    ? `Answered in ${(t.took_ms / 1000).toFixed(1)} s · picked ${t.chose ?? "none"} · answer mode ${t.mode}`
+    : [t.error ?? "It didn't work.", t.detail ? `The server said: ${t.detail}` : ""].filter(Boolean).join(" ");
 
 export function ModelsSettings() {
   const connections = useAiConnections().data ?? [];
@@ -51,6 +54,7 @@ function Connections({ connections }: { connections: AiConnection[] }) {
               <p className="font-medium">{c.name}</p>
               <p className="break-all text-table text-ink-2">{c.base_url}</p>
               {c.has_key && <p className="text-meta text-ink-2">API key saved</p>}
+              {c.pause && <PauseBadge pause={c.pause} id={c.id} />}
             </div>
             <Button tone="quiet" onClick={() => setEditing(c)} aria-label={`Edit ${c.name}`}>
               Edit
@@ -67,12 +71,39 @@ function Connections({ connections }: { connections: AiConnection[] }) {
   );
 }
 
+function PauseBadge({ pause, id }: { pause: AiPause; id: number }) {
+  const resume = useResumeConnection();
+  const [open, setOpen] = useState(false);
+  const head = pause.kind === "needs_you" ? "Stopped" : `Paused until ${formatWhen(pause.until)}`;
+  return (
+    <div className="mt-1 space-y-1">
+      <p className="text-meta font-semibold text-warn">
+        {head} — {pause.reason}
+      </p>
+      {pause.detail && (
+        <>
+          <Button tone="quiet" onClick={() => setOpen(!open)}>
+            {open ? "Hide the server's message" : "Show the server's message"}
+          </Button>
+          {open && <p className="break-words text-meta text-ink-2">{pause.detail}</p>}
+        </>
+      )}
+      <Button disabled={resume.isPending} onClick={() => resume.mutate({ id })}>
+        Resume now
+      </Button>
+    </div>
+  );
+}
+
 type HeaderRow = { name: string; value: string };
 
 function ConnectionDialog({ existing, onClose }: { existing: AiConnection | null; onClose: () => void }) {
   const save = useSaveConnection();
+  const zonesId = useId();
   const [name, setName] = useState(existing?.name ?? "");
   const [baseUrl, setBaseUrl] = useState(existing?.base_url ?? "");
+  const [resetsAt, setResetsAt] = useState(existing?.resets_at ?? "00:00");
+  const [resetsTz, setResetsTz] = useState(existing?.resets_tz ?? "UTC");
   const [key, setKey] = useState("");
   const [dropKey, setDropKey] = useState(false);
   const [rows, setRows] = useState<HeaderRow[]>([]);
@@ -82,7 +113,7 @@ function ConnectionDialog({ existing, onClose }: { existing: AiConnection | null
 
   const submit = () => {
     const headers = Object.fromEntries(rows.filter((r) => r.name.trim() && r.value).map((r) => [r.name.trim(), r.value]));
-    const connection: Parameters<typeof save.mutate>[0]["connection"] = { name: name.trim(), base_url: baseUrl.trim() };
+    const connection: Parameters<typeof save.mutate>[0]["connection"] = { name: name.trim(), base_url: baseUrl.trim(), resets_at: resetsAt, resets_tz: resetsTz.trim() || "UTC" };
     if (!existing) {
       connection.api_key = key || null;
       connection.headers = headers;
@@ -117,6 +148,17 @@ function ConnectionDialog({ existing, onClose }: { existing: AiConnection | null
         <Field label="Address" hint={existing?.has_key || existing?.header_names.length ? "Usually ends in /v1. Changing the server removes the saved key." : "Usually ends in /v1."}>
           <input className={inputClass} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="http://ollama.example.com:11434/v1" />
         </Field>
+        <Field label="Daily limit resets at" hint="When the provider's free daily limit starts again. Most reset at 00:00 UTC; Gemini at midnight Pacific time.">
+          <input className={inputClass} type="time" value={resetsAt} onChange={(e) => setResetsAt(e.target.value)} />
+        </Field>
+        <Field label="Time zone">
+          <input className={inputClass} list={zonesId} value={resetsTz} onChange={(e) => setResetsTz(e.target.value)} />
+        </Field>
+        <datalist id={zonesId}>
+          {["UTC", "America/Los_Angeles", "America/New_York", "Europe/London", "Europe/Berlin", "Asia/Kolkata", "Asia/Tokyo"].map((z) => (
+            <option key={z} value={z} />
+          ))}
+        </datalist>
         <Field label="API key (optional)" hint={existing?.has_key ? "Leave empty to keep the saved key" : undefined}>
           <input className={inputClass} type="password" autoComplete="off" value={key} disabled={dropKey} onChange={(e) => setKey(e.target.value)} />
         </Field>

@@ -2,6 +2,7 @@ import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { formatWhen } from "../lib/format";
+import { pauseLine } from "../lib/pause";
 import { ACCOUNT, mockApi, renderApp } from "../test/utils";
 import { MailBackupStatus } from "./MailBackupStatus";
 
@@ -22,7 +23,7 @@ const STATUS = {
   failed: [],
   budget_reached: false,
 };
-const BASE = { enabled: true, waiting: 4, sorted_today: 212, suggested: 17, failing_since: null, last_error: null, warning: false, model_set: true };
+const BASE = { enabled: true, waiting: 4, sorted_today: 212, suggested: 17, failing_since: null, last_error: null, warning: false, model_set: true, paused: null };
 
 describe("sorting status", () => {
   it("shows today's sorting", async () => {
@@ -52,5 +53,16 @@ describe("sorting status", () => {
     renderApp(<MailBackupStatus account={ACCOUNT} />);
     await screen.findByText(/38,214 mails/);
     expect(screen.queryByText(/Sorting/)).not.toBeInTheDocument();
+  });
+
+  it("says sorting is waiting when the model is paused, ahead of the failing warning", async () => {
+    const paused = { kind: "limited" as const, until: "2026-10-14T00:00:00Z", reason: "The model's usage limit is used up.", detail: null, since: "2026-10-13T10:00:00Z", connection_id: 1, connection_name: "Groq" };
+    mockApi({ "GET /api/mail/status": STATUS, "GET /api/rules/sorting": { ...BASE, waiting: 412, warning: true, failing_since: "2026-10-12T10:40:00Z", paused } });
+    renderApp(<MailBackupStatus account={ACCOUNT} />);
+    expect(await screen.findByText(/Sorting is waiting\./)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(pauseLine(paused).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeInTheDocument();
+    expect(screen.getByText(/412 mails waiting/)).toBeInTheDocument();
+    expect(screen.queryByText(/failing since/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Settings → Models" })).toHaveAttribute("href", "/settings?tab=models");
   });
 });

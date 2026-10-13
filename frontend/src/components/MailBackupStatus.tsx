@@ -7,6 +7,7 @@ import { useSorting } from "../api/rules";
 import { useCheckMail } from "../hooks/useMail";
 import { formatBytes, formatDuration, formatRelative, formatWhen, percent } from "../lib/format";
 import { mailHref } from "../lib/mail";
+import { pauseLine } from "../lib/pause";
 import { Bar, Button, Notice } from "./ui";
 
 export function summaryLine(s: MailStatus): string {
@@ -47,6 +48,16 @@ function FailedMails({ failed }: { failed: MailFailure[] }) {
 function SortingStatus({ accountId }: { accountId: number }) {
   const sorting = useSorting(accountId).data;
   if (!sorting?.enabled) return null;
+  if (sorting.paused) {
+    return (
+      <Notice tone="warn">
+        Sorting is waiting. {pauseLine(sorting.paused)} {sorting.waiting.toLocaleString()} {sorting.waiting === 1 ? "mail" : "mails"} waiting.{" "}
+        <Link to="/settings?tab=models" className="font-semibold text-accent">
+          Settings → Models
+        </Link>
+      </Notice>
+    );
+  }
   if (sorting.warning) {
     return (
       <Notice tone="warn">

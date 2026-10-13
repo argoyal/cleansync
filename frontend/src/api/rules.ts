@@ -49,6 +49,7 @@ export type Sorting = {
   last_error: string | null;
   warning: boolean;
   model_set: boolean;
+  paused: AiPause | null;
 };
 export type Decision = {
   id: number;
@@ -80,6 +81,7 @@ export type JobPreview = {
   skipped: number;
   failed: number;
   reason: string | null;
+  paused?: AiPause | null;
   per_rule: { rule: string; count: number; actions: RuleAction[]; examples: { subject: string; sender: string; why: string }[] }[];
 };
 /** Counts by outcome, e.g. { applied: 2, waiting: 1 }: "waiting" means the mail is queued and not yet changed. */
@@ -87,10 +89,29 @@ export type ApproveResult = Record<string, number>;
 export type UndoResult = { status: string; left: string[] };
 export type DeleteMailResult = { deleted: number; failed: { message_id: number; reason: string }[] };
 
-export type AiConnection = { id: number; name: string; base_url: string; has_key: boolean; header_names: string[] };
+/** Why a model connection is not being called right now, and until when. */
+export type AiPause = {
+  kind: "limited" | "down" | "needs_you";
+  until: string | null;
+  reason: string;
+  detail: string | null;
+  since: string;
+  connection_id: number;
+  connection_name: string;
+};
+export type AiConnection = {
+  id: number;
+  name: string;
+  base_url: string;
+  has_key: boolean;
+  header_names: string[];
+  resets_at: string;
+  resets_tz: string;
+  pause: AiPause | null;
+};
 export type AiTaskName = "sorting" | "writing_rules";
 export type AiTask = { task: AiTaskName; connection_id: number | null; model: string; temperature: number; timeout_s: number };
-export type AiTest = { ok: boolean; took_ms: number; mode: string | null; chose: string | null; why: string; error: string | null };
+export type AiTest = { ok: boolean; took_ms: number; mode: string | null; chose: string | null; why: string; error: string | null; detail?: string | null };
 
 const ACTION_WORDS = { archive: "Archive", mark_read: "Mark read", star: "Star", delete: "Delete" } as const;
 

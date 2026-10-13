@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { describeAction, type JobPreview, useRuleJob } from "../../api/rules";
 import type { Account } from "../../api/types";
 import { useRunRuleJob, useStartRuleJob, useStopRuleJob } from "../../hooks/useRules";
+import { pauseLine } from "../../lib/pause";
 import { Bar, Button, Dialog, Field, inputClass, Notice } from "../ui";
 import { parseTyped } from "./OffloadMailDialog";
 
@@ -112,6 +113,7 @@ export function RunRulesDialog({ account, start, jobId: existing, onClose }: Pro
         <div className="space-y-2">
           <p>{job ? `Deciding… ${job.decided.toLocaleString()} of ${job.total.toLocaleString()}` : "Deciding…"}</p>
           <Bar value={job ? pct(job.decided, job.total) : 0} label="Deciding" />
+          {job?.paused && <p className="text-table text-ink-2">{pauseLine(job.paused)}</p>}
         </div>
       )}
       {job && state === "PREVIEWED" && (

@@ -161,7 +161,7 @@ export const useDeleteForever = () =>
 
 // ---- model connections and tasks ----
 const AI = ["ai-connections", "ai-tasks", "rules-sorting"];
-export type ConnectionFields = { name?: string; base_url?: string; api_key?: string | null; headers?: Record<string, string> };
+export type ConnectionFields = { name?: string; base_url?: string; api_key?: string | null; headers?: Record<string, string>; resets_at?: string; resets_tz?: string };
 
 /** Without `id` it adds a connection (a key is sent only when typed); with `id` it changes one. */
 export const useSaveConnection = () =>
@@ -188,4 +188,8 @@ export const useSaveTask = () =>
   });
 
 export const useTestModel = () =>
-  useChange((b: TaskFields & { connection_id: number }) => post<AiTest>("/api/ai/test", b), { quiet: true, keys: [] });
+  useChange((b: TaskFields & { connection_id: number }) => post<AiTest>("/api/ai/test", b), { quiet: true, keys: AI });
+
+/** Lets a paused connection be called again right away. */
+export const useResumeConnection = () =>
+  useChange((b: { id: number }) => post<AiConnection>(`/api/ai/connections/${b.id}/resume`, {}), { keys: [...AI, "rule-job", "rule-job-open"] });
