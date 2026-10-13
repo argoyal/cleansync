@@ -103,7 +103,7 @@ async def test_label_created_elsewhere_meanwhile_is_found_after_409(gbox):
 
 async def test_offload_checks_copy_trashes_and_ends_offloaded(gbox):
     row = gbox.add("Spam-ish")
-    did = decision(gbox, row, [{"kind": "delete"}])
+    did = decision(gbox, row, [{"kind": "offload"}])
     assert await gbox.applier.apply(did) == "applied"
     assert "TRASH" in gbox.fake.messages[row.provider_id].labels
     assert get(gbox, MailMessage, row.id).state == MailState.OFFLOADED
@@ -113,9 +113,9 @@ async def test_offload_checks_copy_trashes_and_ends_offloaded(gbox):
 async def test_delete_refuses_a_bad_copy_and_changes_nothing(gbox):
     row = gbox.add("Hi")
     eml_path(gbox.layout, gbox.acc.email, row.file_path).write_bytes(b"broken")
-    did = decision(gbox, row, [{"kind": "delete"}])
+    did = decision(gbox, row, [{"kind": "offload"}])
     assert await gbox.applier.apply(did) == "failed"
-    assert "nothing was deleted" in get(gbox, RuleDecision, did).reason
+    assert "nothing was offloaded" in get(gbox, RuleDecision, did).reason
     assert "TRASH" not in gbox.fake.messages[row.provider_id].labels
 
 
@@ -156,21 +156,22 @@ async def test_undo_reverses_only_what_is_still_as_left(gbox):
 
 async def test_undo_delete_untrashes(gbox):
     row = gbox.add("Hi")
-    did = decision(gbox, row, [{"kind": "delete"}])
+    did = decision(gbox, row, [{"kind": "offload"}])
     await gbox.applier.apply(did)
     await gbox.applier.undo(did)
     assert "TRASH" not in gbox.fake.messages[row.provider_id].labels
     assert get(gbox, MailMessage, row.id).state == MailState.IN_MAIL
 
 
-async def test_delete_by_hand_is_logged_and_undoable(gbox):
+async def test_offload_by_hand_is_logged_and_undoable(gbox):
     row = gbox.add("Hi")
-    d = await gbox.applier.delete_by_hand(gbox.acc.id, row.id)
+    d = await gbox.applier.offload_by_hand(gbox.acc.id, row.id)
     assert d.how == "manual" and d.status == "applied"
+    assert d.why == "Offloaded by you." and d.actions == [{"kind": "offload"}]
     assert (await gbox.applier.undo(d.id)).status == "undone"
     assert get(gbox, MailMessage, row.id).state == MailState.IN_MAIL
     assert "TRASH" not in gbox.fake.messages[row.provider_id].labels
-    await gbox.applier.delete_by_hand(gbox.acc.id, row.id)
+    await gbox.applier.offload_by_hand(gbox.acc.id, row.id)
     with gbox.sf() as db:
         assert db.scalar(select(MailMessage).where(MailMessage.id == row.id)).state == "offloaded"
 
@@ -291,7 +292,7 @@ async def test_missing_mail_row_fails_plainly(gbox):
 
 @pytest.mark.parametrize(
     ("actions", "later"),
-    [([{"kind": "archive"}], MailState.OFFLOADED), ([{"kind": "delete"}], MailState.DELETED)],
+    [([{"kind": "archive"}], MailState.OFFLOADED), ([{"kind": "offload"}], MailState.DELETED)],
 )
 async def test_undo_of_mail_no_longer_in_gmail_changes_nothing(gbox, actions, later):
     row = gbox.add("Old")
@@ -329,6 +330,6 @@ async def test_rule_archive_and_delete_keep_label_views_and_counts_right(gbox):
     assert "INBOX" not in rows
     c = counts()
     assert c["inbox"] == 1 and c["all"] == 2 and c["offloaded"] == 0
-    assert await gbox.applier.apply(decision(gbox, b, [{"kind": "delete"}])) == "applied"
+    assert await gbox.applier.apply(decision(gbox, b, [{"kind": "offload"}])) == "applied"
     c = counts()
     assert c["inbox"] == 0 and c["all"] == 1 and c["offloaded"] == 1

@@ -201,3 +201,9 @@ async def test_sentence_while_paused_opens_the_form_with_a_note():
 async def test_mails_while_paused_keep_the_shared_conditions():
     d = await rule_from_mails(PausedClient(), T, [mail(1), mail(2)])
     assert d.conditions and "usage limit is used up" in d.notes[0]
+
+
+async def test_a_delete_answer_is_read_as_offload():
+    c = Client({"name": "Junk", "description": "junk mail", "actions": ["delete"]})
+    d = await sentence_to_rule(c, T, "get rid of junk")
+    assert d.actions == [{"kind": "offload"}] and d.notes == []

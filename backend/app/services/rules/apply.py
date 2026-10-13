@@ -79,7 +79,7 @@ def plan_changes(actions: list[dict], labels_now: list[str]) -> Planned:
             add.append("STARRED")
         elif kind == "label":
             add.append(str(a["label"]))
-        elif kind == "delete":
+        elif kind == "offload":
             trash = True
     return Planned(list(dict.fromkeys(add)), list(dict.fromkeys(remove)), trash)
 
@@ -195,7 +195,7 @@ class Applier:
             if problem:
                 return self._fail(
                     decision_id,
-                    f"The copy here didn't check out ({problem}), so nothing was deleted.",
+                    f"The copy here didn't check out ({problem}), so nothing was offloaded.",
                 )
         adapter = self.adapter_for(acc)
         try:
@@ -289,7 +289,9 @@ class Applier:
             db.commit()
         return UndoResult(DecisionStatus.UNDONE, left)
 
-    async def delete_by_hand(self, account_id: int, message_id: int) -> RuleDecision:
+    async def offload_by_hand(self, account_id: int, message_id: int) -> RuleDecision:
+        """Offload on one mail open in the reader (mail panel spec §8): the path a rule's
+        Offload takes, logged as the owner's own so it can be undone."""
         with self.sf() as db:
             row = db.get(MailMessage, message_id)
             if row is None or row.account_id != account_id:
@@ -298,8 +300,8 @@ class Applier:
                 account_id=account_id,
                 message_id=message_id,
                 how=DecisionHow.MANUAL,
-                why="Deleted by you.",
-                actions=[{"kind": "delete"}],
+                why="Offloaded by you.",
+                actions=[{"kind": "offload"}],
                 labels_seen=list(row.labels or []),
                 status=DecisionStatus.SUGGESTED,
             )

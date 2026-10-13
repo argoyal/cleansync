@@ -10,7 +10,7 @@ from app.services.ai.connections import AiTarget
 from app.services.rules.chooser import fence_safe
 from app.services.rules.mailview import MailForModel, domain_of
 from app.services.rules.match import Chooser, Conditions, RuleView, decide
-from app.services.rules.store import ACTION_KINDS, RuleProblem, clean_actions
+from app.services.rules.store import ACTION_KINDS, RuleProblem, action_kind, clean_actions
 
 TRY_LIMIT = 50
 SAMPLE_CHARS = 300
@@ -18,7 +18,7 @@ NO_MODEL_NOTE = "No model is set up, so fill in the rest yourself."
 DRAFT_SYSTEM = (
     "You turn an email owner's sentence into a sorting rule. Answer only with JSON.\n"
     "Fields: name (2-4 words), description (one sentence saying which mail the rule is for, "
-    "without the actions), actions (a list from: archive, label, mark_read, star, delete), "
+    "without the actions), actions (a list from: archive, label, mark_read, star, offload), "
     "label (the label name when actions has label), senders_in and senders_not_in (email "
     "addresses or domains the sentence names), subject_contains (words the sentence says the "
     "subject has), list_unsubscribe (true only when the sentence is about newsletters or "
@@ -102,7 +102,9 @@ async def sentence_to_rule(client: AiClient, target: AiTarget | None, sentence: 
     if not ans.data:
         notes.append("The model's answer couldn't be read; check every field.")
     kinds = list(
-        dict.fromkeys(str(k).strip().lower() for k in data.get("actions") or [] if str(k).strip())
+        dict.fromkeys(
+            action_kind(str(k).strip().lower()) for k in data.get("actions") or [] if str(k).strip()
+        )
     )
     unknown = [k for k in kinds if k not in ACTION_KINDS]
     if unknown:

@@ -48,7 +48,7 @@ from app.services.mail.adapter import (
 )
 from app.services.mail.backup import Paused
 from app.services.mail.gmail import search_message_id
-from app.services.mail.index import delete_search_rows, mark_restored, sync_state
+from app.services.mail.index import delete_search_rows, mark_restored, set_flags, sync_state
 from app.services.mail.jobs import finish_mail_job, job_log, start_mail_job, update_mail_job
 from app.services.mail.offload_plan import (
     GMAIL_TRASH_DAYS,
@@ -787,6 +787,8 @@ class MailOffloads:
             if new_id is not None:
                 row.provider_id = new_id  # the file stays where it is (row.file_path)
             row.import_started_at = None  # the outcome is known
+            if outcome == UNTRASHED:
+                set_flags(row, list(st.labels))  # Gmail's labels once out of its trash
             if outcome != IN_SPAM:
                 mark_restored(db, row)
             db.commit()

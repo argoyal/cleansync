@@ -47,8 +47,8 @@ def test_create_cleans_and_versions(db, make_account):
         (RuleIn(name="x", description="d", actions=[{"kind": "send"}]), "isn't an action"),
         (RuleIn(name="x", description="d", actions=[{"kind": "label", "label": " "}]), "label"),
         (
-            RuleIn(name="x", description="d", actions=[{"kind": "delete"}, {"kind": "star"}]),
-            "Delete",
+            RuleIn(name="x", description="d", actions=[{"kind": "offload"}, {"kind": "star"}]),
+            "Offload",
         ),
         (RuleIn(name="x", description="", actions=[{"kind": "archive"}]), "description"),
         (
@@ -232,3 +232,35 @@ def test_gmail_own_label_names_are_refused(db, make_account, name):
 
     with pytest.raises(RuleProblem, match="Gmail's own labels"):
         clean_actions([{"kind": "label", "label": name}])
+
+
+def test_delete_forever_is_listed_but_not_yet_allowed(db, make_account):
+    acc = make_account()
+    data = RuleIn(name="x", description="d", actions=[{"kind": "delete_forever"}])
+    with pytest.raises(
+        RuleProblem, match=r"^Delete forever needs full Gmail access \(coming in this release\)\.$"
+    ):
+        create_rule(db, acc.id, data, "admin")
+
+
+def test_the_old_name_delete_is_refused_when_saving(db, make_account):
+    acc = make_account()
+    with pytest.raises(RuleProblem, match="isn't an action"):
+        create_rule(
+            db, acc.id, RuleIn(name="x", description="d", actions=[{"kind": "delete"}]), "admin"
+        )
+
+
+def test_yaml_reads_delete_as_offload(db, make_account):
+    acc = make_account()
+    text = (
+        "cleansync_rules: 1\n"
+        "rules:\n"
+        "- name: Junk\n"
+        "  description: junk mail\n"
+        "  actions:\n"
+        "  - kind: delete\n"
+    )
+    (rule,) = import_yaml(db, acc.id, text, "admin")
+    assert rule.actions == [{"kind": "offload"}]
+    assert "kind: offload" in export_yaml(db, acc.id)

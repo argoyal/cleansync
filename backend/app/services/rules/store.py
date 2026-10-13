@@ -12,7 +12,20 @@ from app.models.enums import DecisionStatus, RuleCombine, RuleMode
 from app.services.rules.apply import is_system_label
 from app.services.rules.match import Conditions, RuleView
 
-ACTION_KINDS = ("archive", "label", "mark_read", "star", "delete")
+ACTION_KINDS = ("archive", "label", "mark_read", "star", "offload")
+# Listed in the rule form, but it needs the full Gmail permission (round 3 of 0.5.0).
+NOT_YET_KINDS = {
+    "delete_forever": "Delete forever needs full Gmail access (coming in this release).",
+}
+# Names older files still use: a 0.4.0 export says "delete" for Offload.
+OLD_ACTION_NAMES = {"delete": "offload"}
+STANDS_ALONE = ("offload",)
+
+
+def action_kind(kind: str) -> str:
+    return OLD_ACTION_NAMES.get(kind, kind)
+
+
 SNAPSHOT = ("name", "description", "conditions", "combine", "actions", "mode")
 MAX_NAME, MAX_DESCRIPTION, MAX_LABEL = 80, 1000, 100
 MAX_RULES_IN_FILE = 100
@@ -45,6 +58,8 @@ def clean_actions(actions: list[dict]) -> list[dict]:
         if not isinstance(a, dict):
             raise RuleProblem("Each action needs a kind, such as archive or label.")
         kind = str(a.get("kind") or "")
+        if kind in NOT_YET_KINDS:
+            raise RuleProblem(NOT_YET_KINDS[kind])
         if kind not in ACTION_KINDS:
             raise RuleProblem(f"{kind!r} isn't an action a rule can take.")
         if kind == "label":
@@ -60,8 +75,8 @@ def clean_actions(actions: list[dict]) -> list[dict]:
             out.append(item)
     if not out:
         raise RuleProblem("Pick at least one action.")
-    if any(a["kind"] == "delete" for a in out) and len(out) > 1:
-        raise RuleProblem("Delete can't be combined with other actions.")
+    if any(a["kind"] in STANDS_ALONE for a in out) and len(out) > 1:
+        raise RuleProblem("Offload can't be combined with other actions.")
     return out
 
 
@@ -267,6 +282,11 @@ def export_yaml(db: Session, account_id: int) -> str:
 def _from_item(item: dict) -> RuleIn:
     fields = {k: item[k] for k in (*SNAPSHOT, "enabled") if k in item}
     fields.setdefault("name", "")
+    if isinstance(fields.get("actions"), list):  # an older file's action names
+        fields["actions"] = [
+            {**a, "kind": action_kind(str(a.get("kind") or ""))} if isinstance(a, dict) else a
+            for a in fields["actions"]
+        ]
     data = RuleIn(**fields)
     data.name = " ".join(str(data.name or "").split())
     return data

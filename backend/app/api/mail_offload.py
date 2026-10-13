@@ -10,13 +10,15 @@ from app.api.mail_reader import account_or_404
 from app.auth.deps import AuthContext, get_db, require_user
 from app.core.clock import utcnow
 from app.models import MailMessage, MailOffload, MailOffloadItem
-from app.models.enums import MailItemResult, MailState
+from app.models.enums import DecisionStatus, MailItemResult, MailState
 from app.schemas.mail import (
+    AccountIn,
     MailBriefOut,
     MailOffloadDetailOut,
     MailOffloadOut,
     MailPickIn,
     MailRecoveryOut,
+    OffloadOneOut,
     OffloadPreviewOut,
     OffloadStartedOut,
     OffloadStartIn,
@@ -27,6 +29,7 @@ from app.schemas.mail import (
 from app.services.mail.offload import offload_out
 from app.services.mail.offload_plan import Pick
 from app.services.mail.service import MailError
+from app.services.rules.apply import WAIT_ERRORS
 
 router = APIRouter()
 
@@ -147,3 +150,25 @@ def recovery_mail(
     return MailRecoveryOut(
         offloads=[offload_out(db, o, now) for o in offloads], deleted_count=deleted or 0
     )
+
+
+@router.post("/api/mail/messages/{message_id}/offload", response_model=OffloadOneOut)
+async def offload_one(
+    message_id: int,
+    body: AccountIn,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Offload on one mail in the reader (mail panel spec §8): checked, moved to Gmail's
+    trash, kept here as offloaded. Through the applier, like a rule's Offload."""
+    account_or_404(db, body.account_id)
+    try:
+        d = await request.app.state.rule_applier.offload_by_hand(body.account_id, message_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except WAIT_ERRORS as e:
+        raise HTTPException(503, f"{e} Nothing was offloaded; try again later.") from e
+    request.app.state.bus.publish("rules", {"account_id": body.account_id})
+    request.app.state.bus.publish("mail", {"account_id": body.account_id})
+    return OffloadOneOut(offloaded=d.status == DecisionStatus.APPLIED, reason=d.reason)

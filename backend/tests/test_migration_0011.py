@@ -6,6 +6,7 @@ from sqlalchemy import text
 
 from app.database.engine import make_engine
 from app.database.migrate import run_migrations
+from tests.test_mail_speed_schema import _downgrade
 
 STAMP = "2026-01-02 03:04:05.000000"
 
@@ -96,3 +97,25 @@ def test_local_archive_mail_becomes_offloaded(tmp_path):
         (2, "in_mail", None),
         (3, "offloaded", None),
     ]
+
+
+def test_the_action_delete_becomes_offload(tmp_path):
+    f = old_database(tmp_path)
+    run_migrations(f)
+    actions = {i: json.loads(a) for i, a in read(f, "SELECT id, actions FROM rules")}
+    assert actions[1] == [{"kind": "offload"}]
+    assert actions[2] == [{"kind": "label", "label": "delete"}, {"kind": "archive"}]
+    ((snapshot,),) = read(f, "SELECT snapshot FROM rule_versions")
+    assert json.loads(snapshot) == {"name": "Junk", "actions": [{"kind": "offload"}]}
+    ((acts, changes),) = read(f, "SELECT actions, changes FROM rule_decisions")
+    assert json.loads(acts) == [{"kind": "offload"}]
+    assert json.loads(changes)["trash"] is True
+
+
+def test_downgrade_gives_the_old_action_name_back_and_keeps_mail_offloaded(tmp_path):
+    f = old_database(tmp_path)
+    run_migrations(f)
+    _downgrade(f, "0010")
+    ((acts,),) = read(f, "SELECT actions FROM rules WHERE id = 1")
+    assert json.loads(acts) == [{"kind": "delete"}]
+    assert read(f, "SELECT state FROM mail_messages WHERE id = 1") == [("offloaded",)]

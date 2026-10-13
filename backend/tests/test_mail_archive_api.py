@@ -4,7 +4,6 @@ from app.devtools.fake_gmail import FakeGmail, make_mail
 from app.models import RuleDecision
 from app.models.enums import ServiceKind, ServiceState
 from app.services.accounts.services import ensure_services, set_service_state
-from app.services.google.quota import BudgetReached
 from tests.mail_helpers import fake_adapter
 from tests.rules_helpers import keep
 from tests.test_mail_api import OneAdapter
@@ -25,55 +24,10 @@ def mailbox(app, make_account, db, layout):
     return acc, fake, add
 
 
-def test_delete_moves_to_archive_and_hides_from_threads(auth_client, mailbox):
-    acc, fake, add = mailbox
-    row = add("Promo")
-    r = auth_client.post("/api/mail/delete", json={"account_id": acc.id, "message_ids": [row.id]})
-    assert r.json() == {"deleted": 1, "failed": []}
-    assert "TRASH" in fake.messages[row.provider_id].labels
-    main = auth_client.get("/api/mail/threads", params={"account_id": acc.id}).json()["threads"]
-    arch = auth_client.get(
-        "/api/mail/threads", params={"account_id": acc.id, "view": "offloaded"}
-    ).json()["threads"]
-    assert main == [] and [t["subject"] for t in arch] == ["Promo"]
-    assert (
-        auth_client.get(f"/api/mail/threads/{row.thread_id}", params={"account_id": acc.id}).json()
-        == []
-    )
-    one = auth_client.get(
-        f"/api/mail/threads/{row.thread_id}", params={"account_id": acc.id, "view": "offloaded"}
-    ).json()
-    assert one[0]["state"] == "offloaded"
-
-
-def test_delete_by_thread_and_unknown_mail(auth_client, mailbox):
-    acc, _, add = mailbox
-    row = add("Promo")
-    r = auth_client.post(
-        "/api/mail/delete",
-        json={"account_id": acc.id, "thread_ids": [row.thread_id], "message_ids": [999999]},
-    )
-    body = r.json()
-    assert body["deleted"] == 1 and [f["message_id"] for f in body["failed"]] == [999999]
-    assert auth_client.post("/api/mail/delete", json={"account_id": acc.id}).status_code == 400
-
-
-def test_delete_stops_politely_when_google_has_to_wait(auth_client, mailbox, app):
-    acc, _, add = mailbox
-    row = add("Promo")
-
-    async def wait(account_id, message_id):
-        raise BudgetReached(1000)
-
-    app.state.rule_applier.delete_by_hand = wait
-    r = auth_client.post("/api/mail/delete", json={"account_id": acc.id, "message_ids": [row.id]})
-    assert r.status_code == 503 and "0 deleted so far" in r.json()["detail"]
-
-
 def test_delete_forever_needs_the_count(auth_client, mailbox):
     acc, _, add = mailbox
     row = add("Promo")
-    auth_client.post("/api/mail/delete", json={"account_id": acc.id, "message_ids": [row.id]})
+    auth_client.post(f"/api/mail/messages/{row.id}/offload", json={"account_id": acc.id})
     r = auth_client.post(
         "/api/mail/archive/delete-forever",
         json={"account_id": acc.id, "message_ids": [row.id], "confirm": 2},
@@ -89,7 +43,7 @@ def test_delete_forever_needs_the_count(auth_client, mailbox):
 def test_delete_forever_refuses_while_a_restore_is_queued(auth_client, mailbox, app):
     acc, _, add = mailbox
     row = add("Promo")
-    auth_client.post("/api/mail/delete", json={"account_id": acc.id, "message_ids": [row.id]})
+    auth_client.post(f"/api/mail/messages/{row.id}/offload", json={"account_id": acc.id})
     app.state.mail.queue.waiting = lambda aid: [("restore", {})]
     r = auth_client.post(
         "/api/mail/archive/delete-forever",
@@ -121,7 +75,7 @@ def test_thread_list_carries_the_rule_chip(auth_client, mailbox, db):
 def test_delete_forever_with_an_empty_pick_never_falls_back_to_the_search(auth_client, mailbox):
     acc, _, add = mailbox
     row = add("Promo")
-    auth_client.post("/api/mail/delete", json={"account_id": acc.id, "message_ids": [row.id]})
+    auth_client.post(f"/api/mail/messages/{row.id}/offload", json={"account_id": acc.id})
     r = auth_client.post(
         "/api/mail/archive/delete-forever",
         json={"account_id": acc.id, "message_ids": [], "q": "Promo", "confirm": 1},

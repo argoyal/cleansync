@@ -154,7 +154,7 @@ class DecisionHow(StrEnum):
     FIXED = "fixed"
     AI = "ai"
     NONE = "none"  # no rule fitted
-    MANUAL = "manual"  # the owner's own Delete or correction, logged so it can be undone
+    MANUAL = "manual"  # the owner's own Offload or correction, logged so it can be undone
 
 
 class DecisionStatus(StrEnum):

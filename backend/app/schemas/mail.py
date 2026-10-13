@@ -226,3 +226,8 @@ class RestoreMailIn(MailPickIn):
 class RestoreQueuedOut(BaseModel):
     queued: str
     count: int
+
+
+class OffloadOneOut(BaseModel):
+    offloaded: bool
+    reason: str | None = None
