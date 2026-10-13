@@ -143,7 +143,26 @@ class JobStartBody(AccountBody):
 
 
 class JobRunBody(AccountBody):
-    confirm: int
+    """Approving the match list (running rules spec §8). `left_out`: the unticked matches.
+    `only`: after Pick all was unticked, the matches ticked by hand; every other one is left
+    out. `confirm` is needed only when picked mail would be offloaded or deleted forever."""
+
+    left_out: list[int] = Field(default_factory=list, max_length=20000)
+    only: list[int] | None = Field(None, max_length=20000)
+    confirm: int | None = None
+
+
+class MatchOut(BaseModel):
+    id: int
+    message_id: int
+    thread_id: str
+    subject: str
+    from_addr: str
+    date: UtcDatetime
+    rule_id: int | None
+    rule_name: str
+    actions: list[dict]
+    why: str
 
 
 class JobPreviewOut(BaseModel):
@@ -162,4 +181,6 @@ class JobPreviewOut(BaseModel):
     view: str = ""
     q: str = ""
     filter_text: str = ""
+    left_out: int = 0
+    skip_reasons: list[dict] = []
     paused: PauseOut | None = None

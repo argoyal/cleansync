@@ -185,6 +185,60 @@ def test_starting_a_run_needs_rules_and_a_search_or_a_pick(auth_client, acc, db,
     )
 
 
+def test_the_match_list_and_approving_it_from_the_api(auth_client, acc, db, layout, make_account):
+    from app.devtools.fake_gmail import make_mail
+    from app.models import RuleJob
+    from app.models.enums import RuleJobState
+    from tests.rules_helpers import keep
+
+    rid = _rule_id(auth_client, acc)
+    rows = [keep(db, layout, acc, make_mail(f"Digest {i}")) for i in range(2)]
+    job = RuleJob(
+        account_id=acc.id, total=2, decided=2, state=RuleJobState.PREVIEWED, rule_ids=[rid]
+    )
+    db.add(job)
+    db.flush()
+    for r in rows:
+        db.add(
+            RuleDecision(
+                account_id=acc.id,
+                message_id=r.id,
+                rule_id=rid,
+                rule_version=1,
+                rule_name="Newsletters",
+                how="ai",
+                why="a digest",
+                actions=RULE["actions"],
+                labels_seen=["INBOX"],
+                status="planned",
+                job_id=job.id,
+            )
+        )
+    db.commit()
+    B = {"account_id": acc.id}
+    url = f"/api/rule-jobs/{job.id}"
+    got = auth_client.get(f"{url}/matches", params=B).json()
+    assert [m["subject"] for m in got] == ["Digest 1", "Digest 0"]
+    assert (got[0]["why"], got[0]["rule_name"], got[0]["rule_id"]) == (
+        "a digest",
+        "Newsletters",
+        rid,
+    )
+    after = auth_client.get(f"{url}/matches", params={**B, "before_id": got[0]["id"]}).json()
+    assert [m["subject"] for m in after] == ["Digest 0"]
+    assert auth_client.get(f"{url}/matches", params={**B, "rule_id": rid + 1}).json() == []
+    bob = {"account_id": make_account("bob@example.com").id}
+    assert auth_client.get(f"{url}/matches", params=bob).status_code in (400, 404)
+    r = auth_client.post(f"{url}/run", json={**B, "left_out": [m["id"] for m in got]})
+    assert r.status_code == 202, r.text
+    for _ in range(50):  # the run is a task on the app's loop: give it a moment
+        p = auth_client.get(url, params=B).json()
+        if p["state"] == "DONE":
+            break
+        time.sleep(0.05)
+    assert (p["state"], p["applied"], p["left_out"]) == ("DONE", 0, 2)
+
+
 def test_correct_waits_become_503_and_changes_are_published(auth_client, acc, app, monkeypatch):
     from app.services.rules.apply import BudgetReached
 

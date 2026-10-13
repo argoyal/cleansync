@@ -49,7 +49,7 @@ async def preview(gbox, worker, jobs, scope=INBOX):
     return jid, jobs.preview(gbox.acc.id, jid)
 
 
-async def test_preview_then_run_applies_with_the_typed_count(gbox):
+async def test_preview_then_run_applies_without_a_typed_count_for_archive(gbox):
     with gbox.sf() as db:
         create_rule(db, gbox.acc.id, ARCHIVE, "a")
     rows = [gbox.add(f"D{i}") for i in range(3)]
@@ -58,9 +58,7 @@ async def test_preview_then_run_applies_with_the_typed_count(gbox):
     assert p.state == RuleJobState.PREVIEWED and p.planned == 3
     assert p.per_rule[0]["rule"] == "News" and p.per_rule[0]["count"] == 3
     assert all("INBOX" in gbox.fake.messages[r.provider_id].labels for r in rows)  # nothing yet
-    with pytest.raises(RuleJobProblem, match="doesn't match"):
-        jobs.run(gbox.acc.id, jid, 2)
-    jobs.run(gbox.acc.id, jid, 3)
+    jobs.run(gbox.acc.id, jid)  # archive needs no typed count
     await jobs.wait(jid)
     assert jobs.preview(gbox.acc.id, jid).applied == 3
     assert all("INBOX" not in gbox.fake.messages[r.provider_id].labels for r in rows)

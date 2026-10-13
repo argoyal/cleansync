@@ -7,8 +7,9 @@ import pytest
 from sqlalchemy import select
 
 from app.models import MailMessage, RuleDecision, RuleJob, RuleSender, RuleTodo
+from app.models.enums import DecisionStatus, RuleJobState
 from app.services.rules.decisions import remembered_senders
-from app.services.rules.jobs import RuleJobProblem, RuleJobs, RunScope
+from app.services.rules.jobs import CHANGED_MSG, RuleJobProblem, RuleJobs, RunScope
 from app.services.rules.match import Choice
 from app.services.rules.store import RuleIn, create_rule
 from app.services.rules.worker import SortingWorker
@@ -241,3 +242,102 @@ async def test_each_mail_gets_the_first_ticked_rule_that_fits_in_the_rules_order
     assert verdicts(gbox, jid) == {"Gamma Beta Alpha": ("Beta", "ai")}
     assert chooser.offered == [["Beta", "Gamma"]]
     assert jobs.preview(gbox.acc.id, jid).rule_ids == [gamma, beta]
+
+
+async def decided(gbox, worker, jobs, rule_ids, scope) -> int:
+    """Start a run and decide all of it."""
+    jid = jobs.start_preview(gbox.acc.id, rule_ids=rule_ids, scope=scope)
+    while await worker.run_once(gbox.acc.id):
+        pass
+    return jid
+
+
+async def test_the_match_list_pages_and_filters_by_rule(gbox):
+    news, shops = rule(gbox, "News"), rule(gbox, "Shops")
+    for i in range(3):
+        gbox.add(f"News {i}")
+    gbox.add("Shops one")
+    gbox.add("Nothing here")
+    worker, jobs = jobs_for(gbox)
+    scope = RunScope(view="inbox", q="", pick_all=True)
+    jid = await decided(gbox, worker, jobs, [news, shops], scope)
+    first = jobs.matches(gbox.acc.id, jid, limit=3)
+    rest = jobs.matches(gbox.acc.id, jid, before_id=first[-1].id, limit=3)
+    ids = [m.id for m in first + rest]
+    assert (len(first), len(rest)) == (3, 1) and ids == sorted(ids, reverse=True)
+    assert {m.subject for m in first + rest} == {"News 0", "News 1", "News 2", "Shops one"}
+    (only,) = jobs.matches(gbox.acc.id, jid, rule_id=shops)
+    assert (only.subject, only.rule_name, only.why, only.actions) == (
+        "Shops one",
+        "Shops",
+        "subject mentions Shops",
+        ARCHIVE,
+    )
+    assert only.from_addr == "friend@example.com" and only.thread_id
+    with pytest.raises(RuleJobProblem):
+        jobs.matches(gbox.acc.id + 1, jid)
+
+
+async def test_approving_leaves_out_the_unticked_and_runs_the_rest(gbox):
+    news = rule(gbox, "News")
+    kept, changed, moved = gbox.add("News kept"), gbox.add("News changed"), gbox.add("News moved")
+    worker, jobs = jobs_for(gbox)
+    jid = await decided(gbox, worker, jobs, [news], RunScope(inbox=True))
+    ids = {m.subject: m.id for m in jobs.matches(gbox.acc.id, jid)}
+    with gbox.sf() as db:
+        db.get(MailMessage, moved.id).labels = ["INBOX", "STARRED"]  # changed since deciding
+        db.commit()
+    jobs.run(gbox.acc.id, jid, left_out=[ids["News kept"], 999_999])  # a stranger id is ignored
+    await jobs.wait(jid)
+    p = jobs.preview(gbox.acc.id, jid)
+    assert (p.state, p.applied, p.skipped, p.left_out) == (RuleJobState.DONE, 1, 1, 1)
+    assert p.skip_reasons == [{"reason": CHANGED_MSG, "count": 1}]
+    assert "INBOX" in gbox.fake.messages[kept.provider_id].labels
+    assert "INBOX" not in gbox.fake.messages[changed.provider_id].labels
+    with gbox.sf() as db:
+        d = db.get(RuleDecision, ids["News kept"])
+        assert (d.status, d.reason) == (DecisionStatus.REJECTED, "You left it out.")
+
+
+async def test_only_runs_just_the_ticked_matches(gbox):
+    news = rule(gbox, "News")
+    rows = [gbox.add(f"News {i}") for i in range(3)]
+    worker, jobs = jobs_for(gbox)
+    jid = await decided(gbox, worker, jobs, [news], RunScope(inbox=True))
+    ids = {m.subject: m.id for m in jobs.matches(gbox.acc.id, jid)}
+    jobs.run(gbox.acc.id, jid, only=[ids["News 1"]])
+    await jobs.wait(jid)
+    p = jobs.preview(gbox.acc.id, jid)
+    assert (p.applied, p.left_out) == (1, 2)
+    labels = [gbox.fake.messages[r.provider_id].labels for r in rows]
+    assert ["INBOX" in x for x in labels] == [True, False, True]
+
+
+async def test_the_typed_count_is_asked_only_for_picked_offloads(gbox, monkeypatch):
+    news = rule(gbox, "News")
+    junk = rule(gbox, "Junk", actions=[{"kind": "offload"}])
+    for subject in ("News a", "Junk a", "Junk b"):
+        gbox.add(subject)
+    applied: list[int] = []
+
+    async def apply(did):
+        applied.append(did)
+        with gbox.sf() as db:
+            db.get(RuleDecision, did).status = DecisionStatus.APPLIED
+            db.commit()
+        return DecisionStatus.APPLIED
+
+    monkeypatch.setattr(gbox.applier, "apply", apply)
+    worker, jobs = jobs_for(gbox)
+    scope = RunScope(view="inbox", q="", pick_all=True)
+    jid = await decided(gbox, worker, jobs, [news, junk], scope)
+    ids = {m.subject: m.id for m in jobs.matches(gbox.acc.id, jid)}
+    with pytest.raises(
+        RuleJobProblem, match=r"^The number you typed doesn't match the 2 mails to offload\.$"
+    ):
+        jobs.run(gbox.acc.id, jid)
+    with pytest.raises(RuleJobProblem, match=r"doesn't match the 1 mail to offload\.$"):
+        jobs.run(gbox.acc.id, jid, 2, left_out=[ids["Junk b"]])
+    jobs.run(gbox.acc.id, jid, 1, left_out=[ids["Junk b"]])
+    await jobs.wait(jid)
+    assert sorted(applied) == sorted([ids["News a"], ids["Junk a"]])

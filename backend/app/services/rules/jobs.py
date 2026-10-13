@@ -7,7 +7,9 @@ import asyncio
 import contextlib
 import logging
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
@@ -15,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.core.clock import utcnow
 from app.models import MailMessage, Rule, RuleDecision, RuleJob, RuleTodo
 from app.models.enums import DecisionStatus, MailState, RuleJobState
-from app.services.mail.offload_plan import Pick, describe_pick
+from app.services.mail.offload_plan import Pick, chunked, describe_pick
 from app.services.mail.search import GMAIL_VIEWS, SearchError, mail_conditions
 from app.services.rules.apply import WAIT_ERRORS, Applier
 from app.services.rules.worker import SortingWorker
@@ -40,6 +42,23 @@ NO_MAIL_MSG = "No mail in Gmail matches this search."
 EMPTY_INBOX_MSG = "No mail in the Inbox to run this rule on."
 # Gmail's views a run can cover (spec §4). Suggested is a list of suggestions, not of mail.
 RUN_VIEWS = GMAIL_VIEWS - {"suggested"}
+LEFT_OUT_MSG = "You left it out."
+# Actions that take mail out of Gmail: approving them needs the typed count (spec §5).
+HEAVY_KINDS = ("offload", "delete_forever")
+MATCH_PAGE = 50
+MAX_MATCH_PAGE = 200
+
+
+def _mails(n: int) -> str:
+    return f"{n:,} {'mail' if n == 1 else 'mails'}"
+
+
+def _heavy_words(kinds: set[str]) -> str:
+    if kinds == {"offload"}:
+        return "offload"
+    if kinds == {"delete_forever"}:
+        return "delete forever"
+    return "offload or delete forever"
 
 
 class RuleJobProblem(ValueError):
@@ -133,6 +152,24 @@ class JobPreview:
     view: str
     q: str
     filter_text: str
+    left_out: int
+    skip_reasons: list[dict]
+
+
+@dataclass
+class Match:
+    """One row of the match list (running rules spec §5): a planned change and its mail."""
+
+    id: int
+    message_id: int
+    thread_id: str
+    subject: str
+    from_addr: str
+    date: datetime
+    rule_id: int | None
+    rule_name: str
+    actions: list[dict]
+    why: str
 
 
 class RuleJobs:
@@ -243,6 +280,19 @@ class RuleJobs:
                     .group_by(RuleDecision.status)
                 ).all()
             )
+            left_out = db.scalar(
+                select(func.count()).where(
+                    RuleDecision.job_id == job_id,
+                    RuleDecision.status == DecisionStatus.REJECTED,
+                    RuleDecision.reason == LEFT_OUT_MSG,
+                )
+            )
+            skips = db.execute(
+                select(RuleDecision.reason, func.count())
+                .where(RuleDecision.job_id == job_id, RuleDecision.status == DecisionStatus.SKIPPED)
+                .group_by(RuleDecision.reason)
+                .order_by(func.count().desc())
+            ).all()
             groups: dict[tuple, dict] = defaultdict(lambda: {"count": 0, "examples": []})
             rows = db.execute(
                 select(
@@ -280,21 +330,92 @@ class RuleJobs:
                 view=job.view,
                 q=job.q,
                 filter_text=job.filter_text,
+                left_out=left_out or 0,
+                skip_reasons=[{"reason": r or "", "count": n} for r, n in skips],
             )
 
-    def run(self, account_id: int, job_id: int, confirm: int) -> None:
+    def matches(
+        self,
+        account_id: int,
+        job_id: int,
+        *,
+        rule_id: int | None = None,
+        before_id: int | None = None,
+        limit: int = MATCH_PAGE,
+    ) -> list[Match]:
+        """The match list (running rules spec §5): the run's planned changes, newest first,
+        a page at a time. `rule_id` keeps one rule's."""
+        with self.sf() as db:
+            self._job(db, account_id, job_id)
+            q = (
+                select(RuleDecision, MailMessage)
+                .join(MailMessage, MailMessage.id == RuleDecision.message_id)
+                .where(RuleDecision.job_id == job_id, RuleDecision.status == DecisionStatus.PLANNED)
+            )
+            if rule_id is not None:
+                q = q.where(RuleDecision.rule_id == rule_id)
+            if before_id is not None:
+                q = q.where(RuleDecision.id < before_id)
+            page = max(1, min(limit, MAX_MATCH_PAGE))
+            rows = db.execute(q.order_by(RuleDecision.id.desc()).limit(page)).all()
+            return [
+                Match(
+                    id=d.id,
+                    message_id=m.id,
+                    thread_id=m.thread_id,
+                    subject=m.subject or "",
+                    from_addr=m.from_addr or "",
+                    date=m.date,
+                    rule_id=d.rule_id,
+                    rule_name=d.rule_name,
+                    actions=list(d.actions or []),
+                    why=d.why or "",
+                )
+                for d, m in rows
+            ]
+
+    def run(
+        self,
+        account_id: int,
+        job_id: int,
+        confirm: int | None = None,
+        *,
+        left_out: Collection[int] = (),
+        only: Collection[int] | None = None,
+    ) -> None:
+        """Approve the match list (running rules spec §5). The matches left out (every one
+        not in `only`, when it is given) become rejected; the rest are made. `confirm` must be
+        the number of picked mails that would be offloaded or deleted forever, if any."""
         with self.sf() as db:
             job = self._job(db, account_id, job_id)
             if job.state != RuleJobState.PREVIEWED:
                 raise RuleJobProblem("Wait until the preview is finished.")
-            planned = db.scalar(
-                select(func.count()).where(
-                    RuleDecision.job_id == job_id, RuleDecision.status == DecisionStatus.PLANNED
-                )
+            planned = dict(
+                db.execute(
+                    select(RuleDecision.id, RuleDecision.actions).where(
+                        RuleDecision.job_id == job_id,
+                        RuleDecision.status == DecisionStatus.PLANNED,
+                    )
+                ).all()
             )
-            if confirm != planned:
+            out = set(planned) - set(only) if only is not None else set(left_out) & set(planned)
+            heavy, kinds = 0, set()
+            for did, actions in planned.items():
+                found = {a.get("kind") for a in actions or []} & set(HEAVY_KINDS)
+                if did not in out and found:
+                    heavy += 1
+                    kinds |= found
+            if heavy and confirm != heavy:
                 raise RuleJobProblem(
-                    f"The number you typed doesn't match the {planned:,} mails to change."
+                    f"The number you typed doesn't match the {_mails(heavy)} "
+                    f"to {_heavy_words(kinds)}."
+                )
+            for part in chunked(sorted(out)):
+                db.execute(
+                    update(RuleDecision)
+                    .where(RuleDecision.id.in_(part))
+                    .values(status=DecisionStatus.REJECTED, reason=LEFT_OUT_MSG)
+                    .execution_options(synchronize_session=False)
                 )
             job.state = RuleJobState.RUNNING
             db.commit()

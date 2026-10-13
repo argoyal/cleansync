@@ -26,6 +26,7 @@ from app.schemas.rules import (
     JobRunBody,
     JobStartBody,
     MailIdsBody,
+    MatchOut,
     NamesBody,
     RuleBody,
     RuleOut,
@@ -51,7 +52,7 @@ from app.services.rules.decisions import (
     hints_for,
     remembered_senders,
 )
-from app.services.rules.jobs import RuleJobProblem, RunScope
+from app.services.rules.jobs import MATCH_PAGE, RuleJobProblem, RunScope
 from app.services.rules.mailview import CopyUnreadable, mail_for_model
 from app.services.rules.match import Conditions, RuleView
 from app.services.rules.worker import set_sorting
@@ -650,6 +651,28 @@ def job(
         raise _problem(e) from e
 
 
+@router.get("/api/rule-jobs/{job_id}/matches", response_model=list[MatchOut])
+def job_matches(
+    job_id: int,
+    account_id: int,
+    request: Request,
+    rule_id: int | None = None,
+    before_id: int | None = None,
+    limit: int = MATCH_PAGE,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """The run's match list, newest first (running rules spec §8)."""
+    account_or_404(db, account_id)
+    try:
+        found = request.app.state.rule_jobs.matches(
+            account_id, job_id, rule_id=rule_id, before_id=before_id, limit=limit
+        )
+    except PROBLEMS as e:
+        raise _problem(e) from e
+    return [MatchOut(**asdict(m)) for m in found]
+
+
 # Async, so the run's task starts on the server's event loop (a worker thread has none).
 @router.post("/api/rule-jobs/{job_id}/run", status_code=202)
 async def run_job(
@@ -661,7 +684,9 @@ async def run_job(
 ):
     account_or_404(db, body.account_id)
     try:
-        request.app.state.rule_jobs.run(body.account_id, job_id, body.confirm)
+        request.app.state.rule_jobs.run(
+            body.account_id, job_id, body.confirm, left_out=body.left_out, only=body.only
+        )
     except PROBLEMS as e:
         raise _problem(e) from e
     return {"job_id": job_id}
