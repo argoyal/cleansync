@@ -44,6 +44,12 @@ from app.services.mail.search import SearchError, mail_conditions
 from app.services.mail.store import eml_path
 
 MAX_QUERY_CHARS = 1000
+# Opening a thread shows its mails of the view it was opened from (mail panel spec §4).
+THREAD_STATES = {
+    "offloaded": (MailState.OFFLOADED,),
+    "deleted": (MailState.DELETED,),
+    "archive": (MailState.LOCAL_ARCHIVE,),
+}
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/mail")
@@ -247,6 +253,7 @@ def thread(
     thread_id: str,
     account_id: int,
     request: Request,
+    view: str = "all",
     archive: bool = False,
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
@@ -254,14 +261,13 @@ def thread(
     account = account_or_404(db, account_id)
     if valid_mail_id(thread_id) is None:
         raise HTTPException(404, "thread not found")
+    states = THREAD_STATES.get("archive" if archive else view, (MailState.IN_MAIL,))
     rows = db.scalars(
         select(MailMessage)
         .where(
             MailMessage.account_id == account_id,
             MailMessage.thread_id == thread_id,
-            MailMessage.state == MailState.LOCAL_ARCHIVE
-            if archive
-            else MailMessage.state != MailState.LOCAL_ARCHIVE,
+            MailMessage.state.in_(states),
         )
         .order_by(MailMessage.date, MailMessage.id)
     )

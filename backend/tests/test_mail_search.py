@@ -138,17 +138,19 @@ def test_conditions_find_the_right_mail(db, make_account):
     )
     assert _found(db, acc, q="invoic") == ["m1"]  # words match by their start
     assert _found(db, acc, q="from:billing") == ["m1"]
-    assert _found(db, acc, q="label:receipts") == ["m1", "m3"]
-    assert _found(db, acc, q="label:Label_2 older_than:1y") == ["m3"]
+    assert _found(db, acc, q="label:receipts") == ["m1"]
+    assert _found(db, acc, view="offloaded", q="label:Label_2 older_than:1y") == ["m3"]
     assert _found(db, acc, q="has:attachment larger:5M") == ["m1"]
-    assert _found(db, acc, q="smaller:5M") == ["m2", "m3", "m4"]
+    assert _found(db, acc, q="smaller:5M") == ["m2"]
     assert _found(db, acc, q="is:unread is:starred") == ["m2"]
-    assert _found(db, acc, q="is:offloaded") == ["m3"] == _found(db, acc, view="offloaded")
-    assert _found(db, acc, q="is:deleted") == ["m4"] == _found(db, acc, view="deleted")
+    assert _found(db, acc, view="offloaded", q="is:offloaded") == ["m3"]
+    assert _found(db, acc, view="offloaded") == ["m3"]
+    assert _found(db, acc, view="deleted", q="is:deleted") == ["m4"]
+    assert _found(db, acc, view="deleted") == ["m4"]
     assert _found(db, acc, view="inbox") == ["m1", "m2"]
-    assert _found(db, acc, view="sent") == ["m4"]
+    assert _found(db, acc, view="sent") == []
     assert _found(db, acc, view="starred") == ["m2"]
-    assert _found(db, acc, view="all", label="Label_2") == ["m1", "m3"]
+    assert _found(db, acc, view="all", label="Label_2") == ["m1"]
     assert _found(db, acc, q="label:nosuchlabel") == []
     assert _found(db, acc, q='"weird \\" quote %_ value"') == []  # odd characters are safe
     with pytest.raises(SearchError, match="unknown view"):

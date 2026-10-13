@@ -37,7 +37,7 @@ async def test_the_preview_leaves_out_new_mail_unbacked_mail_and_mail_already_go
     eml_path(box.app.state.layout, box.acc.email, box.row("Ancient note").file_path).write_bytes(
         b"short"
     )
-    p = _preview(auth_client, box.acc, q="newer_than:3y").json()  # all six mails
+    p = _preview(auth_client, box.acc, q="newer_than:3y").json()  # every mail in Gmail
     assert p["count"] == 2  # Old statement, Last month
     assert p["excluded"] == [
         {
@@ -50,12 +50,7 @@ async def test_the_preview_leaves_out_new_mail_unbacked_mail_and_mail_already_go
             "count": 1,
             "text": "1 mail left out: not fully backed up here.",
         },
-        {
-            "reason": "already",
-            "count": 1,
-            "text": "1 mail left out: already offloaded or deleted in Gmail.",
-        },
-    ]
+    ]  # mail already out of Gmail isn't in All mail, so a search never counts it
 
 
 async def test_picked_mails_and_threads_use_the_same_preview(auth_client, offload_box):

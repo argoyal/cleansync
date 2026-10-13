@@ -101,8 +101,12 @@ def test_a_thread_lists_its_mails_oldest_first(auth_client, app, db, make_accoun
     _keep(app, db, acc, "b", make_mail("Re: Plan"), days=2, state=MailState.OFFLOADED)
     _keep(app, db, acc, "c", make_mail("Other"), thread="t2")
     rows = auth_client.get("/api/mail/threads/t1", params={"account_id": acc.id}).json()
-    assert [r["subject"] for r in rows] == ["Plan", "Re: Plan"]
-    assert rows[1]["state"] == "offloaded" and rows[1]["gmail_url"] is None
+    assert [r["subject"] for r in rows] == ["Plan"]
+    off = auth_client.get(
+        "/api/mail/threads/t1", params={"account_id": acc.id, "view": "offloaded"}
+    ).json()
+    assert [r["subject"] for r in off] == ["Re: Plan"]
+    assert off[0]["state"] == "offloaded" and off[0]["gmail_url"] is None
     assert auth_client.get("/api/mail/threads/none", params={"account_id": acc.id}).json() == []
     bad = auth_client.get("/api/mail/threads/a%20b%3B", params={"account_id": acc.id})
     assert bad.status_code == 404

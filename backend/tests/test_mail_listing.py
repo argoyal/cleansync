@@ -64,21 +64,24 @@ def test_threads_are_grouped_newest_first_with_their_marks(auth_client, db, make
     _add(db, acc, "b1", thread="t2", days=1, state=MailState.OFFLOADED)
     _add(db, acc, "c1", thread="t3", days=9, state=MailState.DELETED)
     page = _page(auth_client, acc)
-    assert [t["thread_id"] for t in page["threads"]] == ["t2", "t1", "t3"]
-    t1 = page["threads"][1]
+    assert [t["thread_id"] for t in page["threads"]] == ["t1"]
+    t1 = page["threads"][0]
     assert (
         t1["count"] == 2
         and t1["subject"] == "Re: Project plan"
         and t1["from_addr"] == "me@example.com"
     )
     assert t1["unread"] is True and t1["snippet"] == "snippet a2"
-    assert page["threads"][0]["offloaded"] is True and page["threads"][2]["deleted"] is True
     assert page["next_cursor"] is None
+    off = _page(auth_client, acc, view="offloaded")["threads"]
+    gone = _page(auth_client, acc, view="deleted")["threads"]
+    assert [t["thread_id"] for t in off] == ["t2"] and off[0]["offloaded"] is True
+    assert [t["thread_id"] for t in gone] == ["t3"] and gone[0]["deleted"] is True
     totals = auth_client.get("/api/mail/totals", params={"account_id": acc.id}).json()
-    assert totals == {"total": 4, "total_bytes": 4000}
+    assert totals == {"total": 2, "total_bytes": 2000}
     inbox = _page(auth_client, acc, view="inbox")
-    assert [t["thread_id"] for t in inbox["threads"]] == ["t2", "t1", "t3"]
-    assert inbox["threads"][1]["count"] == 1  # only the mail in the inbox counts
+    assert [t["thread_id"] for t in inbox["threads"]] == ["t1"]
+    assert inbox["threads"][0]["count"] == 1  # only the mail in the inbox counts
 
 
 def test_paging_neither_repeats_nor_skips_when_mail_arrives(auth_client, db, make_account):
@@ -124,11 +127,12 @@ def test_counts_for_views_and_labels(auth_client, db, make_account):
     _add(db, acc, "d", labels=("INBOX",), state=MailState.DELETED)
     body = auth_client.get("/api/mail/counts", params={"account_id": acc.id}).json()
     assert body["views"] == {
-        "all": 4,
-        "inbox": 2,
+        "all": 2,
+        "inbox": 1,
         "sent": 1,
         "starred": 1,
-        "important": 1,
+        "important": 0,
+        "archived": 0,
         "offloaded": 1,
         "deleted": 1,
         "archive": 0,

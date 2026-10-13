@@ -48,7 +48,7 @@ def big_account(db, make_account):
             "cc_addrs, subject, date, size, file_size, sha256, labels, unread, starred, "
             "has_attachments, attachments, snippet, file_path, state, first_seen_at, updated_at) "
             "VALUES (:a, :p, :t, :who, :who, :who, :subj, :d, :s, :s, '', :l, 0, 0, 1, :att, :snip, 'x', "
-            "'IN_MAIL', :d, :d)"
+            "'in_mail', :d, :d)"
         ),
         rows,
     )

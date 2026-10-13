@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import column, false, or_, select, text
+from sqlalchemy import column, false, not_, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models import MailLabel, MailMessage, MailMessageLabel, RuleDecision
@@ -21,18 +21,24 @@ SYSTEM_LABELS = {
     "important": "IMPORTANT",
     "unread": "UNREAD",
 }
-VIEWS = {
-    "all": "",
+GMAIL_LABEL_VIEWS = {
     "inbox": "INBOX",
     "sent": "SENT",
     "starred": "STARRED",
     "important": "IMPORTANT",
-    "offloaded": MailState.OFFLOADED,
-    "deleted": MailState.DELETED,
-    "suggested": "suggested",
-    "archive": MailState.LOCAL_ARCHIVE,
 }
+# Views of mail that is in Gmail (mail panel spec §4): they only ever show state IN_MAIL.
+GMAIL_VIEWS = frozenset({"all", "archived", "suggested", *GMAIL_LABEL_VIEWS})
+# Views of mail CleanSync keeps that is out of Gmail. "kept" is both, for Restore to Gmail.
+OUT_OF_GMAIL = {
+    "offloaded": (MailState.OFFLOADED,),
+    "deleted": (MailState.DELETED,),
+    "kept": (MailState.OFFLOADED, MailState.DELETED),
+}
+VIEWS = GMAIL_VIEWS | set(OUT_OF_GMAIL) | {"archive"}  # "archive": the Local archive, until 0011
 IS_VALUES = ("unread", "starred", "offloaded", "deleted", "archived")
+OFFLOADED_ELSEWHERE_MSG = "Offloaded mail is in the Offloaded view."
+DELETED_ELSEWHERE_MSG = "Mail deleted in Gmail is in the Deleted in Gmail view."
 OPERATORS = (
     "from",
     "to",
@@ -45,6 +51,7 @@ OPERATORS = (
     "older_than",
     "newer_than",
     "is",
+    "in",
 )
 _TOKEN = re.compile(r'(?:[A-Za-z_]+:)?"[^"]*"?|\S+')
 MAX_SIZE = 2**63 - 1  # the biggest number SQLite can compare with
@@ -73,6 +80,7 @@ class MailQuery:
     offloaded: bool = False
     deleted: bool = False
     archived: bool = False
+    in_archived: bool = False
 
     def is_empty(self) -> bool:
         return self == MailQuery()
@@ -168,6 +176,10 @@ def parse_query(text: str, *, now: datetime) -> MailQuery:
             q.before = _earlier(q.before, _ago(now, value))
         elif op == "newer_than":
             q.after = _later(q.after, _ago(now, value))
+        elif op == "in":
+            if value.lower() != "archived":
+                raise SearchError('"in:" only knows in:archived.')
+            q.in_archived = True
         else:  # is:
             v = value.lower()
             if v not in IS_VALUES:
@@ -195,6 +207,11 @@ def has_label(account_id: int, label_id: str):
     )
 
 
+def archived_conditions(account_id: int) -> list:
+    """Gmail's archive (mail panel spec §4): neither in the Inbox nor sent by the owner."""
+    return [not_(has_label(account_id, "INBOX")), not_(has_label(account_id, "SENT"))]
+
+
 def label_ids(db: Session, account_id: int, name: str) -> list[str]:
     """Names are matched in Python with casefold(): SQLite's lower() only knows A–Z, so
     "Équipe" would never match "équipe" there."""
@@ -219,10 +236,15 @@ def fts_match(words: list[str]) -> str:
     return " ".join(f'"{w}"*' for w in clean)
 
 
-def query_conditions(db: Session, account_id: int, q: MailQuery, *, archive: bool = False) -> list:
+def query_conditions(db: Session, account_id: int, q: MailQuery, *, view: str = "all") -> list:
     conds: list = []
-    if q.archived and not archive:  # inside the archive the view already limits to it
+    if q.archived and view != "archive":  # inside the archive the view already limits to it
         raise SearchError("Archived mail is on the Local archive page.")
+    if view in GMAIL_VIEWS:
+        if q.offloaded:
+            raise SearchError(OFFLOADED_ELSEWHERE_MSG)
+        if q.deleted:
+            raise SearchError(DELETED_ELSEWHERE_MSG)
     for s in q.senders:
         conds.append(MailMessage.from_addr.ilike(f"%{_like(s)}%", escape="\\"))
     for r in q.recipients:
@@ -254,6 +276,8 @@ def query_conditions(db: Session, account_id: int, q: MailQuery, *, archive: boo
         conds.append(MailMessage.state == MailState.OFFLOADED)
     if q.deleted:
         conds.append(MailMessage.state == MailState.DELETED)
+    if q.in_archived:
+        conds += [MailMessage.state == MailState.IN_MAIL, *archived_conditions(account_id)]
     if q.words:
         matches = (
             text("SELECT rowid FROM mail_fts WHERE mail_fts MATCH :fts")
@@ -268,11 +292,14 @@ def view_conditions(account_id: int, view: str, label: str | None) -> list:
     if view not in VIEWS:
         raise SearchError(f"unknown view {view!r}")
     conds: list = []
-    target = VIEWS[view]
-    if view in ("offloaded", "deleted"):
-        conds.append(MailMessage.state == target)
-    elif view == "archive":
-        pass  # mail_conditions limits to the archive
+    if view in GMAIL_VIEWS:
+        conds.append(MailMessage.state == MailState.IN_MAIL)
+    elif view in OUT_OF_GMAIL:
+        conds.append(MailMessage.state.in_(OUT_OF_GMAIL[view]))
+    if view in GMAIL_LABEL_VIEWS:
+        conds.append(has_label(account_id, GMAIL_LABEL_VIEWS[view]))
+    elif view == "archived":
+        conds += archived_conditions(account_id)
     elif view == "suggested":
         conds.append(
             MailMessage.id.in_(
@@ -281,8 +308,6 @@ def view_conditions(account_id: int, view: str, label: str | None) -> list:
                 )
             )
         )
-    elif target:
-        conds.append(has_label(account_id, target))
     if label:
         conds.append(has_label(account_id, label))
     return conds
@@ -299,13 +324,13 @@ def mail_conditions(
     archive: bool = False,
 ) -> list:
     """Every condition for one account, view (or label) and search, ready for .where(*…).
-    Local-archive mail is left out, unless asked for (archive=True or the archive view)."""
-    in_archive = archive or view == "archive"
+    Gmail views hold only mail in Gmail; the Local archive only with archive=True or the
+    archive view (until migration 0011 merges it into Offloaded)."""
+    if archive:
+        view = "archive"
     return [
         MailMessage.account_id == account_id,
-        MailMessage.state == MailState.LOCAL_ARCHIVE
-        if in_archive
-        else MailMessage.state != MailState.LOCAL_ARCHIVE,
+        *([MailMessage.state == MailState.LOCAL_ARCHIVE] if view == "archive" else []),
         *view_conditions(account_id, view, label),
-        *query_conditions(db, account_id, parse_query(q, now=now), archive=in_archive),
+        *query_conditions(db, account_id, parse_query(q, now=now), view=view),
     ]

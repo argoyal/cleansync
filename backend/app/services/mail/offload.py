@@ -206,7 +206,11 @@ def restore_targets(
     elif (pick.q or "").strip():
         q = q.where(
             *mail_conditions(
-                db, account_id, q=(pick.q or "").strip(), now=now, archive=pick.archive
+                db,
+                account_id,
+                view="archive" if pick.archive else "kept",
+                q=(pick.q or "").strip(),
+                now=now,
             )
         )
     else:

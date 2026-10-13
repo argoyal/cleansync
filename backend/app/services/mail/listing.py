@@ -14,7 +14,7 @@ from app.core.clock import as_utc
 from app.models import MailLabel, MailMessage, MailMessageLabel, RuleDecision, RuleJob
 from app.models.enums import DecisionStatus, MailState, RuleJobState
 from app.services.mail.gmail import valid_mail_id
-from app.services.mail.search import SearchError
+from app.services.mail.search import SearchError, archived_conditions
 
 BAD_CURSOR_MSG = "That page of the list is no longer valid. Start from the top."
 
@@ -214,24 +214,24 @@ def totals(db: Session, conds: list) -> tuple[int, int]:
 
 
 def _label_tally(db: Session, account_id: int) -> dict[str, int]:
-    """Mails per label, local-archive mail left out. The label table counts every mail, so
-    the archived ones (few, found through the state index) are taken off again."""
+    """Mails per label, counting only mail in Gmail (mail panel spec §4). The label table
+    counts every mail kept here, so the ones out of Gmail are taken off again."""
     rows = db.execute(
         select(MailMessageLabel.label_id, func.count())
         .where(MailMessageLabel.account_id == account_id)
         .group_by(MailMessageLabel.label_id)
     ).all()
     tally = {str(v): int(n) for v, n in rows}
-    archived = db.execute(
+    gone = db.execute(
         select(MailMessageLabel.label_id, func.count())
         .join(MailMessage, MailMessage.id == MailMessageLabel.message_id)
         .where(
             MailMessage.account_id == account_id,
-            MailMessage.state == MailState.LOCAL_ARCHIVE,
+            MailMessage.state != MailState.IN_MAIL,
         )
         .group_by(MailMessageLabel.label_id)
     ).all()
-    for v, n in archived:
+    for v, n in gone:
         left = tally.get(str(v), 0) - int(n)
         if left > 0:
             tally[str(v)] = left
@@ -257,7 +257,18 @@ def view_counts(
             .group_by(MailMessage.state)
         ).all()
     )
-    archived = states.pop(MailState.LOCAL_ARCHIVE, 0)
+    archived = (
+        db.scalar(
+            select(func.count())
+            .select_from(MailMessage)
+            .where(
+                MailMessage.account_id == account_id,
+                MailMessage.state == MailState.IN_MAIL,
+                *archived_conditions(account_id),
+            )
+        )
+        or 0
+    )
     suggested = (
         db.scalar(
             select(func.count(func.distinct(RuleDecision.message_id)))
@@ -265,20 +276,21 @@ def view_counts(
             .where(
                 RuleDecision.account_id == account_id,
                 RuleDecision.status == DecisionStatus.SUGGESTED,
-                MailMessage.state != MailState.LOCAL_ARCHIVE,
+                MailMessage.state == MailState.IN_MAIL,
             )
         )
         or 0
     )
     return {
-        "all": sum(states.values()),
+        "all": states.get(MailState.IN_MAIL, 0),
         "inbox": tally.get("INBOX", 0),
         "sent": tally.get("SENT", 0),
         "starred": tally.get("STARRED", 0),
         "important": tally.get("IMPORTANT", 0),
+        "archived": archived,
         "offloaded": states.get(MailState.OFFLOADED, 0),
         "deleted": states.get(MailState.DELETED, 0),
-        "archive": archived,
+        "archive": states.get(MailState.LOCAL_ARCHIVE, 0),
         "suggested": suggested,
     }
 
