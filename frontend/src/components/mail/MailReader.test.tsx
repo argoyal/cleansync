@@ -522,7 +522,8 @@ describe("Pick all and the actions of each view", () => {
     open("/mail?view=inbox&q=from%3Ashop");
     await userEvent.click(await screen.findByRole("checkbox", { name: "Pick all" }));
     expect(within(bar()).queryByRole("button", { name: "Restore to Gmail" })).not.toBeInTheDocument();
-    expect(within(bar()).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
+    expect(within(bar()).getByRole("button", { name: "Delete forever…" })).toBeDisabled();
+    expect(within(bar()).getByText("Turn on Allow permanent delete in Settings → Accounts.")).toBeInTheDocument();
     expect(within(bar()).getByRole("button", { name: "Make a rule…" })).toBeInTheDocument();
     await userEvent.click(within(bar()).getByRole("button", { name: "Offload" }));
     const dialog = screen.getByRole("dialog", { name: "Offload mail" });
@@ -551,7 +552,7 @@ describe("Pick all and the actions of each view", () => {
   });
 
   it("deletes a pick-all of Deleted in Gmail forever after the typed count", async () => {
-    const { calls } = api({ "POST /api/mail/delete-forever": { deleted: 7, left: 0 } }, 7);
+    const { calls } = api({ "POST /api/mail/delete-forever": { deleted: 7, left: 0, job_id: null } }, 7);
     open("/mail?view=deleted");
     await screen.findByText(/7 mails/);
     await userEvent.click(await screen.findByRole("checkbox", { name: "Pick all" }));
@@ -567,7 +568,7 @@ describe("Pick all and the actions of each view", () => {
   it("deletes picked Offloaded threads forever by their offloaded mails, and keeps the pick on Cancel", async () => {
     const { calls } = api({
       "GET /api/mail/threads/t1": [msg({ id: 4, state: "offloaded" }), msg({ id: 5, state: "offloaded" })],
-      "POST /api/mail/delete-forever": { deleted: 2, left: 0 },
+      "POST /api/mail/delete-forever": { deleted: 2, left: 0, job_id: null },
     });
     open("/mail?view=offloaded");
     await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
@@ -650,7 +651,8 @@ describe("Pick all and the actions of each view", () => {
     const first = open("/mail?thread=t1");
     const reader = await screen.findByRole("region", { name: "Open mail" });
     expect(await within(reader).findByRole("button", { name: "Make a rule…" })).toBeInTheDocument();
-    expect(within(reader).queryByRole("button", { name: /^Delete/ })).not.toBeInTheDocument();
+    expect(within(reader).getByRole("button", { name: "Delete forever…" })).toBeDisabled();
+    expect(within(reader).getByText("Turn on Allow permanent delete in Settings → Accounts.")).toBeInTheDocument();
     await userEvent.click(within(reader).getByRole("button", { name: "Offload" }));
     const ask = screen.getByRole("dialog", { name: "Offload this mail?" });
     expect(within(ask).getByRole("button", { name: "Cancel" })).toHaveFocus();

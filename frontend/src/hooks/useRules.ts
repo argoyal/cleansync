@@ -144,7 +144,7 @@ export const useStopRuleJob = () =>
  * or a pick-all as the view, label and search. `confirm` is the typed count. */
 export const useDeleteForever = () =>
   useChange((b: Acc & { view: string; messageIds?: number[]; label?: string; q?: string; confirm: number }) =>
-    post<{ deleted: number; left: number }>("/api/mail/delete-forever", {
+    post<{ deleted: number; left: number; job_id: number | null }>("/api/mail/delete-forever", {
       account_id: b.accountId,
       view: b.view,
       ...(b.messageIds ? { message_ids: b.messageIds } : {}),

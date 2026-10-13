@@ -5,7 +5,7 @@ import { useOffloadOne, useRestoreMail } from "../../hooks/useMailOffload";
 import { hasSearch, viewKind } from "../../lib/mail";
 import { runOnText } from "../../lib/ruleRuns";
 import { Button, Dialog } from "../ui";
-import { DeleteForeverDialog } from "./DeleteForeverDialog";
+import { DeleteForeverDialog, ForeverButton } from "./DeleteForeverDialog";
 import { MakeRuleDialog } from "./MakeRuleDialog";
 import { OffloadMailDialog } from "./OffloadMailDialog";
 import { RuleChip } from "./RuleChip";
@@ -87,7 +87,7 @@ export function MessageMailActions({ account, message }: { account: Account; mes
   if (message.file_missing) return null; // nothing here to offload from or restore with
   const ids = [message.id];
   const close = () => setOpen(null);
-  const view = message.state === "deleted_in_provider" ? "deleted" : "offloaded";
+  const view = message.state === "in_mail" ? "all" : message.state === "deleted_in_provider" ? "deleted" : "offloaded";
   return (
     <>
       {message.decision && <RuleChip accountId={account.id} chip={message.decision} />}
@@ -95,6 +95,7 @@ export function MessageMailActions({ account, message }: { account: Account; mes
         <>
           <Button onClick={() => setOpen("offload")}>Offload</Button>
           <Button onClick={() => setOpen("rule")}>Make a rule…</Button>
+          <ForeverButton account={account} onClick={() => setOpen("forever")} />
         </>
       ) : (
         <>

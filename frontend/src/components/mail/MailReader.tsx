@@ -13,7 +13,7 @@ import { runOnText } from "../../lib/ruleRuns";
 import { OffloadBatches } from "../../pages/MailOffloadPage";
 import { useToast } from "../Toasts";
 import { Button } from "../ui";
-import { DeleteForeverDialog } from "./DeleteForeverDialog";
+import { DeleteForeverDialog, ForeverButton } from "./DeleteForeverDialog";
 import { MailHeaderActions } from "./MailActions";
 import { MailList, type PickState } from "./MailList";
 import { isNarrow, MailThread } from "./MailThread";
@@ -158,6 +158,7 @@ export function MailReader({ account }: { account: Account }) {
               {wholeMailbox && <span className="text-table text-ink-2">{WHOLE_MAILBOX_MSG}</span>}
               <Button onClick={() => setPickedAction("rule")}>Make a rule…</Button>
               <Button onClick={() => setPickedAction("rules")}>Run rules</Button>
+              <ForeverButton account={account} disabled={finding || wholeMailbox || (all && totals === undefined)} onClick={pickForever} />
             </>
           )}
           {kind === "out" && (

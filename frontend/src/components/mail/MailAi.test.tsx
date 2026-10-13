@@ -63,7 +63,7 @@ describe("AI in mail", () => {
   });
 
   it("delete forever needs the typed count", async () => {
-    const { calls } = mockApi({ "POST /api/mail/delete-forever": { deleted: 2, left: 0 } });
+    const { calls } = mockApi({ "POST /api/mail/delete-forever": { deleted: 2, left: 0, job_id: null } });
     renderApp(<DeleteForeverDialog account={ACCOUNT} start={{ view: "offloaded", message_ids: [1, 2] }} count={2} onClose={() => {}} />);
     const dialog = screen.getByRole("dialog", { name: "Delete forever" });
     expect(dialog).toHaveTextContent("2 mails from Offloaded.");
