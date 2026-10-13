@@ -1,14 +1,33 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 — 2026-10-13
 
-Small fixes after 0.5.0.
+Fixes after 0.5.0.
 
-- **Rules.** Smaller fixes to rule runs and to the mail those runs act on.
-- **Mail and offload.** Smaller fixes to the mail list, offloads and the Allow permanent delete switch.
-- **Mail and rules screens.** Smaller fixes to wording and behaviour on both screens.
-- **Delete forever.** When you stop it, the message now gives the server's reason, not a guess about where the rest of the mail is.
-- **Restore.** If Gmail refuses a restored mail's labels, it comes back with the basic ones (Inbox, Unread, Starred, Important). The browser test now also checks the mail is back in the Inbox and that Delete forever works on a mail still in Gmail.
+- **Running rules.**
+  - The Run rules window no longer counts picks from a rule you deleted meanwhile; it can't show "Apply 0 changes" or start a run that does nothing.
+  - Approving a run that a newer one replaced says so.
+  - Asking for two kinds of pick at once, or approving with nothing picked, is refused with a plain reason.
+  - Run waits for the Sorting status before deciding whether a model is needed.
+  - Pick all shows ticked when every match is ticked by hand.
+- **Correct…** to a Delete forever rule counts the sender's approval once, not twice.
+- **Delete forever.**
+  - The Activity record groups a rule's deletions from the last one, not the first.
+  - From the reader, the progress and result stay on screen after the mail disappears from the list.
+  - When stopped, it shows the server's own words.
+- **Offload.**
+  - When a stop or restart left the last batch's result unknown, the page no longer claims those mails stayed in Gmail.
+  - A mail sent again after a restart that fails its copy check says it's already out of Gmail and its copy is kept.
+  - Offload on one mail that's no longer in Gmail is refused before anything changes.
+- **Allow permanent delete.** Turn off also cancels a Google sign-in you started earlier for Turn on.
+- **Restore.**
+  - Restore from Offloaded or Deleted in Gmail honours a label filter, and is refused from the Gmail views.
+  - If Gmail refuses a restored mail's labels, it comes back with the basic ones (Inbox, Unread, Starred, Important).
+- **Smaller things.**
+  - An old rule saved with Delete forever and Automatic opens as Suggest first.
+  - A rule action still called "delete" shows as Offload.
+  - The search options form keeps a bad Size or Age where you typed it, and warns about an unclosed quote.
+  - An unknown mail view in a link is refused instead of guessed.
 
 ## 0.5.0 — 2026-10-13
 
