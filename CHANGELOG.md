@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.5.0 — 2026-10-13
+
+Mail now looks like the mailbox, rules run by hand on what you choose, and offload works in bulk.
+
+- **The Mail panel matches Gmail.**
+  - The top group shows Gmail's own views (Inbox, Starred, Important, Sent, the new **Archived**, All mail) and your labels, with only mail that is in Gmail.
+  - CleanSync's own sections sit below: Suggested, Rules, Offloaded and Deleted in Gmail.
+- **Search options.** A form builds the search for you (From, To, words, label, size, date, attachment, unread, starred) and reads the search box back into its fields. Searches now stay in the view you are in.
+- **Pick all.** One tick picks every mail matching the view and search, not just the rows on screen.
+- **Offload and Delete forever replace Delete.**
+  - **Offload** takes mail out of Gmail and keeps CleanSync's copy.
+  - **Delete forever** removes it everywhere, after you type the count.
+  - The old Local archive is now part of Offloaded, with nothing lost on upgrade.
+  - The rule action Delete is now Offload, and old rule files still load.
+- **Deleted in Gmail** gets Delete forever. This fixes the "Pick between 1 and 500 mails" error.
+- **Running rules by hand.**
+  - **Run** on a rule card runs that one rule over the Inbox.
+  - **Run rules** on a search or a pick lets you tick which rules to run.
+  - Either way you see the list of matched mails, untick any you want left alone, and approve. The count is typed only for Offload and Delete forever.
+  - "Run rules on…" is gone. Closing the window keeps the run going.
+  - Mail you restore or take back yourself isn't offloaded again by a run.
+- **Offload in bulk.**
+  - Mail is removed from Gmail up to 1,000 at a time, after each copy is checked.
+  - Offloads have **Stop**, carry on after a restart, and wait (retrying after 1, 5, 15, then 60 minutes) if Gmail doesn't answer.
+- **Allow permanent delete** (Settings → Accounts, per mailbox, off by default).
+  - With it on, Offload deletes mail from Gmail directly, so the space comes back at once. It needs full Gmail access, which you approve once in Google's sign-in.
+  - It also allows Delete forever on mail still in Gmail and as a rule action. Delete forever rules always wait for your approval and the typed count.
+  - Losing the permission turns it off; only **Turn on** turns it back on.
+- Restored mail comes back where it was, Inbox included.
+
 ## 0.4.0 — 2026-10-13
 
 - Added: a model connection now pauses when the provider says its limit is used up, until the time the provider gave or the connection's **Daily limit resets at** time (with its time zone). The pause is saved and survives a restart. **Resume now** ends it, and Settings → Models shows the server's own message (Test shows it too).
