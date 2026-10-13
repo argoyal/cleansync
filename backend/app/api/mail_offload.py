@@ -10,7 +10,7 @@ from app.api.mail_reader import account_or_404
 from app.auth.deps import AuthContext, get_db, require_user
 from app.core.clock import utcnow
 from app.models import MailMessage, MailOffload, MailOffloadItem
-from app.models.enums import DecisionStatus, MailItemResult, MailState
+from app.models.enums import DecisionStatus, MailItemResult, MailOffloadKind, MailState
 from app.schemas.mail import (
     AccountIn,
     MailBriefOut,
@@ -79,7 +79,7 @@ def list_offloads(
 ):
     rows = db.scalars(
         select(MailOffload)
-        .where(MailOffload.account_id == account_id)
+        .where(MailOffload.account_id == account_id, MailOffload.kind == MailOffloadKind.OFFLOAD)
         .order_by(MailOffload.id.desc())
     )
     now = utcnow()
@@ -142,7 +142,11 @@ def recovery_mail(
     account_or_404(db, account_id)
     offloads = db.scalars(
         select(MailOffload)
-        .where(MailOffload.account_id == account_id, MailOffload.done > 0)
+        .where(
+            MailOffload.account_id == account_id,
+            MailOffload.done > 0,
+            MailOffload.kind == MailOffloadKind.OFFLOAD,
+        )
         .order_by(MailOffload.id.desc())
         .limit(limit)
         .offset(offset)

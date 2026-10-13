@@ -205,7 +205,7 @@ async def test_restore_job_reports_what_happened(auth_client, offload_box):
     await box.run_queued()
     job = _last_job(auth_client)
     assert job["kind"] == "RESTORE" and job["state"] == "SUCCESS"
-    assert job["message"] == "Put 3 mails back in Gmail (2 out of Gmail's trash, 1 imported)"
+    assert job["message"] == "Put 3 mails back in Gmail (2 out of Gmail's trash, 1 imported again)"
 
 
 async def test_a_copy_that_does_not_check_out_is_never_imported(auth_client, offload_box):

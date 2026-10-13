@@ -202,6 +202,9 @@ class MailOffloadOut(BaseModel):
     finished_at: UtcDatetime | None
     trash_until: date  # Gmail empties its trash by itself after 30 days
     google_emptied: bool
+    kind: str = "offload"  # or "delete_forever" (bulk offload spec §5)
+    removed: int = 0  # removed from Gmail for good: the space is free now
+    trashed: int = 0  # in Gmail's trash until Gmail empties it
 
 
 class SkippedOut(BaseModel):

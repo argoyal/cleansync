@@ -1,6 +1,7 @@
-"""Mail offload and restore (spec 5): out of Gmail by filter or by pick, into Gmail's trash
-(checked before and after), and back into Gmail without ever making a second copy.
-Runs as mail queue actions, so never beside a backup of the account."""
+"""Mail offload and restore (spec 5): out of Gmail by filter or by pick, a batch of up to
+1,000 at a time, for good or into Gmail's trash (bulk offload spec §4), and back into Gmail
+without ever making a second copy. Runs as mail queue actions, so never beside a backup of
+the account."""
 
 import asyncio
 import logging
@@ -30,6 +31,7 @@ from app.models.enums import (
     ServiceKind,
     ServiceState,
 )
+from app.services.accounts.permanent import allows_permanent_delete, permission_lost
 from app.services.accounts.services import service_state
 from app.services.app_settings import get_setting
 from app.services.events.bus import record_event
@@ -44,6 +46,7 @@ from app.services.mail.adapter import (
     MailNotFound,
     MailSetupProblem,
     MailUnreachable,
+    PermanentDeleteRefused,
     ProviderState,
 )
 from app.services.mail.backup import Paused
@@ -79,16 +82,10 @@ SKIP_NOT_IN_GMAIL = "It was no longer in Gmail."
 SKIP_TOO_NEW = "It is newer than {days} days, so it stayed in Gmail."
 SKIP_BAD_COPY = "The copy on this server didn't check out ({problem}), so it stayed in Gmail."
 SKIP_ITEM_GONE = "The mail was deleted forever while this offload was waiting."
-SKIP_GONE = "Gmail no longer has this mail. The copy here is kept."
-SKIP_OUTSIDE_TRASH = (
-    "Gmail shows it outside its trash (maybe in Spam), so CleanSync left it as it is."
-)
 SKIP_REFUSED = "Gmail didn't move it to the trash ({error}), so it stayed in Gmail."
-SKIP_UNCHECKED = (
-    "CleanSync couldn't check that it reached Gmail's trash ({error}). It shows as Deleted "
-    "in Gmail after the next check; restore it from there if needed."
-)
-SKIP_NOT_TRASHED = "Gmail didn't put it in the trash, so it stayed in Gmail."
+SKIP_NOT_DELETED = "Gmail didn't delete it ({error}), so it stayed in Gmail."
+GMAIL_BATCH = 1000  # mails per Gmail call (bulk offload spec §4)
+UNREACHABLE_WAITS = (5.0, 20.0)  # Gmail's server trouble: a batch call is tried again after these
 # Why a whole offload ended early. What it had not reached stayed in Gmail.
 REST_STAYED = "What wasn't offloaded yet stayed in Gmail."
 OFFLOAD_RECONNECT_MSG = f"Reconnect this Google account. {REST_STAYED}"
@@ -156,6 +153,9 @@ def offload_out(db: Session, off: MailOffload, now: datetime) -> dict:
         "finished_at": off.finished_at,
         "trash_until": trash_until,
         "google_emptied": now.date() > trash_until,
+        "kind": off.kind,
+        "removed": off.removed,
+        "trashed": off.done - off.removed,
     }
 
 
@@ -227,7 +227,7 @@ def restore_summary(c: Counter) -> str:
     if c[UNTRASHED]:
         detail.append(f"{c[UNTRASHED]:,} out of Gmail's trash")
     if c[IMPORTED]:
-        detail.append(f"{c[IMPORTED]:,} imported")
+        detail.append(f"{c[IMPORTED]:,} imported again")
     if detail:
         text += f" ({', '.join(detail)})"
     if c[ALREADY]:
@@ -252,6 +252,7 @@ class MailOffloads:
         self.layout = mail.layout
         self.bus = mail.bus
         self.clock = mail.clock
+        self.sleep = asyncio.sleep  # tests replace it
         mail.actions["offload"] = self._run
         mail.actions["restore"] = self._restore
         mail.tick_hooks.append(self.resume_waiting)
@@ -364,29 +365,40 @@ class MailOffloads:
             raise Paused(self.mail.stop_message() or MISSING_DISK_MSG)
         return problem
 
-    def _mark_offloaded(self, off_id: int, item_id: int, msg_id: int) -> None:
+    def _permanent(self, account_id: int) -> bool:
+        """Read before every call: Google may take the permission back during a run."""
         with self.sf() as db:
-            row = db.get(MailMessage, msg_id)
-            row.state, row.offload_id = MailState.OFFLOADED, off_id
-            db.get(MailOffloadItem, item_id).result = MailItemResult.OFFLOADED
+            return allows_permanent_delete(db, account_id)
+
+    def _permission_lost(self, account_id: int) -> None:
+        with self.sf() as db:
+            permission_lost(db, self.bus, account_id)
+
+    def _mark_offloaded(self, off_id: int, done: list[tuple[int, int]], *, removed: bool) -> None:
+        """Only after Gmail's success answer (spec §4.4). `done`: item id and mail row id."""
+        with self.sf() as db:
             off = db.get(MailOffload, off_id)
-            off.done += 1
-            off.bytes += row.size
+            for item_id, msg_id in done:
+                row = db.get(MailMessage, msg_id)
+                row.state, row.offload_id = MailState.OFFLOADED, off_id
+                db.get(MailOffloadItem, item_id).result = MailItemResult.OFFLOADED
+                off.done += 1
+                off.bytes += row.size
+                if removed:
+                    off.removed += 1
             db.commit()
 
-    async def _offload_one(
-        self, acc: Account, adapter, off_id: int, item_id: int, log_path
-    ) -> str | None:
-        """Spec 5.3, in this order: 1. the copy here checks out; 2. trash in Gmail; 3. Gmail
-        shows it in the trash, then it is marked offloaded. A failed step skips this mail
-        only. Trouble that is not this mail's (login, budget, Gmail unreachable, the disk) is
-        raised. Returns Gmail's error when it refused to trash the mail."""
+    async def _checked(
+        self, acc: Account, off_id: int, item_id: int, log_path
+    ) -> tuple[int, int, str] | None:
+        """Spec 5.3 step 1, for one mail of a batch: (item id, mail row id, Gmail id) when it
+        may leave Gmail, else None after skipping it with its reason. Trouble that is not this
+        mail's (the disk) is raised."""
         with self.sf() as db:
             min_age = self._min_age(db)  # as set now: the owner may change it during a run
             item = db.get(MailOffloadItem, item_id)
             if item is None:  # Delete forever took the mail (and so this item) while we waited
-                off = db.get(MailOffload, off_id)
-                off.skipped += 1
+                db.get(MailOffload, off_id).skipped += 1
                 db.commit()
                 job_log(log_path, f"skipped mail {item_id}: {SKIP_ITEM_GONE}")
                 return None
@@ -396,59 +408,97 @@ class MailOffloads:
             path = eml_path(self.layout, acc.email, row.file_path)
             state, date = row.state, row.date
             size, sha, pid, msg_id = row.file_size, row.sha256, row.provider_id, row.id
-        if state == MailState.DELETED:
-            # Trashed by this offload before a pause, and a check saw it in Gmail's trash
-            # before this offload could: claim it, once the copy here checks out.
-            problem = await self._copy_problem(path, size, sha)
-            if problem:
-                return self._skip(off_id, item_id, SKIP_BAD_COPY.format(problem=problem), log_path)
-            return await self._check_trashed(
-                adapter, off_id, item_id, msg_id, pid, log_path, outside=SKIP_OUTSIDE_TRASH
-            )
-        # Checked again now: the preview may be minutes or days old.
-        if state != MailState.IN_MAIL:
+        # DELETED: this offload sent it before a pause or a restart, and a check saw it leave
+        # Gmail (or reach the trash) before the offload recorded it. It is sent again: Gmail
+        # takes a removal of mail it no longer has quietly (spec §4.4).
+        if state not in (MailState.IN_MAIL, MailState.DELETED):
             return self._skip(off_id, item_id, SKIP_NOT_IN_GMAIL, log_path)
-        if as_utc(date) > self.clock() - timedelta(days=min_age):
+        if state == MailState.IN_MAIL and as_utc(date) > self.clock() - timedelta(days=min_age):
             return self._skip(off_id, item_id, SKIP_TOO_NEW.format(days=min_age), log_path)
-        # 1. Only a copy here that is whole and unchanged lets anything change in Gmail.
         problem = await self._copy_problem(path, size, sha)
         if problem:
             return self._skip(off_id, item_id, SKIP_BAD_COPY.format(problem=problem), log_path)
-        try:
-            await adapter.trash(pid)  # 2.
-        except MailNotFound:
-            return self._skip(off_id, item_id, SKIP_GONE, log_path)
-        except (MailAuthError, MailSetupProblem, MailUnreachable):
-            raise
-        except MailApiError as e:
-            self._skip(off_id, item_id, SKIP_REFUSED.format(error=e), log_path)
-            return str(e)
-        return await self._check_trashed(adapter, off_id, item_id, msg_id, pid, log_path)
+        return item_id, msg_id, pid
 
-    async def _check_trashed(
-        self,
-        adapter,
-        off_id: int,
-        item_id: int,
-        msg_id: int,
-        pid: str,
-        log_path,
-        outside: str = SKIP_NOT_TRASHED,
+    async def _batch_call(self, adapter, ids: list[str], permanent: bool) -> None:
+        """One Gmail call for the batch. Gmail's server trouble is tried again after a pause;
+        rate limits are waited out by the Google client itself."""
+        for pause in (*UNREACHABLE_WAITS, None):
+            try:
+                if permanent:
+                    await adapter.batch_delete(ids)
+                else:
+                    await adapter.batch_trash(ids)
+                return
+            except MailUnreachable:
+                if pause is None:
+                    raise
+                await self.sleep(pause)
+
+    async def _one_call(self, acc: Account, adapter, pid: str, permanent: bool) -> bool:
+        """The fallback for one mail. True when it was removed for good."""
+        if permanent:
+            try:
+                await adapter.delete(pid)
+                return True
+            except PermanentDeleteRefused:
+                self._permission_lost(acc.id)
+        await adapter.trash(pid)
+        return False
+
+    async def _one_by_one(
+        self, acc: Account, adapter, off_id: int, ready: list[tuple[int, int, str]], log_path
     ) -> None:
-        try:
-            st = await adapter.state(pid)  # 3.
-        except MailNotFound:
-            return self._skip(off_id, item_id, SKIP_GONE, log_path)
-        except (MailAuthError, MailSetupProblem, MailUnreachable):
-            raise
-        except MailApiError as e:
-            return self._skip(off_id, item_id, SKIP_UNCHECKED.format(error=e), log_path)
-        if st.where == GONE:
-            return self._skip(off_id, item_id, SKIP_GONE, log_path)
-        if st.where != IN_TRASH:
-            return self._skip(off_id, item_id, outside, log_path)
-        self._mark_offloaded(off_id, item_id, msg_id)
-        job_log(log_path, f"offloaded {pid}")
+        """Gmail refused the batch: one mail at a time, so one bad id can't block the rest.
+        Gmail's answer is the check; "not found" means it is already out of Gmail."""
+        refused: list[str] = []
+        for item_id, msg_id, pid in ready:
+            permanent = self._permanent(acc.id)
+            try:
+                removed = await self._one_call(acc, adapter, pid, permanent)
+            except MailNotFound:
+                removed = True
+            except (MailAuthError, MailSetupProblem, MailUnreachable):
+                raise
+            except MailApiError as e:
+                why = SKIP_NOT_DELETED if permanent else SKIP_REFUSED
+                self._skip(off_id, item_id, why.format(error=e), log_path)
+                refused.append(str(e))
+                if len(refused) >= REFUSED_IN_A_ROW:
+                    raise _Refusing(OFFLOAD_REFUSED_MSG.format(n=len(refused), error=e)) from e
+                continue
+            refused = []
+            self._mark_offloaded(off_id, [(item_id, msg_id)], removed=removed)
+            job_log(log_path, f"{'removed' if removed else 'trashed'} {pid}")
+
+    async def _offload_batch(
+        self, acc: Account, adapter, off_id: int, item_ids: list[int], log_path
+    ) -> None:
+        """Bulk offload spec §4: every copy of the batch checked, then one Gmail call for the
+        mails whose copy checked out: batchDelete with permanent delete, batchModify to the
+        trash without."""
+        ready = []
+        for item_id in item_ids:
+            checked = await self._checked(acc, off_id, item_id, log_path)
+            if checked is not None:
+                ready.append(checked)
+        if not ready:
+            return
+        ids = [pid for _, _, pid in ready]
+        while True:
+            permanent = self._permanent(acc.id)
+            try:
+                await self._batch_call(adapter, ids, permanent)
+                break
+            except PermanentDeleteRefused:
+                self._permission_lost(acc.id)  # the same batch goes to the trash instead
+            except (MailAuthError, MailSetupProblem, MailUnreachable):
+                raise
+            except MailApiError as e:
+                job_log(log_path, f"Gmail refused the batch ({e}); one mail at a time instead")
+                return await self._one_by_one(acc, adapter, off_id, ready, log_path)
+        self._mark_offloaded(off_id, [(i, m) for i, m, _ in ready], removed=permanent)
+        job_log(log_path, f"{'removed' if permanent else 'trashed'} {len(ids)} mails")
 
     # ---- the job -------------------------------------------------------------------------
     def _fail_before_start(self, off_id: int, account_id: int, email: str, reason: str) -> None:
@@ -499,13 +549,11 @@ class MailOffloads:
         state, reason = MailOffloadState.DONE, None
         try:
             with self.sf() as db:
-                batch = int(get_setting(db, "mail_batch_size"))  # type: ignore[arg-type]
                 total = db.get(MailOffload, off_id).total
                 job = start_mail_job(
                     db, self.layout, self.bus, account_id, MailJobKind.OFFLOAD, trigger, total
                 )
             adapter = self.mail.adapter_for(acc)
-            refused: list[str] = []  # Gmail's refusals in a row
             while True:
                 with self.sf() as db:
                     items = list(
@@ -516,18 +564,14 @@ class MailOffloads:
                                 MailOffloadItem.result == MailItemResult.PENDING,
                             )
                             .order_by(MailOffloadItem.id)
-                            .limit(batch)
+                            .limit(GMAIL_BATCH)
                         )
                     )
                 if not items:
                     break
                 if await self.mail.stopped():  # before every batch (spec 3.4)
                     raise Paused(self.mail.stop_message() or MISSING_DISK_MSG)
-                for item_id in items:
-                    error = await self._offload_one(acc, adapter, off_id, item_id, job.log_path)
-                    refused = [*refused, error] if error else []
-                    if len(refused) >= REFUSED_IN_A_ROW:
-                        raise _Refusing(OFFLOAD_REFUSED_MSG.format(n=len(refused), error=error))
+                await self._offload_batch(acc, adapter, off_id, items, job.log_path)
                 with self.sf() as db:
                     off = db.get(MailOffload, off_id)
                     update_mail_job(db, job.id, done=off.done, bytes_=off.bytes)
