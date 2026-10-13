@@ -36,7 +36,7 @@ from app.services.accounts.services import service_state
 from app.services.app_settings import get_setting
 from app.services.events.bus import record_event
 from app.services.google.client import RateLimited
-from app.services.google.quota import BudgetReached
+from app.services.google.quota import BudgetReached, cost
 from app.services.mail.adapter import (
     GONE,
     IN_TRASH,
@@ -93,6 +93,7 @@ OFFLOAD_MAIL_OFF_MSG = f"Mail backup isn't on for this account any more. {REST_S
 OFFLOAD_TROUBLE_MSG = (
     "CleanSync couldn't reach Gmail ({error}). " + REST_STAYED + " Start a new offload to go on."
 )
+OFFLOAD_NO_ANSWER_MSG = "Gmail didn't answer; CleanSync will try again."
 OFFLOAD_SLOW_MSG = (
     "Gmail asked CleanSync to slow down. The offload goes on by itself in a minute or so."
 )
@@ -331,7 +332,8 @@ class MailOffloads:
     def resume_waiting(self) -> None:
         """Each minute: offloads paused by the budget or a rate limit (or not yet run) go on
         when they can. The budget pause lasts until the next UTC day (spec 7)."""
-        if self.mail.budget.reached():
+        budget = self.mail.budget
+        if budget.reached():
             return
         with self.sf() as db:
             rows = db.execute(
@@ -339,6 +341,11 @@ class MailOffloads:
                     MailOffload.state == MailOffloadState.WAITING
                 )
             ).all()
+        # Less left today than one batch call costs: the run would only re-check its copies
+        # and stop again, so it waits for the next UTC day.
+        one_call = max(cost("gmail.messages.batchDelete"), cost("gmail.messages.batchModify"))
+        if budget.used_today() + one_call > budget.budget():
+            rows = []
         for off_id, account_id in rows:
             self.mail.queue.request(account_id, "offload", {"offload_id": off_id})
         waiting, self._restores_waiting = self._restores_waiting, {}
@@ -380,8 +387,12 @@ class MailOffloads:
             off = db.get(MailOffload, off_id)
             for item_id, msg_id in done:
                 row = db.get(MailMessage, msg_id)
+                item = db.get(MailOffloadItem, item_id)
+                if row is None or item is None:  # Delete forever took it during the batch
+                    off.skipped += 1
+                    continue
                 row.state, row.offload_id = MailState.OFFLOADED, off_id
-                db.get(MailOffloadItem, item_id).result = MailItemResult.OFFLOADED
+                item.result = MailItemResult.OFFLOADED
                 off.done += 1
                 off.bytes += row.size
                 if removed:
@@ -461,7 +472,8 @@ class MailOffloads:
             except (MailAuthError, MailSetupProblem, MailUnreachable):
                 raise
             except MailApiError as e:
-                why = SKIP_NOT_DELETED if permanent else SKIP_REFUSED
+                # the permission may have been lost inside the call: the trash was tried then
+                why = SKIP_NOT_DELETED if permanent and self._permanent(acc.id) else SKIP_REFUSED
                 self._skip(off_id, item_id, why.format(error=e), log_path)
                 refused.append(str(e))
                 if len(refused) >= REFUSED_IN_A_ROW:
@@ -580,6 +592,10 @@ class MailOffloads:
             state, reason = MailOffloadState.WAITING, str(e)  # goes on the next UTC day
         except RateLimited:
             state, reason = MailOffloadState.WAITING, OFFLOAD_SLOW_MSG  # the next minute
+        except MailUnreachable:
+            # Gmail may have done the call without answering: the next run checks the copies
+            # again and sends the batch again (Gmail ignores mail it no longer has).
+            state, reason = MailOffloadState.WAITING, OFFLOAD_NO_ANSWER_MSG
         except (Paused, _Refusing) as e:
             state, reason = MailOffloadState.FAILED, str(e)
         except MailAuthError as e:

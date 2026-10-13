@@ -233,10 +233,10 @@ async def test_an_offload_stopped_by_the_budget_waits_and_goes_on(
     await box.backup()
     assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
     day = {"now": datetime.now(UTC)}
-    budget = ApiBudget(session_factory, budget=lambda: 50, clock=lambda: day["now"])
+    budget = ApiBudget(session_factory, budget=lambda: 60, clock=lambda: day["now"])
     box.mail.adapters = OneAdapter(fake_adapter(box.fake, budget=budget))
     box.mail.budget = budget
-    # One batch costs 50, the whole budget: the second batch is never sent.
+    # One batch costs 50: the second batch would go over 60, so it is never sent.
     await box.run_queued()
     off = db.query(MailOffload).one()
     assert off.state == MailOffloadState.WAITING and off.done == 2

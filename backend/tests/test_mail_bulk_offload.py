@@ -5,7 +5,7 @@ each, the copy here checked first."""
 import pytest
 from sqlalchemy import select
 
-from app.models import Account, Event, MailOffload, MailOffloadItem
+from app.models import Account, Event, MailMessage, MailOffload, MailOffloadItem
 from app.models.enums import MailItemResult, MailOffloadState, MailState, ServiceKind, ServiceState
 from app.services.accounts.oauth import FULL_MAIL_SCOPE
 from app.services.accounts.permanent import LOST_MSG
@@ -198,10 +198,11 @@ async def test_gmails_server_trouble_is_tried_again_after_a_pause(auth_client, o
     assert db.query(MailOffload).one().done == 3
 
 
-async def test_server_trouble_that_lasts_fails_the_offload_and_leaves_the_mail(
+async def test_server_trouble_that_lasts_pauses_the_offload_and_the_next_run_counts_each_mail_once(
     auth_client, offload_box, db
 ):
     box = offload_box
+    allow_permanent(box, db)
 
     async def nap(s):
         return None
@@ -209,12 +210,73 @@ async def test_server_trouble_that_lasts_fails_the_offload_and_leaves_the_mail(
     box.offloads.sleep = nap
     await box.backup()
     assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
-    box.fake.fail("POST", r"/batchModify$", 503, times=3)
+    box.fake.fail("POST", r"/batchDelete$", 503, times=3)
     await box.run_queued()
     off = db.query(MailOffload).one()
-    assert off.state == MailOffloadState.FAILED
-    assert off.reason.startswith("CleanSync couldn't reach Gmail")
-    assert {box.row(s).state for s in OLD} == {MailState.IN_MAIL}
+    assert off.state == MailOffloadState.WAITING and off.done == 0
+    assert off.reason == "Gmail didn't answer; CleanSync will try again."
+    results = {i.result for i in db.query(MailOffloadItem)}
+    assert results == {MailItemResult.PENDING}
+    for s_ in OLD:  # Gmail did it though it never answered
+        box.fake.remove(box.row(s_).provider_id)
+    await box.mail.tick()
+    await box.run_queued()
+    db.refresh(off)
+    assert off.state == MailOffloadState.DONE and (off.done, off.skipped, off.removed) == (3, 0, 3)
+
+
+async def test_a_budget_with_less_than_one_batch_call_left_is_not_resumed(
+    auth_client, offload_box, db, session_factory
+):
+    box = offload_box
+    await box.backup()
+    assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
+    box.queue.requests.clear()  # the start's own request
+    budget = ApiBudget(session_factory, budget=lambda: 100)
+    box.mail.budget = budget
+    budget.spend(51)  # 49 left: a batch call costs 50
+    box.offloads.resume_waiting()
+    assert box.queue.requests == []
+    box.mail.budget = ApiBudget(session_factory, budget=lambda: 100)
+    box.mail.budget.spend(50)  # 50 left
+    box.offloads.resume_waiting()
+    assert [r[1] for r in box.queue.requests] == ["offload"]
+
+
+async def test_mark_offloaded_skips_a_mail_that_was_deleted_forever_meanwhile(
+    auth_client, offload_box, db
+):
+    box = offload_box
+    await box.backup()
+    assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
+    off = db.query(MailOffload).one()
+    item = db.query(MailOffloadItem).filter_by(offload_id=off.id).first()
+    row = db.get(MailMessage, item.message_id)
+    box.offloads._mark_offloaded(off.id, [(item.id, row.id), (999_999, 999_999)], removed=True)
+    db.refresh(off)
+    assert (off.done, off.skipped, off.removed) == (1, 1, 1)
+
+
+async def test_a_permission_lost_inside_the_fallback_trashes_and_gives_the_trash_reason(
+    auth_client, offload_box, db
+):
+    box = offload_box
+    allow_permanent(box, db)
+    await box.backup()
+    assert _start(auth_client, box.acc, 3, q="older_than:1y").status_code == 202
+    bad = box.row("Old photos").provider_id  # the second of the three, oldest first
+    box.fake.fail("POST", r"/batchDelete$", 400)
+    box.fake.fail("DELETE", rf"/messages/{bad}$", 403, reason="insufficientPermissions")
+    box.fake.fail("POST", rf"/messages/{bad}/trash$", 400)
+    await box.run_queued()
+    off = db.query(MailOffload).one()
+    assert (off.done, off.skipped, off.removed) == (2, 1, 1)
+    item = db.query(MailOffloadItem).filter_by(result=MailItemResult.SKIPPED).one()
+    assert item.reason.startswith("Gmail didn't move it to the trash (")
+    acc = db.get(Account, box.acc.id)
+    db.refresh(acc)
+    assert acc.permanent_delete is False and acc.permanent_delete_note == LOST_MSG
+    assert "TRASH" in box.fake.messages[box.row("Old statement").provider_id].labels
 
 
 async def test_quota_is_counted_per_call_not_per_mail(
