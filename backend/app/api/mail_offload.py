@@ -35,7 +35,13 @@ router = APIRouter()
 
 
 def _pick(body: MailPickIn) -> Pick:
-    return Pick(q=body.q, message_ids=body.message_ids, thread_ids=body.thread_ids)
+    return Pick(
+        q=body.q,
+        message_ids=body.message_ids,
+        thread_ids=body.thread_ids,
+        view=body.view,
+        label=body.label or None,
+    )
 
 
 def _offloads(request: Request):

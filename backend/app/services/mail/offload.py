@@ -181,27 +181,34 @@ def restorable_labels(db: Session, account_id: int, labels: list[str]) -> list[s
     ]
 
 
+RESTORE_STATES = {"offloaded": (MailState.OFFLOADED,), "deleted": (MailState.DELETED,)}
+KEPT = (MailState.OFFLOADED, MailState.DELETED)
+
+
 def restore_targets(
     db: Session, account_id: int, pick: Pick, offload_id: int | None, now: datetime
 ) -> list[int]:
-    """The offloaded and Deleted-in-Gmail mails of a pick (or of one offload): the only ones
-    a restore touches. Mail already in Gmail is never part of it."""
-    restorable = (MailState.OFFLOADED, MailState.DELETED)
+    """The mails out of Gmail of a pick, a view and search, or one offload: the only ones a
+    restore touches. Mail in Gmail is never part of it. A view other than Offloaded or
+    Deleted in Gmail counts as both (the "kept" view)."""
+    states = RESTORE_STATES.get(pick.view, KEPT)
+    view = pick.view if pick.view in RESTORE_STATES else "kept"
     if offload_id is None and (pick.message_ids or pick.thread_ids):
         # A picked list can be longer than SQLite takes in one query: asked in chunks.
         column = MailMessage.id if pick.message_ids else MailMessage.thread_id
         rows = rows_where_in(db, account_id, column, pick.message_ids or pick.thread_ids or [])
-        found = {r.id: r for r in rows if r.state in restorable}
+        # A picked thread can hold mail in several states: keep to the view it was picked in.
+        found = {r.id: r for r in rows if r.state in states}
         return [r.id for r in sorted(found.values(), key=lambda r: (as_utc(r.date), r.id))]
     q = select(MailMessage.id).where(
-        MailMessage.account_id == account_id,
-        MailMessage.state.in_(restorable),
+        MailMessage.account_id == account_id, MailMessage.state.in_(states)
     )
+    text_q = (pick.q or "").strip()
     if offload_id is not None:
         q = q.where(MailMessage.offload_id == offload_id)
-    elif (pick.q or "").strip():
+    elif view != "kept" or text_q:  # a whole CleanSync view, or a search
         q = q.where(
-            *mail_conditions(db, account_id, view="kept", q=(pick.q or "").strip(), now=now)
+            *mail_conditions(db, account_id, view=view, label=pick.label, q=text_q, now=now)
         )
     else:
         return []

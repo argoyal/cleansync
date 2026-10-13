@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, load_only
 
 from app.core.clock import as_utc, utcnow
-from app.models import Account, MailJob, MailMessage, MailOffload
+from app.models import Account, MailJob, MailLabel, MailMessage, MailOffload
 from app.models.enums import JobState, MailJobKind, MailOffloadState, MailState
 from app.paths import Layout
 from app.services.mail.search import SearchError, mail_conditions
@@ -71,14 +71,43 @@ def excluded_text(reason: str, n: int, days: int) -> str:
 
 @dataclass
 class Pick:
+    """What an action works on: picked mails or threads, or a pick-all as the view, the
+    label and the search (mail panel spec §6)."""
+
     q: str | None = None
     message_ids: list[int] | None = None
     thread_ids: list[str] | None = None
+    view: str = "all"
+    label: str | None = None
 
-    def describe(self, n: int) -> str:
-        if self.message_ids or self.thread_ids:
-            return f"{n:,} picked {'mail' if n == 1 else 'mails'}"
-        return (self.q or "").strip()
+
+VIEW_NAMES = {
+    "inbox": "Inbox",
+    "sent": "Sent",
+    "starred": "Starred",
+    "important": "Important",
+    "archived": "Archived",
+    "suggested": "Suggested",
+    "offloaded": "Offloaded",
+    "deleted": "Deleted in Gmail",
+}
+
+
+def describe_pick(db: Session, account_id: int, pick: Pick, n: int) -> str:
+    """The offload's name on its page: "12 picked mails", or the view, label and search."""
+    if pick.message_ids or pick.thread_ids:
+        return f"{n:,} picked {'mail' if n == 1 else 'mails'}"
+    parts = [VIEW_NAMES[pick.view]] if pick.view in VIEW_NAMES else []
+    if pick.label:
+        name = db.scalar(
+            select(MailLabel.name).where(
+                MailLabel.account_id == account_id, MailLabel.provider_label_id == pick.label
+            )
+        )
+        parts.append(name or pick.label)
+    if (pick.q or "").strip():
+        parts.append((pick.q or "").strip())
+    return " · ".join(parts)
 
 
 @dataclass
@@ -144,11 +173,11 @@ def candidates(db: Session, account_id: int, pick: Pick, now: datetime) -> list[
     if pick.thread_ids:
         return rows_where_in(db, account_id, MailMessage.thread_id, pick.thread_ids)
     q = (pick.q or "").strip()
-    if not q:
-        raise SearchError(NO_FILTER_MSG)
+    if not q and pick.view == "all" and not pick.label:
+        raise SearchError(NO_FILTER_MSG)  # one tick never offloads a whole mailbox
     stmt = (
         select(MailMessage)
-        .where(*mail_conditions(db, account_id, q=q, now=now))
+        .where(*mail_conditions(db, account_id, view=pick.view, label=pick.label, q=q, now=now))
         .options(load_only(*_NEEDED))
     )
     return list(db.scalars(stmt))
@@ -190,7 +219,7 @@ def plan_offload(
     ]
     by_date = sorted(kept, key=lambda r: (as_utc(r.date), r.id))
     return OffloadPreview(
-        filter_text=pick.describe(len(rows)),
+        filter_text=describe_pick(db, account.id, pick, len(rows)),
         count=len(kept),
         bytes=sum(r.size for r in kept),
         largest=[_brief(r) for r in sorted(kept, key=lambda r: (-r.size, r.id))[:10]],

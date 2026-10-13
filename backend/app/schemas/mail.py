@@ -151,6 +151,8 @@ class MailPickIn(BaseModel):
     q: str | None = None
     message_ids: list[int] | None = Field(default=None, max_length=100_000)
     thread_ids: list[str] | None = Field(default=None, max_length=100_000)
+    view: str = Field("all", max_length=32)
+    label: str | None = Field(None, max_length=128)
 
 
 class MailBriefOut(BaseModel):
@@ -221,6 +223,7 @@ class MailRecoveryOut(BaseModel):
 
 class RestoreMailIn(MailPickIn):
     offload_id: int | None = None
+    view: str = Field("kept", max_length=32)  # both CleanSync views unless told otherwise
 
 
 class RestoreQueuedOut(BaseModel):
