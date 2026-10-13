@@ -66,9 +66,14 @@ from app.services.mail.index import delete_search_rows, mark_restored, set_flags
 from app.services.mail.jobs import finish_mail_job, job_log, start_mail_job, update_mail_job
 from app.services.mail.offload_plan import (
     FOREVER_REST,
+    FOREVER_RESTARTED_MSG,
     FOREVER_STOPPED_MSG,
+    FOREVER_STOPPED_UNKNOWN_MSG,
     GMAIL_TRASH_DAYS,
+    RESTARTED_OFFLOAD_MSG,
+    STOPPED_MESSAGES,
     STOPPED_MSG,
+    STOPPED_UNKNOWN_MSG,
     OffloadPreview,
     Pick,
     candidates,
@@ -77,7 +82,7 @@ from app.services.mail.offload_plan import (
     plan_offload,
     rows_where_in,
 )
-from app.services.mail.search import SearchError, mail_conditions
+from app.services.mail.search import OUT_OF_GMAIL, VIEW_ALIASES, SearchError, mail_conditions
 from app.services.mail.service import MailError, MailService
 from app.services.mail.store import check_eml, check_eml_bytes, eml_path
 from app.services.queue import MISSING_DISK_MSG
@@ -97,6 +102,10 @@ COUNT_CHANGED_MSG = (
 SKIP_NOT_IN_GMAIL = "It was no longer in Gmail."
 SKIP_TOO_NEW = "It is newer than {days} days, so it stayed in Gmail."
 SKIP_BAD_COPY = "The copy on this server didn't check out ({problem}), so it stayed in Gmail."
+SKIP_BAD_COPY_OUT = (
+    "The copy on this server didn't check out ({problem}). The mail is already out of Gmail, "
+    "and the copy is kept."
+)
 SKIP_ITEM_GONE = "The mail was deleted forever while this offload was waiting."
 SKIP_REFUSED = "Gmail didn't move it to the trash ({error}), so it stayed in Gmail."
 SKIP_NOT_DELETED = "Gmail didn't delete it ({error}), so it stayed in Gmail."
@@ -195,6 +204,7 @@ def offload_out(db: Session, off: MailOffload, now: datetime) -> dict:
         "kind": off.kind,
         "removed": off.removed,
         "trashed": off.done - off.removed,
+        "stopped": off.state == MailOffloadState.FAILED and off.reason in STOPPED_MESSAGES,
     }
 
 
@@ -234,8 +244,9 @@ def restore_targets(
     """The mails out of Gmail of a pick, a view and search, or one offload: the only ones a
     restore touches. Mail in Gmail is never part of it. A view other than Offloaded or
     Deleted in Gmail counts as both (the "kept" view)."""
-    states = RESTORE_STATES.get(pick.view, KEPT)
-    view = pick.view if pick.view in RESTORE_STATES else "kept"
+    named = VIEW_ALIASES.get(pick.view, pick.view)  # old links: "archive" is Offloaded
+    states = RESTORE_STATES.get(named, KEPT)
+    view = named if named in RESTORE_STATES else "kept"
     if offload_id is None and (pick.message_ids or pick.thread_ids):
         # A picked list can be longer than SQLite takes in one query: asked in chunks.
         column = MailMessage.id if pick.message_ids else MailMessage.thread_id
@@ -249,7 +260,9 @@ def restore_targets(
     text_q = (pick.q or "").strip()
     if offload_id is not None:
         q = q.where(MailMessage.offload_id == offload_id)
-    elif view != "kept" or text_q:  # a whole CleanSync view, or a search
+    elif named not in OUT_OF_GMAIL and (text_q or pick.label):
+        return []  # a Gmail view holds mail in Gmail: only a CleanSync view restores
+    elif view != "kept" or text_q or pick.label:  # a CleanSync view, its label, or a search
         q = q.where(
             *mail_conditions(db, account_id, view=view, label=pick.label, q=text_q, now=now)
         )
@@ -281,6 +294,16 @@ def restore_summary(c: Counter) -> str:
     if c[FAILED]:
         text += f"; {c[FAILED]:,} couldn't be put back (see the log)"
     return text
+
+
+def stopped_reason(kind, *, unknown: bool) -> str:
+    """What a stopped offload says. `unknown`: its last batch's outcome was never learned."""
+    if unknown:
+        return FOREVER_STOPPED_UNKNOWN_MSG if kind == FOREVER else STOPPED_UNKNOWN_MSG
+    return FOREVER_STOPPED_MSG if kind == FOREVER else STOPPED_MSG
+
+
+UNKNOWN_OUTCOME_REASONS = (OFFLOAD_NO_ANSWER_MSG, RESTARTED_OFFLOAD_MSG, FOREVER_RESTARTED_MSG)
 
 
 class _Refusing(Exception):
@@ -462,7 +485,7 @@ class MailOffloads:
             if off.state == MailOffloadState.WAITING:
                 off.state, off.reason, off.finished_at = (
                     MailOffloadState.FAILED,
-                    FOREVER_STOPPED_MSG if off.kind == FOREVER else STOPPED_MSG,
+                    stopped_reason(off.kind, unknown=off.reason in UNKNOWN_OUTCOME_REASONS),
                     self.clock(),
                 )
                 self._no_answer.pop(off_id, None)
@@ -548,11 +571,13 @@ class MailOffloads:
         # takes a removal of mail it no longer has quietly (spec §4.4).
         if state not in (MailState.IN_MAIL, MailState.DELETED):
             return self._skip(off_id, item_id, SKIP_NOT_IN_GMAIL, log_path)
+        resent = state == MailState.DELETED  # already out of Gmail: "stayed in Gmail" is false
         if state == MailState.IN_MAIL and as_utc(date) > self.clock() - timedelta(days=min_age):
             return self._skip(off_id, item_id, SKIP_TOO_NEW.format(days=min_age), log_path)
         problem = await self._copy_problem(path, size, sha)
         if problem:
-            return self._skip(off_id, item_id, SKIP_BAD_COPY.format(problem=problem), log_path)
+            why = (SKIP_BAD_COPY_OUT if resent else SKIP_BAD_COPY).format(problem=problem)
+            return self._skip(off_id, item_id, why, log_path)
         return item_id, msg_id, pid
 
     async def _batch_call(self, adapter, ids: list[str], permanent: bool) -> None:
@@ -853,8 +878,8 @@ class MailOffloads:
             with self.sf() as db:
                 stop_asked = db.get(MailOffload, off_id).stop_asked
             if stop_asked:
-                state = MailOffloadState.FAILED
-                reason = FOREVER_STOPPED_MSG if kind == FOREVER else STOPPED_MSG
+                unknown = reason == OFFLOAD_NO_ANSWER_MSG  # Gmail never said what it did
+                state, reason = MailOffloadState.FAILED, stopped_reason(kind, unknown=unknown)
         try:
             self._finish(account_id, email, off_id, job, state, reason)
         except Exception:

@@ -207,6 +207,7 @@ class MailOffloadOut(BaseModel):
     kind: str = "offload"  # or "delete_forever" (bulk offload spec §5)
     removed: int = 0  # removed from Gmail for good: the space is free now
     trashed: int = 0  # in Gmail's trash until Gmail empties it
+    stopped: bool = False  # the owner stopped it (the page shows "Stopped", not a failure)
 
 
 class SkippedOut(BaseModel):

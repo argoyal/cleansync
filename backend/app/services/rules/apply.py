@@ -44,6 +44,12 @@ NOT_UNDONE_MSG = "It's no longer in Gmail, so nothing was undone."
 UNREACHABLE_WAIT = "Gmail couldn't be reached; this is tried again later."
 RECONNECT_WAIT = "Reconnect this Google account; this is tried again after that."
 WAITING_REASONS = (BUDGET_WAIT, UNREACHABLE_WAIT, RECONNECT_WAIT)
+
+
+class NotInGmail(Exception):
+    """A one-mail Offload on mail that is not in Gmail: refused before anything is logged."""
+
+
 WAIT_ERRORS = (BudgetReached, RateLimited, MailUnreachable, MailAuthError)
 GONE_ROW_MSG = "That mail isn't here any more."
 NOT_UNDOABLE_MSG = (
@@ -249,6 +255,13 @@ class Applier:
         await adapter.trash(pid)
         return False
 
+    def _clear_removed(self, decision_id: int) -> None:
+        with self.sf() as db:
+            d = db.get(RuleDecision, decision_id)
+            if d is not None and (d.changes or {}).get("removed"):
+                d.changes = {k: v for k, v in d.changes.items() if k != "removed"}
+                db.commit()
+
     async def apply(self, decision_id: int) -> str:
         with self.sf() as db:
             d = db.get(RuleDecision, decision_id)
@@ -283,11 +296,21 @@ class Applier:
             add = [await self._label_id(adapter, acc.id, n) for n in planned.add_names]
             add = [x for x in add if x not in labels_now]  # never undo what was already there
             changes = {"add": add, "remove": planned.remove, "trash": planned.trash}
+            if planned.trash and permanent_delete_on(acc):
+                # Recorded before the Gmail call: a crash between the call and the final
+                # commit must still leave the mark that says Undo can't bring it back.
+                changes["removed"] = True
             with self.sf() as db:
                 db.get(RuleDecision, decision_id).changes = changes
                 db.commit()
             if planned.trash:
-                removed = await self._take_out(acc, adapter, pid)
+                try:
+                    removed = await self._take_out(acc, adapter, pid)
+                except BaseException:
+                    self._clear_removed(decision_id)  # the call failed: nothing was removed
+                    raise
+                if not removed:  # the permission was refused: it went to the trash instead
+                    self._clear_removed(decision_id)
                 # The row keeps the labels Gmail had (Inbox included), trashed or not, so a
                 # restore that has to import the mail again puts it back where it was.
                 new_labels = labels_now
@@ -385,6 +408,8 @@ class Applier:
             row = db.get(MailMessage, message_id)
             if row is None or row.account_id != account_id:
                 raise LookupError("That mail isn't here.")
+            if row.state != MailState.IN_MAIL:
+                raise NotInGmail(NOT_IN_MAIL_MSG)  # no decision chip for a mail that isn't there
             d = RuleDecision(
                 account_id=account_id,
                 message_id=message_id,

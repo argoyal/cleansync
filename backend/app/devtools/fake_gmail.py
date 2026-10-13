@@ -13,6 +13,7 @@ import json
 import os
 import re
 import secrets
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
@@ -682,13 +683,22 @@ def _subject(raw: bytes) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     """Development and the browser test only: change the pretend mailbox from outside, as the
-    owner would in Gmail. `delete --file F --subject S` deletes every mail with subject S."""
+    owner would in Gmail. `delete --file F --subject S` deletes every mail with subject S.
+    Like the pretend accounts, it refuses to run without DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1."""
     parser = argparse.ArgumentParser(prog="python -m app.devtools.fake_gmail")
     commands = parser.add_subparsers(dest="command", required=True)
     delete = commands.add_parser("delete", help="delete mail by subject, as if deleted in Gmail")
     delete.add_argument("--file", required=True, type=Path)
     delete.add_argument("--subject", required=True)
     args = parser.parse_args(argv)
+    allowed = os.environ.get("DRIVESYNC_ALLOW_LOCAL_ACCOUNTS", "").strip().lower()
+    if allowed not in ("1", "true", "yes", "on"):
+        print(
+            "Refusing: the pretend Gmail is for development and tests only. "
+            "Set DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 to use it.",
+            file=sys.stderr,
+        )
+        return 2
     fake = FakeGmail.load(args.file)
     gone = [m.id for m in fake.messages.values() if _subject(m.raw) == args.subject]
     for mid in gone:

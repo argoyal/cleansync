@@ -21,6 +21,20 @@ STOPPED_MSG = "Stopped by you. What wasn't offloaded yet stayed in Gmail."
 FOREVER_REST = "What wasn't deleted yet stays in Gmail, with CleanSync's copy."
 FOREVER_RESTARTED_MSG = "CleanSync restarted during this Delete forever. It goes on by itself."
 FOREVER_STOPPED_MSG = f"Stopped by you. {FOREVER_REST}"
+# Stopped while the last batch's outcome was not known (Gmail didn't answer, or CleanSync
+# restarted during the call): those mails may already be out of Gmail.
+UNKNOWN_REST = (
+    "The last batch may already be out of Gmail. Those mails will show in Deleted in Gmail, "
+    "and their copies are kept."
+)
+STOPPED_UNKNOWN_MSG = f"Stopped by you. {UNKNOWN_REST} The rest stayed in Gmail."
+FOREVER_STOPPED_UNKNOWN_MSG = f"Stopped by you. {UNKNOWN_REST} The rest stays in Gmail."
+STOPPED_MESSAGES = (
+    STOPPED_MSG,
+    FOREVER_STOPPED_MSG,
+    STOPPED_UNKNOWN_MSG,
+    FOREVER_STOPPED_UNKNOWN_MSG,
+)
 
 
 def recover_mail_offloads(db: Session) -> int:
@@ -37,7 +51,11 @@ def recover_mail_offloads(db: Session) -> int:
         forever = off.kind == MailOffloadKind.DELETE_FOREVER
         if off.stop_asked:
             off.state, off.finished_at = MailOffloadState.FAILED, now
-            off.reason = FOREVER_STOPPED_MSG if forever else STOPPED_MSG
+            # A restart can cut a batch's Gmail call short: its outcome is not known.
+            if forever:
+                off.reason = FOREVER_STOPPED_UNKNOWN_MSG
+            else:
+                off.reason = STOPPED_UNKNOWN_MSG
         else:
             off.state = MailOffloadState.WAITING
             off.reason = FOREVER_RESTARTED_MSG if forever else RESTARTED_OFFLOAD_MSG

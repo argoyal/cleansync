@@ -82,6 +82,17 @@ async def test_a_missing_full_permission_is_its_own_error_not_a_reconnect(call):
     assert ids[0] in fake.messages
 
 
+async def test_a_scope_403_on_batch_trash_stays_a_reconnect_error():
+    """Only the permanent-delete calls turn a 403 into "no full permission": Offload to the
+    trash needs the ordinary Gmail permission, so a 403 there means reconnect."""
+    fake, ids = _mailbox(1)
+    fake.fail("POST", r"/batchModify$", 403, reason="insufficientPermissions")
+    with pytest.raises(MailAuthError) as e:
+        await fake_adapter(fake).batch_trash(ids)
+    assert not isinstance(e.value, PermanentDeleteRefused)
+    assert "TRASH" not in fake.messages[ids[0]].labels
+
+
 async def test_a_batch_takes_one_to_1000_good_ids():
     adapter = fake_adapter(FakeGmail())
     with pytest.raises(ValueError):

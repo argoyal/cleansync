@@ -1,6 +1,7 @@
 """Bulk offload spec §4: a rule's Offload and Offload on one mail use messages.delete when
 the mailbox allows permanent delete, messages.trash otherwise."""
 
+import pytest
 from sqlalchemy import select
 
 from app.models import Account, Event, MailMessage, RuleDecision
@@ -8,7 +9,8 @@ from app.models.enums import DecisionHow, DecisionStatus, MailState
 from app.services.accounts.oauth import FULL_MAIL_SCOPE
 from app.services.accounts.permanent import LOST_MSG
 from app.services.mail.listing import decision_chips
-from app.services.rules.apply import NOT_UNDOABLE_MSG
+from app.services.rules import apply as apply_mod
+from app.services.rules.apply import NOT_IN_MAIL_MSG, NOT_UNDOABLE_MSG, NotInGmail
 from tests.test_rules_apply import decision, get
 
 
@@ -82,3 +84,72 @@ def test_chips_say_when_undo_cant_help_and_when_it_deletes_forever(gbox):
         chips = decision_chips(db, [a.id, b.id, c.id])
     assert chips[a.id]["undoable"] is False and chips[b.id]["undoable"] is True
     assert chips[c.id]["forever"] is True and chips[a.id]["forever"] is False
+
+
+async def test_a_crash_after_gmail_removed_the_mail_still_leaves_the_removed_mark(
+    gbox, monkeypatch
+):
+    """The mark is saved with the changes, before the Gmail call: a crash between the call
+    and the final commit must not leave an Undo that can't work."""
+    allow(gbox)
+    row = gbox.add("Promo")
+    did = decision(gbox, row, [{"kind": "offload"}])
+
+    def crash(*a, **kw):
+        raise RuntimeError("power cut")
+
+    monkeypatch.setattr(apply_mod, "set_flags", crash)
+    with pytest.raises(RuntimeError):
+        await gbox.applier.apply(did)
+    assert row.provider_id not in gbox.fake.messages  # Gmail did remove it
+    d = get(gbox, RuleDecision, did)
+    assert d.status != DecisionStatus.APPLIED and d.changes["removed"] is True
+
+
+async def test_the_removed_mark_is_cleared_when_gmail_refuses_the_delete(gbox):
+    allow(gbox)
+    gbox.fake.fail("DELETE", r"/messages/", 400)
+    row = gbox.add("Promo")
+    did = decision(gbox, row, [{"kind": "offload"}])
+    assert await gbox.applier.apply(did) == DecisionStatus.FAILED
+    assert row.provider_id in gbox.fake.messages
+    assert "removed" not in get(gbox, RuleDecision, did).changes
+
+
+async def test_the_removed_mark_is_cleared_when_gmail_cannot_be_reached(gbox):
+    from app.services.mail.adapter import MailUnreachable
+
+    allow(gbox)
+    row = gbox.add("Promo")
+    did = decision(gbox, row, [{"kind": "offload"}])
+
+    async def down(pid):
+        raise MailUnreachable("down")
+
+    gbox.adapter.delete = down
+    with pytest.raises(MailUnreachable):
+        await gbox.applier.apply(did)
+    assert "removed" not in get(gbox, RuleDecision, did).changes
+
+
+async def test_offload_by_hand_on_mail_that_is_not_in_gmail_is_refused_before_a_decision(gbox):
+    row = gbox.add("Promo")
+    with gbox.sf() as db:
+        db.get(MailMessage, row.id).state = MailState.OFFLOADED
+        db.commit()
+    with pytest.raises(NotInGmail) as e:
+        await gbox.applier.offload_by_hand(gbox.acc.id, row.id)
+    assert str(e.value) == NOT_IN_MAIL_MSG
+    with gbox.sf() as db:
+        assert db.scalar(select(RuleDecision)) is None  # no failed chip is left behind
+    assert [c for c in gbox.fake.calls if c[0] != "GET"] == []  # nothing was sent to Gmail
+
+
+async def test_the_offloaded_by_you_chip_says_so_and_can_be_undone(gbox):
+    row = gbox.add("Hi")
+    d = await gbox.applier.offload_by_hand(gbox.acc.id, row.id)
+    with gbox.sf() as db:
+        chip = decision_chips(db, [row.id])[row.id]
+    assert chip["rule_name"] == "Offloaded by you"
+    assert chip["id"] == d.id and chip["how"] == DecisionHow.MANUAL
+    assert chip["status"] == DecisionStatus.APPLIED and chip["undoable"] is True

@@ -20,6 +20,22 @@ T0 = datetime(2026, 1, 1, tzinfo=UTC)
 SLOW_MS = 1000
 
 
+def _labels(i: int) -> str:
+    if i % 7 == 0:  # in Gmail, out of the inbox and not sent: the Archived list
+        return '["Label_1", "CATEGORY_UPDATES"]'
+    if i % 4:
+        return '["INBOX", "IMPORTANT", "CATEGORY_UPDATES"]'
+    return '["Label_1", "SENT", "CATEGORY_PERSONAL"]'
+
+
+def _state(i: int) -> str:
+    """Every tenth mail was offloaded and every thirteenth deleted in Gmail: the lists of
+    mail in Gmail must stay quick with that mixed in."""
+    if i % 10 == 9:
+        return "offloaded"
+    return "deleted" if i % 13 == 12 else "in_mail"
+
+
 @pytest.fixture
 def big_account(db, make_account):
     acc = make_account()
@@ -32,9 +48,8 @@ def big_account(db, make_account):
                 "p": f"m{i}",
                 "t": f"t{i // 3}",
                 "d": stamp,
-                "l": '["INBOX", "IMPORTANT", "CATEGORY_UPDATES"]'
-                if i % 4
-                else '["Label_1", "SENT", "CATEGORY_PERSONAL"]',
+                "l": _labels(i),
+                "st": _state(i),
                 "subj": f"Re: Quarterly numbers for the team, round {i}",
                 "who": f"Person {i % 500} <person{i % 500}@example.com>",
                 "snip": SNIPPET[:300],
@@ -48,7 +63,7 @@ def big_account(db, make_account):
             "cc_addrs, subject, date, size, file_size, sha256, labels, unread, starred, "
             "has_attachments, attachments, snippet, file_path, state, first_seen_at, updated_at) "
             "VALUES (:a, :p, :t, :who, :who, :who, :subj, :d, :s, :s, '', :l, 0, 0, 1, :att, :snip, 'x', "
-            "'in_mail', :d, :d)"
+            ":st, :d, :d)"
         ),
         rows,
     )
@@ -64,7 +79,17 @@ def _timed(fn):
     return r, (time.perf_counter() - t) * 1000
 
 
-@pytest.mark.parametrize("params", [{}, {"view": "inbox"}, {"label": "Label_1"}, {"view": "sent"}])
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"view": "inbox"},
+        {"label": "Label_1"},
+        {"view": "sent"},
+        {"view": "archived"},
+        {"view": "offloaded"},
+    ],
+)
 def test_first_and_second_pages_are_quick(auth_client, big_account, params):
     def get(**more):
         return auth_client.get(
@@ -95,7 +120,7 @@ def _plan(db, stmt) -> str:
     return " | ".join(str(r[-1]) for r in db.execute(text(f"EXPLAIN QUERY PLAN {compiled}")))
 
 
-@pytest.mark.parametrize("view", ["all", "inbox"])
+@pytest.mark.parametrize("view", ["all", "inbox", "archived", "offloaded"])
 def test_the_list_walk_reads_an_index_in_order(db, big_account, view):
     conds = mail_conditions(db, big_account.id, view=view, now=T0)
     plan = _plan(db, listing.walk_statement(conds, (T0, "t5", 10)))

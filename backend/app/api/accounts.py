@@ -77,11 +77,14 @@ def permanent_delete(
 ):
     """Allow permanent delete, per mailbox (bulk offload spec §3). auth_url: Google's
     sign-in that asks for the full Gmail permission; None when nothing more is needed."""
-    if db.get(Account, account_id) is None:
+    acc = db.get(Account, account_id)
+    if acc is None:
         raise HTTPException(404, "account not found")
     if not body.on:
         turn_off(db, account_id)
-        request.app.state.bus.publish("account", {"account_id": account_id})
+        # An old Google tab left open must not turn it back on.
+        request.app.state.accounts.states.forget(account_id, PERMANENT_PURPOSE)
+        request.app.state.bus.publish("account", {"account_id": account_id, "status": acc.status})
         return MailSetupOut(auth_url=None)
     try:
         return MailSetupOut(auth_url=request.app.state.accounts.start_permanent_delete(account_id))

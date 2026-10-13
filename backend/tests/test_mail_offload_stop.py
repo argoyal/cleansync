@@ -67,8 +67,10 @@ async def test_no_answer_from_gmail_is_retried_after_1_5_15_then_60_minutes(
         box.queue.requests.clear()
         return n
 
-    for minutes in (1, 5, 15, 60, 60):
+    for tries, minutes in enumerate((1, 5, 15, 60, 60)):  # then every 60
         box.offloads._no_answer_pause(off_id)  # what a run that got no answer does
+        asked, not_before = box.offloads._no_answer[off_id]
+        assert asked == tries + 1 and not_before - now["t"] == timedelta(minutes=minutes)
         box.offloads.resume_waiting()
         assert queued() == 0  # the next minute's tick leaves it alone
         now["t"] += timedelta(minutes=minutes - 1)
@@ -77,4 +79,34 @@ async def test_no_answer_from_gmail_is_retried_after_1_5_15_then_60_minutes(
         now["t"] += timedelta(minutes=1)
         box.offloads.resume_waiting()
         assert queued() == 1  # after the back-off it goes on
-    assert OFFLOAD_NO_ANSWER_MSG  # the reason the page shows meanwhile
+
+
+async def test_the_back_off_starts_over_once_gmail_answers(auth_client, offload_box, db):
+    box = offload_box
+    box.offloads.sleep = _no_nap
+    await box.backup()
+    off_id = _start(auth_client, box.acc, 3, q="older_than:1y").json()["offload_id"]
+    now = {"t": box.offloads.clock()}
+    box.offloads.clock = lambda: now["t"]
+    box.fake.fail("POST", r"/batchModify$", 503, times=6)  # two runs of no answer (3 tries each)
+    await box.run_queued()
+    assert box.offloads._no_answer[off_id][0] == 1
+    now["t"] += timedelta(minutes=1)
+    await box.mail.tick()
+    await box.run_queued()
+    assert box.offloads._no_answer[off_id][0] == 2  # the wait is longer now (5 minutes)
+    assert db.get(MailOffload, off_id).reason == OFFLOAD_NO_ANSWER_MSG
+    now["t"] += timedelta(minutes=5)
+    await box.mail.tick()
+    await box.run_queued()  # Gmail answers
+    assert off_id not in box.offloads._no_answer  # the next silence starts at 1 minute again
+    off = db.get(MailOffload, off_id)
+    db.refresh(off)
+    assert off.state == MailOffloadState.DONE and off.done == 3
+    box.offloads._no_answer_pause(off_id)
+    _, not_before = box.offloads._no_answer[off_id]
+    assert not_before - now["t"] == timedelta(minutes=1)
+
+
+async def _no_nap(_s):
+    return None

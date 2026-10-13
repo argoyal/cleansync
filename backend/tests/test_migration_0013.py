@@ -2,9 +2,12 @@
 of job an offload row is."""
 
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.database.engine import make_engine
 from app.database.migrate import run_migrations
+from app.models import Account
+from app.services.accounts.permanent import permanent_delete_on
 from tests.test_mail_speed_schema import _downgrade
 
 STAMP = "2026-01-02 03:04:05.000000"
@@ -42,6 +45,19 @@ def test_existing_rows_get_the_safe_defaults(tmp_path):
     run_migrations(f)
     assert _read(f, "SELECT permanent_delete, permanent_delete_note FROM accounts") == [(0, None)]
     assert _read(f, "SELECT kind, removed, stop_asked FROM mail_offloads") == [("offload", 0, 0)]
+
+
+def test_an_account_that_already_holds_the_full_scope_still_reads_permanent_delete_off(tmp_path):
+    """Holding the permission is not the owner's choice: the switch starts off."""
+    f = _db(tmp_path)
+    scopes = "https://www.googleapis.com/auth/drive https://mail.google.com/"
+    with make_engine(f).begin() as c:
+        c.execute(text("UPDATE accounts SET scopes = :s"), {"s": scopes})
+    run_migrations(f)
+    assert _read(f, "SELECT permanent_delete, scopes FROM accounts") == [(0, scopes)]
+    with make_engine(f).connect() as c:
+        acc = Session(c).get(Account, 1)
+        assert acc.scopes == scopes and permanent_delete_on(acc) is False
 
 
 def test_downgrade_drops_the_columns_and_the_delete_forever_jobs(tmp_path):

@@ -5,17 +5,19 @@ from urllib.parse import parse_qs, urlparse
 import respx
 
 from app.models import Account
-from app.models.enums import ServiceKind, ServiceState
+from app.models.enums import AccountStatus, ServiceKind, ServiceState
 from app.services.accounts.oauth import DRIVE_SCOPE, FULL_MAIL_SCOPE, GMAIL_SCOPE
 from app.services.accounts.permanent import LOST_MSG
-from app.services.accounts.services import mail_needs_reconnect, set_service_state
+from app.services.accounts.services import ensure_services, mail_needs_reconnect, set_service_state
 from tests.test_mail_setup import _account, _google
 
 BOTH = f"{DRIVE_SCOPE} {GMAIL_SCOPE}"
 
 
-def _mail_ready(app, make_account, scopes=BOTH, on=False):
-    acc = _account(app, make_account)
+def _mail_ready(app, make_account, scopes=BOTH, on=False, email="alice@example.com"):
+    acc = make_account(email)
+    with app.state.session_factory() as db:
+        ensure_services(db, acc)
     with app.state.session_factory() as db:
         row = db.get(Account, acc.id)
         row.scopes, row.permanent_delete = scopes, on
@@ -124,3 +126,74 @@ def test_losing_mail_then_a_plain_sign_in_with_the_full_scope_does_not_turn_it_b
     )
     me = _me(auth_client)
     assert me["permanent_delete"] is False
+
+
+@respx.mock
+def test_turn_off_drops_a_waiting_turn_on_sign_in_so_an_old_tab_cannot_turn_it_back_on(
+    auth_client, app, make_account
+):
+    acc = _mail_ready(app, make_account)
+    q = _query(_switch(auth_client, acc, True).json()["auth_url"])  # a Google tab is left open
+    assert _switch(auth_client, acc, False).json() == {"auth_url": None}
+    _google(f"{BOTH} {FULL_MAIL_SCOPE}")
+    back = auth_client.get(
+        f"/api/oauth/callback?state={q['state'][0]}&code=c", follow_redirects=False
+    )
+    assert back.headers["location"].startswith("/?oauth_error=")  # the sign-in is used up
+    assert _me(auth_client)["permanent_delete"] is False
+
+
+@respx.mock
+def test_turn_off_keeps_another_accounts_waiting_sign_in(auth_client, app, make_account):
+    one = _mail_ready(app, make_account)
+    two = _mail_ready(app, make_account, email="bob@example.com")
+    q = _query(_switch(auth_client, two, True).json()["auth_url"])
+    _switch(auth_client, one, False)
+    _google(f"{BOTH} {FULL_MAIL_SCOPE}", email=two.email)
+    back = auth_client.get(
+        f"/api/oauth/callback?state={q['state'][0]}&code=c", follow_redirects=False
+    )
+    assert back.headers["location"] == f"/?connected={two.id}&permanent=on"
+
+
+def test_turn_on_and_turn_off_both_tell_the_pages_the_account_status(
+    auth_client, app, make_account, monkeypatch
+):
+    acc = _mail_ready(app, make_account, f"{BOTH} {FULL_MAIL_SCOPE}")
+    seen = []
+    real = app.state.bus.publish
+    monkeypatch.setattr(
+        app.state.bus, "publish", lambda kind, data: (seen.append((kind, data)), real(kind, data))
+    )
+    _switch(auth_client, acc, True)
+    _switch(auth_client, acc, False)
+    events = [d for k, d in seen if k == "account"]
+    assert len(events) == 2
+    assert all(e["account_id"] == acc.id and e["status"] == AccountStatus.CONNECTED for e in events)
+
+
+def test_turn_on_is_refused_for_an_account_that_is_not_connected(auth_client, app, make_account):
+    acc = _mail_ready(app, make_account, f"{BOTH} {FULL_MAIL_SCOPE}")
+    with app.state.session_factory() as db:
+        db.get(Account, acc.id).status = AccountStatus.DISCONNECTED
+        db.commit()
+    r = _switch(auth_client, acc, True)
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Connect this Google account again first (Settings, Accounts)."
+    with app.state.session_factory() as db:
+        assert db.get(Account, acc.id).permanent_delete is False
+
+
+def test_turn_on_for_a_pretend_local_account_needs_no_google(auth_client, app, settings):
+    import asyncio
+
+    settings.allow_local_accounts = True
+    folder = app.state.layout.root / "pretend"
+    acc = asyncio.run(app.state.accounts.add_local_account("bob@example.com", folder))
+    assert auth_client.post(f"/api/accounts/{acc.id}/mail/setup").json() == {"auth_url": None}
+    r = _switch(auth_client, acc, True)
+    assert r.status_code == 200 and r.json() == {"auth_url": None}
+    me = _me(auth_client)
+    assert me["permanent_delete"] is True and me["permanent_delete_note"] is None
+    assert _switch(auth_client, acc, False).json() == {"auth_url": None}
+    assert _me(auth_client)["permanent_delete"] is False

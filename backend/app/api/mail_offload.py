@@ -29,7 +29,7 @@ from app.schemas.mail import (
 from app.services.mail.offload import offload_out
 from app.services.mail.offload_plan import Pick
 from app.services.mail.service import MailError
-from app.services.rules.apply import WAIT_ERRORS
+from app.services.rules.apply import WAIT_ERRORS, NotInGmail
 
 router = APIRouter()
 
@@ -186,6 +186,8 @@ async def offload_one(
         d = await request.app.state.rule_applier.offload_by_hand(body.account_id, message_id)
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
+    except NotInGmail as e:
+        return OffloadOneOut(offloaded=False, reason=str(e))
     except WAIT_ERRORS as e:
         raise HTTPException(503, f"{e} Nothing was offloaded; try again later.") from e
     request.app.state.bus.publish("rules", {"account_id": body.account_id})

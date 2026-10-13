@@ -76,6 +76,15 @@ class OAuthStates:
             return None
         return pending
 
+    def forget(self, account_id: int, purpose: str) -> None:
+        """Drop the sign-ins still waiting for this account and purpose (Turn off: an old
+        Google tab must not turn the switch back on)."""
+        self._pending = {
+            k: v
+            for k, v in self._pending.items()
+            if not (v.reconnect_account_id == account_id and v.purpose == purpose)
+        }
+
     def pop(self, state: str) -> PendingAuth | None:
         pending = self._pending.pop(state, None)
         if pending is None or self.clock() - pending.created >= self.ttl_s:

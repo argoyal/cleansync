@@ -759,3 +759,44 @@ async def test_restoring_marks_a_rules_decision_with_the_service_clock(
     await box.run_queued()
     db.expire_all()
     assert db.get(RuleDecision, d.id).moved_back_at.replace(tzinfo=UTC) == fixed
+
+
+async def test_restore_of_the_kept_view_honours_the_label(auth_client, offload_box):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    r = _restore(auth_client, box, view="kept", label="Label_2")  # only "Old statement" has it
+    assert r.status_code == 202 and r.json()["count"] == 1
+    await box.run_queued()
+    assert box.row("Old statement").state == MailState.IN_MAIL
+    assert box.row("Old photos").state == MailState.OFFLOADED
+    assert box.row("Ancient note").state == MailState.OFFLOADED
+
+
+async def test_restore_of_the_kept_view_with_a_search_and_the_old_archive_name(
+    auth_client, offload_box
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    r = _restore(auth_client, box, view="kept", q="photos")
+    assert r.status_code == 202 and r.json()["count"] == 1
+    await box.run_queued()
+    r = _restore(auth_client, box, view="archive", q="older_than:1y")  # an old link's name
+    assert r.status_code == 202 and r.json()["count"] == 2  # the two still out of Gmail
+
+
+@pytest.mark.parametrize("view", ["all", "inbox", "archived", "suggested"])
+async def test_a_gmail_view_with_a_search_or_a_label_restores_nothing(
+    auth_client, offload_box, view
+):
+    """Only Offloaded, Deleted in Gmail and the kept view restore."""
+    box = offload_box
+    await _offloaded(auth_client, box)
+    for body in (
+        {"q": "older_than:1y"},
+        {"label": "Label_2"},
+        {"q": "statement", "label": "Label_2"},
+    ):
+        r = _restore(auth_client, box, view=view, **body)
+        assert r.status_code == 409, (view, body, r.text)
+        assert r.json()["detail"] == "Nothing here needs restoring: these mails are in Gmail."
+    assert {box.row(s).state for s in OLD} == {MailState.OFFLOADED}

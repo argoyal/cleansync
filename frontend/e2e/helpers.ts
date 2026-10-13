@@ -114,7 +114,13 @@ export function fakeGmailDelete(subject: string): boolean {
     return false;
   }
   const args = ["-m", "app.devtools.fake_gmail", "delete", "--file", name ? "/drivesync/app/data/fake-gmail/alice@example.com.json" : file!, "--subject", subject];
-  if (name) execFileSync("docker", ["exec", name, "python", ...args]);
-  else execFileSync("uv", ["run", "python", ...args], { cwd: process.env.E2E_BACKEND_DIR ?? "../backend" });
+  // The tool refuses to run unless the pretend accounts are allowed.
+  if (name) execFileSync("docker", ["exec", "-e", "DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1", name, "python", ...args]);
+  else {
+    execFileSync("uv", ["run", "python", ...args], {
+      cwd: process.env.E2E_BACKEND_DIR ?? "../backend",
+      env: { ...process.env, DRIVESYNC_ALLOW_LOCAL_ACCOUNTS: "1" },
+    });
+  }
   return true;
 }

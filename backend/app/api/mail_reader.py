@@ -40,7 +40,7 @@ from app.services.mail.reader import (
     served_type,
     user_label_map,
 )
-from app.services.mail.search import VIEW_ALIASES, SearchError, mail_conditions
+from app.services.mail.search import VIEW_ALIASES, VIEWS, SearchError, mail_conditions
 from app.services.mail.store import eml_path
 
 MAX_QUERY_CHARS = 1000
@@ -259,7 +259,10 @@ def thread(
     account = account_or_404(db, account_id)
     if valid_mail_id(thread_id) is None:
         raise HTTPException(404, "thread not found")
-    states = THREAD_STATES.get(VIEW_ALIASES.get(view, view), (MailState.IN_MAIL,))
+    view = VIEW_ALIASES.get(view, view)  # old links keep working
+    if view not in VIEWS or view == "kept":
+        raise HTTPException(400, f"Unknown view: {view}")
+    states = THREAD_STATES.get(view, (MailState.IN_MAIL,))
     rows = db.scalars(
         select(MailMessage)
         .where(

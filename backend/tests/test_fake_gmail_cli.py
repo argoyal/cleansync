@@ -9,7 +9,8 @@ from app.services.google.client import GoogleClient
 from app.services.mail.adapters import MailAdapters
 
 
-def test_delete_by_subject_records_it_in_the_history(tmp_path):
+def test_delete_by_subject_records_it_in_the_history(tmp_path, monkeypatch):
+    monkeypatch.setenv("DRIVESYNC_ALLOW_LOCAL_ACCOUNTS", "1")
     path = tmp_path / "alice.json"
     fake = FakeGmail(path=path)
     keep = fake.add(make_mail("Keep me"))
@@ -24,7 +25,22 @@ def test_delete_by_subject_records_it_in_the_history(tmp_path):
     assert main(["delete", "--file", str(path), "--subject", "Not there"]) == 1
 
 
-def test_the_pretend_mailbox_is_read_again_after_it_changed_on_disk(layout, make_account):
+def test_the_command_line_refuses_unless_pretend_accounts_are_allowed(
+    tmp_path, monkeypatch, capsys
+):
+    path = tmp_path / "alice.json"
+    fake = FakeGmail(path=path)
+    keep = fake.add(make_mail("Remove me"))
+    monkeypatch.delenv("DRIVESYNC_ALLOW_LOCAL_ACCOUNTS", raising=False)
+    assert main(["delete", "--file", str(path), "--subject", "Remove me"]) == 2
+    assert "DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1" in capsys.readouterr().err
+    assert list(FakeGmail.load(path).messages) == [keep]  # nothing was deleted
+
+
+def test_the_pretend_mailbox_is_read_again_after_it_changed_on_disk(
+    layout, make_account, monkeypatch
+):
+    monkeypatch.setenv("DRIVESYNC_ALLOW_LOCAL_ACCOUNTS", "1")
     acc = make_account(remote_name=f"{PRETEND_PREFIX}alice")
     adapters = MailAdapters(
         google=GoogleClient(budget=None, pacer=None, http_factory=lambda: httpx.AsyncClient()),

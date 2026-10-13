@@ -184,7 +184,8 @@ def test_a_restart_gives_a_delete_forever_job_its_own_words(db, make_account):
     recover_mail_offloads(db)
     db.expire_all()
     assert going.reason == offload_plan.FOREVER_RESTARTED_MSG
-    assert stopping.reason == offload_plan.FOREVER_STOPPED_MSG
+    # A batch may have been mid-call when CleanSync stopped: its outcome is not known.
+    assert stopping.reason == offload_plan.FOREVER_STOPPED_UNKNOWN_MSG
     _no_offload_words(going.reason)
     _no_offload_words(stopping.reason)
     assert stopping.reason.startswith("Stopped by you.")

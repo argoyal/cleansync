@@ -143,3 +143,67 @@ def test_is_archived_is_no_longer_a_search_word(db, make_account):
     acc = make_account()
     with pytest.raises(SearchError, match='"is:" knows unread, starred, offloaded and deleted.'):
         found(db, acc, view="offloaded", q="is:archived")
+
+
+@pytest.mark.parametrize("view", ["bogus", "kept", "Inbox", ""])
+def test_a_thread_asked_for_in_an_unknown_view_is_a_400_not_the_inbox(
+    auth_client, db, make_account, view
+):
+    acc = make_account()
+    _add(db, acc, "a", thread="t", labels=("INBOX",))
+    r = auth_client.get("/api/mail/threads/t", params={"account_id": acc.id, "view": view})
+    assert r.status_code == 400, r.text
+    assert "Unknown view" in r.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "view", ["all", "inbox", "sent", "starred", "important", "archived", "suggested", "offloaded"]
+)
+def test_a_thread_opens_in_every_real_view(auth_client, db, make_account, view):
+    acc = make_account()
+    _add(db, acc, "a", thread="t", labels=("INBOX",))
+    r = auth_client.get("/api/mail/threads/t", params={"account_id": acc.id, "view": view})
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.parametrize("view", ["offloaded", "deleted", "kept"])
+@pytest.mark.parametrize("q", ["in:archived", "is:unread", "in:archived is:unread"])
+def test_in_archived_or_is_unread_with_a_cleansync_view_never_reaches_mail_in_gmail(
+    db, make_account, view, q
+):
+    """The out-of-Gmail views (Offloaded, Deleted in Gmail, and the kept view Restore uses)
+    come back only with mail that is out of Gmail, whatever the search words say. The same
+    rows feed Delete forever and Restore, so those never touch mail still in Gmail."""
+    acc = make_account()
+    in_gmail = [
+        _add(db, acc, "arch-unread", labels=("Label_1",), unread=True),
+        _add(db, acc, "arch-read", labels=("Label_1",)),
+        _add(db, acc, "inbox-unread", labels=("INBOX",), unread=True),
+    ]
+    off = _add(db, acc, "off-unread", labels=("Label_1",), state=MailState.OFFLOADED, unread=True)
+    dele = _add(db, acc, "del-unread", labels=("Label_1",), state=MailState.DELETED, unread=True)
+    got = found(db, acc, view=view, q=q)
+    assert not {r.provider_id for r in in_gmail} & set(got)
+    allowed = {"offloaded": {off}, "deleted": {dele}, "kept": {off, dele}}[view]
+    if "in:archived" in q:
+        assert got == []  # "archived" means in Gmail: nothing out of Gmail matches
+    else:
+        assert got == sorted(r.provider_id for r in allowed)
+
+
+def test_delete_forever_and_restore_never_pick_mail_in_gmail_from_those_searches(db, make_account):
+    from app.services.mail.forever import forever_targets
+    from app.services.mail.offload import restore_targets
+    from app.services.mail.offload_plan import Pick
+
+    acc = make_account()
+    live = _add(db, acc, "arch-unread", labels=("Label_1",), unread=True)
+    off = _add(db, acc, "off-unread", labels=("Label_1",), state=MailState.OFFLOADED, unread=True)
+    for q in ("in:archived", "is:unread"):
+        rows, _ = forever_targets(
+            db, acc.id, view="offloaded", label=None, q=q, message_ids=None, now=NOW
+        )
+        assert live.id not in [r.id for r in rows]
+        ids = restore_targets(db, acc.id, Pick(q=q, view="offloaded"), None, NOW)
+        assert live.id not in ids
+        assert ids == ([] if q == "in:archived" else [off.id])
