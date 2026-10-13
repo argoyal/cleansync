@@ -15,6 +15,10 @@ export type Account = {
   services: { files: ServiceState; mail: ServiceState };
   /** Google gave CleanSync permission to read and manage mail at the last sign-in. */
   mail_permission: boolean;
+  /** Allow permanent delete is on: the owner's switch, and Google allows it (bulk offload spec §3). */
+  permanent_delete: boolean;
+  /** Why it went off by itself, when Google took the permission back. */
+  permanent_delete_note: string | null;
 };
 
 export type PairStatus = "NEW" | "HEALTHY" | "RUNNING" | "ATTENTION" | "ERROR" | "PAUSED";

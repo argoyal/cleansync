@@ -6,6 +6,7 @@ import { AppShell } from "./components/AppShell";
 import { NewMenu } from "./components/NewMenu";
 import { useToast } from "./components/Toasts";
 import { UploadTray } from "./components/UploadTray";
+import { PERMANENT_DENIED_TOAST, PERMANENT_ON_TOAST } from "./components/settings/PermanentDelete";
 import { SHOW_NEW } from "./config";
 import { AccountProvider, useCurrentAccount } from "./hooks/useAccount";
 import { OAUTH_RETURN_KEY } from "./hooks/useConnect";
@@ -45,6 +46,7 @@ function OAuthReturn() {
   const connected = rawConnected && /^[1-9]\d{0,9}$/.test(rawConnected) ? rawConnected : null;
   const error = (params.get("oauth_error") ?? "").slice(0, 300) || null;
   const mail = params.get("mail");
+  const permanent = params.get("permanent");
   const handled = useRef(false);
   useEffect(() => {
     if (handled.current) return; // StrictMode runs effects twice; show the message once
@@ -61,12 +63,14 @@ function OAuthReturn() {
       setAccountId(Number(connected));
       if (mail === "ready") toast(MAIL_READY_TOAST);
       else if (mail === "denied") toast(MAIL_DENIED_TOAST, { tone: "error" });
+      else if (permanent === "on") toast(PERMANENT_ON_TOAST);
+      else if (permanent === "denied") toast(PERMANENT_DENIED_TOAST, { tone: "error" });
       else toast("Google account connected.");
       if (back.startsWith("/setup")) back = "/setup?step=folders";
     }
     if (error) toast(error, { tone: "error" });
     navigate(back, { replace: true });
-  }, [connected, error, mail, navigate, toast, setAccountId]);
+  }, [connected, error, mail, permanent, navigate, toast, setAccountId]);
   return null;
 }
 

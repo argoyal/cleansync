@@ -85,6 +85,8 @@ export const ACCOUNT: Account = {
   last_checked_at: "2026-10-08T07:00:00Z",
   services: { files: "active", mail: "not_set_up" },
   mail_permission: false,
+  permanent_delete: false,
+  permanent_delete_note: null,
 };
 
 export const PAIR: Pair = {

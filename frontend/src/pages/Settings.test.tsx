@@ -32,6 +32,66 @@ const SYSTEM = {
 };
 
 describe("settings", () => {
+
+  it("turns Allow permanent delete on through Google's sign-in", async () => {
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign });
+    const { calls } = mockApi({
+      "GET /api/accounts": [{ ...ACCOUNT, services: { files: "active", mail: "active" } }],
+      "POST /api/accounts/1/permanent-delete": { auth_url: "https://accounts.google.com/full" },
+    });
+    renderApp(<SettingsPage />, { route: "/settings?tab=accounts", path: "/settings" });
+    const box = await screen.findByRole("group", { name: "Allow permanent delete" });
+    expect(box).toHaveTextContent("Off");
+    expect(box).toHaveTextContent(
+      "Offload moves mail to Gmail's trash. Turn this on to delete it from Gmail directly, so the space comes back at once.",
+    );
+    await userEvent.click(within(box).getByRole("button", { name: "Turn on" }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("https://accounts.google.com/full"));
+    expect(calls.find((c) => c.path === "/api/accounts/1/permanent-delete")?.body).toEqual({ on: true });
+  });
+
+  it("says what On means, how to take it back at Google, and turns it off", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [{ ...ACCOUNT, services: { files: "active", mail: "active" }, permanent_delete: true }],
+      "POST /api/accounts/1/permanent-delete": { auth_url: null },
+    });
+    renderApp(<SettingsPage />, { route: "/settings?tab=accounts", path: "/settings" });
+    const box = await screen.findByRole("group", { name: "Allow permanent delete" });
+    expect(box).toHaveTextContent("On");
+    expect(box).toHaveTextContent("Offload and Delete forever remove mail from Gmail directly. Gmail's trash isn't used.");
+    expect(box).toHaveTextContent("myaccount.google.com/permissions");
+    await userEvent.click(within(box).getByRole("button", { name: "Turn off" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/accounts/1/permanent-delete")?.body).toEqual({ on: false }));
+  });
+
+  it("shows why permanent delete went off, and nothing for a mailbox without mail backup", async () => {
+    mockApi({
+      "GET /api/accounts": [
+        {
+          ...ACCOUNT,
+          services: { files: "active", mail: "active" },
+          permanent_delete_note: "Permanent delete was turned off: Google no longer allows it for this mailbox.",
+        },
+        { ...ACCOUNT, id: 2, email: "bob@example.com" },
+      ],
+    });
+    renderApp(<SettingsPage />, { route: "/settings?tab=accounts", path: "/settings" });
+    expect(await screen.findByText("Permanent delete was turned off: Google no longer allows it for this mailbox.")).toBeInTheDocument();
+    expect(screen.getAllByRole("group", { name: "Allow permanent delete" })).toHaveLength(1);
+  });
+
+  it("says what Google answered after the sign-in for permanent delete", async () => {
+    sessionStorage.setItem("drivesync.oauthReturn", "/settings?tab=accounts");
+    mockApi({
+      "GET /api/health": { status: "ok", version: "0.1.0", app_name: "CleanSync" },
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/setup": { oauth_configured: true, redirect_uri: "x", public_url: "x", insecure_http: false, accounts: 1, pairs: 1, initialized_pairs: 1 },
+    });
+    renderApp(<AppRoutes />, { route: "/?connected=1&permanent=denied" });
+    expect(await screen.findByText("Google didn't give full Gmail access, so permanent delete stays off. Try again and tick the box for it.")).toBeInTheDocument();
+  });
   it("reconnects and disconnects accounts", async () => {
     const assign = vi.fn();
     vi.stubGlobal("location", { ...window.location, assign });
