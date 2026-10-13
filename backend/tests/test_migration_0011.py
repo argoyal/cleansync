@@ -119,3 +119,26 @@ def test_downgrade_gives_the_old_action_name_back_and_keeps_mail_offloaded(tmp_p
     ((acts,),) = read(f, "SELECT actions FROM rules WHERE id = 1")
     assert json.loads(acts) == [{"kind": "delete"}]
     assert read(f, "SELECT state FROM mail_messages WHERE id = 1") == [("offloaded",)]
+
+
+def test_a_suggested_decisions_actions_are_renamed_too(tmp_path):
+    f = old_database(tmp_path)
+    eng = make_engine(f)
+    with eng.begin() as c:
+        c.execute(
+            text(
+                "INSERT INTO rule_decisions (id, account_id, message_id, rule_id, rule_version, "
+                "rule_name, how, why, model, took_ms, actions, changes, labels_seen, status, "
+                "created_at) VALUES (2, 1, 2, 1, 1, 'Junk', 'ai', 'looks like junk', '', 0, "
+                ":a, '{}', '[]', 'suggested', :t)"
+            ),
+            {
+                "a": json.dumps([{"kind": "label", "label": "delete"}, {"kind": "delete"}]),
+                "t": STAMP,
+            },
+        )
+    eng.dispose()
+    run_migrations(f)
+    ((acts, status),) = read(f, "SELECT actions, status FROM rule_decisions WHERE id = 2")
+    assert status == "suggested"
+    assert json.loads(acts) == [{"kind": "label", "label": "delete"}, {"kind": "offload"}]

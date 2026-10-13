@@ -5,7 +5,7 @@ row. A short record goes to Activity. Mail still in Gmail needs round 3."""
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
@@ -15,7 +15,7 @@ from app.core.clock import as_utc
 from app.models import Event, MailJob, MailMessage
 from app.models.enums import JobState, MailJobKind, MailState
 from app.paths import Layout
-from app.services.events.bus import EventBus, _redact_value, event_to_dict, record_event
+from app.services.events.bus import EventBus, event_to_dict, record_event, redact_value
 from app.services.mail.index import delete_search_rows
 from app.services.mail.offload_plan import rows_where_in
 from app.services.mail.search import VIEW_ALIASES, SearchError, mail_conditions
@@ -152,11 +152,22 @@ def delete_forever(
     return ForeverResult(len(rows), left)
 
 
+def _last_merge(data: dict, last: Event | None) -> datetime:
+    """When mail was last added to the record (older records only have their own time)."""
+    stamp = data.get("last_at")
+    if stamp:
+        try:
+            return as_utc(datetime.fromisoformat(stamp))
+        except ValueError:
+            pass
+    return as_utc(last.ts) if last is not None else datetime.min.replace(tzinfo=UTC)
+
+
 def record_rule_forever(
     db: Session, bus: EventBus, account_id: int, rule_name: str, mails: list[dict], now: datetime
 ) -> None:
     """One Activity record per rule (plan decision 15): mail its Delete forever removed within
-    10 minutes of the rule's last record joins that record. Commits."""
+    10 minutes of the record's last merge joins that record. Commits."""
     last = db.scalar(
         select(Event)
         .where(Event.kind == "rule_deleted_forever", Event.account_id == account_id)
@@ -164,14 +175,16 @@ def record_rule_forever(
         .limit(1)
     )
     data = dict(last.data or {}) if last is not None else {}
-    if last is not None and data.get("rule") == rule_name and as_utc(last.ts) >= now - RULE_GROUP:
+    last_at = _last_merge(data, last)
+    if last is not None and data.get("rule") == rule_name and last_at >= now - RULE_GROUP:
         kept = list(data.get("mails") or [])
         room = max(0, MAX_RECORDED - len(kept))
         count = int(data.get("count") or 0) + len(mails)
         last.data = {
             **data,
+            "last_at": now.isoformat(),
             "count": count,
-            "mails": kept + _redact_value(mails[:room]),
+            "mails": kept + redact_value(mails[:room]),
             "more": int(data.get("more") or 0) + max(0, len(mails) - room),
         }
         last.message = f"Rule {rule_name} deleted {_mails(count)} forever"
@@ -186,6 +199,7 @@ def record_rule_forever(
         account_id=account_id,
         data={
             "rule": rule_name,
+            "last_at": now.isoformat(),
             "count": len(mails),
             "mails": mails[:MAX_RECORDED],
             "more": max(0, len(mails) - MAX_RECORDED),

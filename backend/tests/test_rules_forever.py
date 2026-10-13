@@ -259,3 +259,56 @@ async def test_gmail_unreachable_keeps_the_copy_and_the_decision_waiting(gbox):
     assert get(gbox, MailMessage, row.id) is not None
     d = get(gbox, RuleDecision, did)
     assert d.status == DecisionStatus.SUGGESTED and d.reason == UNREACHABLE_WAIT
+
+
+async def test_correcting_to_delete_forever_counts_the_sender_once_after_approval(gbox):
+    from app.models import RuleSender
+
+    allow(gbox)
+    target = rule(gbox, "Junk", actions=FOREVER)
+    row = gbox.add("Junk", sender="spam@example.com")
+    first = decision(gbox, row, [{"kind": "archive"}])
+    decisions = Decisions(gbox.sf, gbox.applier)
+    new_id = await decisions.correct(gbox.acc.id, first, target)
+    with gbox.sf() as db:  # nothing is learned until the owner approves
+        assert db.scalars(select(RuleSender)).all() == []
+    await decisions.approve(gbox.acc.id, [new_id], confirm=1)
+    with gbox.sf() as db:
+        (sender,) = db.scalars(select(RuleSender)).all()
+        assert sender.approvals == 1
+
+
+def _record(gbox, rule_name, when, n=1):
+    from app.services.events.bus import EventBus
+    from app.services.mail.forever import record_rule_forever
+
+    mails = [{"from": "a@x", "subject": f"s{i}", "date": "2026-10-01"} for i in range(n)]
+    with gbox.sf() as db:
+        record_rule_forever(db, EventBus(), gbox.acc.id, rule_name, mails, when)
+
+
+def test_rule_forever_group_counts_ten_minutes_from_the_last_merge(gbox):
+    from datetime import UTC, datetime, timedelta
+
+    t0 = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    _record(gbox, "Junk", t0)
+    _record(gbox, "Junk", t0 + timedelta(minutes=8))
+    _record(gbox, "Junk", t0 + timedelta(minutes=16))  # 8 min after the last merge: joins
+    with gbox.sf() as db:
+        events = db.scalars(select(Event).where(Event.kind == "rule_deleted_forever")).all()
+        assert [e.data["count"] for e in events] == [3]
+    _record(gbox, "Junk", t0 + timedelta(minutes=27))  # 11 min after the last merge: new record
+    with gbox.sf() as db:
+        events = db.scalars(select(Event).where(Event.kind == "rule_deleted_forever")).all()
+        assert [e.data["count"] for e in events] == [3, 1]
+
+
+def test_a_different_rule_starts_a_new_forever_record(gbox):
+    from datetime import UTC, datetime, timedelta
+
+    t0 = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    _record(gbox, "Junk", t0)
+    _record(gbox, "Other", t0 + timedelta(minutes=1))
+    with gbox.sf() as db:
+        events = db.scalars(select(Event).where(Event.kind == "rule_deleted_forever")).all()
+        assert [e.data["rule"] for e in events] == ["Junk", "Other"]

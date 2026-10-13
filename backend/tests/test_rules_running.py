@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models import MailMessage, RuleDecision, RuleJob, RuleSender, RuleTodo
-from app.models.enums import DecisionStatus, RuleJobState
+from app.models.enums import DecisionStatus, MailState, RuleJobState
 from app.services.rules.decisions import remembered_senders
 from app.services.rules.jobs import CHANGED_MSG, RuleJobProblem, RuleJobs, RunScope
 from app.services.rules.match import Choice
@@ -398,3 +398,226 @@ async def test_a_pick_all_on_a_quoted_empty_search_is_described_without_the_quot
     worker, jobs = jobs_for(gbox)
     jid = await decided(gbox, worker, jobs, [news], RunScope(view="inbox", q='""', pick_all=True))
     assert '""' not in jobs.preview(gbox.acc.id, jid).filter_text
+
+
+async def test_approving_a_run_a_newer_run_replaced_says_so(gbox):
+    news = rule(gbox, "News")
+    gbox.add("News one")
+    worker, jobs = jobs_for(gbox)
+    old = await decided(gbox, worker, jobs, [news], RunScope(inbox=True))
+    await decided(gbox, worker, jobs, [news], RunScope(inbox=True))  # replaces the first
+    with pytest.raises(
+        RuleJobProblem,
+        match=r"^A newer run replaced this one\. Close this and start again\.$",
+    ):
+        jobs.run(gbox.acc.id, old)
+
+
+async def test_a_run_still_previewing_says_to_wait(gbox):
+    news = rule(gbox, "News")
+    gbox.add("News one")
+    _, jobs = jobs_for(gbox)
+    jid = jobs.start_preview(gbox.acc.id, rule_ids=[news], scope=RunScope(inbox=True))
+    with pytest.raises(RuleJobProblem, match=r"^Wait until the preview is finished\.$"):
+        jobs.run(gbox.acc.id, jid)
+
+
+async def test_a_planned_change_whose_rule_was_deleted_is_not_counted_and_not_run(gbox):
+    news = rule(gbox, "News")
+    gone = gbox.add("News gone")
+    gbox.add("News stays")
+    worker, jobs = jobs_for(gbox)
+    jid = await decided(gbox, worker, jobs, [news], RunScope(inbox=True))
+    with gbox.sf() as db:  # the rule disappeared from one decision, still PLANNED
+        d = db.scalar(select(RuleDecision).where(RuleDecision.message_id == gone.id))
+        d.rule_id = None
+        db.commit()
+        did = d.id
+    p = jobs.preview(gbox.acc.id, jid)
+    assert p.planned == 1
+    assert p.skip_reasons == [{"reason": "Its rule was deleted.", "count": 1}]
+    assert [m.subject for m in jobs.matches(gbox.acc.id, jid)] == ["News stays"]
+    jobs.run(gbox.acc.id, jid)
+    await jobs.wait(jid)
+    p = jobs.preview(gbox.acc.id, jid)
+    assert (p.state, p.applied, p.skipped) == (RuleJobState.DONE, 1, 1)
+    assert "INBOX" in gbox.fake.messages[gone.provider_id].labels
+    with gbox.sf() as db:
+        d = db.get(RuleDecision, did)
+        assert (d.status, d.reason) == (DecisionStatus.SKIPPED, "Its rule was deleted.")
+
+
+async def test_an_empty_pick_at_approve_is_refused_and_starts_nothing(gbox):
+    news = rule(gbox, "News")
+    gbox.add("News one")
+    worker, jobs = jobs_for(gbox)
+    jid = await decided(gbox, worker, jobs, [news], RunScope(inbox=True))
+    with pytest.raises(
+        RuleJobProblem,
+        match=r"^Pick at least one mail, or close this to leave them all\.$",
+    ):
+        jobs.run(gbox.acc.id, jid, only=[])
+    assert jobs.preview(gbox.acc.id, jid).state == RuleJobState.PREVIEWED
+    assert jobs.preview(gbox.acc.id, jid).left_out == 0
+
+
+async def test_two_kinds_of_pick_at_once_are_refused(gbox):
+    news = rule(gbox, "News")
+    m = gbox.add("News one")
+    _, jobs = jobs_for(gbox)
+    scopes = [
+        RunScope(inbox=True, message_ids=[m.id]),
+        RunScope(message_ids=[m.id], thread_ids=[m.thread_id]),
+        RunScope(thread_ids=[m.thread_id], q="news"),
+        RunScope(inbox=True, pick_all=True),
+        RunScope(message_ids=[m.id], q="news"),
+    ]
+    for scope in scopes:
+        with pytest.raises(RuleJobProblem, match=r"^Pick one thing to run on"):
+            jobs.start_preview(gbox.acc.id, rule_ids=[news], scope=scope)
+    with gbox.sf() as db:
+        assert db.scalars(select(RuleJob)).all() == []
+
+
+def test_the_start_endpoint_answers_400_for_two_kinds_of_pick(auth_client, db, make_account):
+    acc = make_account()
+    r = auth_client.post(
+        "/api/rule-jobs",
+        json={"account_id": acc.id, "rule_ids": [1], "inbox": True, "message_ids": [1]},
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"].startswith("Pick one thing to run on")
+
+
+async def test_a_run_whose_row_is_missing_decides_with_no_rules(gbox):
+    rule(gbox, "News")
+    m = gbox.add("News one")
+    with gbox.sf() as db:
+        db.add(RuleTodo(account_id=gbox.acc.id, message_id=m.id, job_id=None))
+        db.commit()
+    from app.services.rules.worker import job_rules
+
+    with gbox.sf() as db:
+        assert job_rules(db, 9999) == []  # no such run: no rules, not every rule
+        assert job_rules(db, None) is None
+
+
+async def test_a_sorting_todo_next_to_a_run_with_rule_ids_still_uses_every_rule(gbox):
+    shops, news = rule(gbox, "Shops"), rule(gbox, "News")
+    in_run = gbox.add("Shops and News run")
+    plain = gbox.add("Shops and News plain")
+    chooser = ByName()
+    jid = job_with(gbox, [news], in_run)
+    with gbox.sf() as db:  # new-mail sorting: a to-do row with no job
+        from app.models import RuleAccount
+
+        db.add(RuleAccount(account_id=gbox.acc.id, sorting_enabled=True))
+        db.add(RuleTodo(account_id=gbox.acc.id, message_id=plain.id, job_id=None))
+        db.commit()
+    await decide_all(gbox, chooser)
+    assert sorted(chooser.offered) == [["News"], ["Shops", "News"]]
+    with gbox.sf() as db:
+        by_subject = dict(
+            db.execute(
+                select(MailMessage.subject, RuleDecision.rule_id).join(
+                    MailMessage, MailMessage.id == RuleDecision.message_id
+                )
+            ).all()
+        )
+    assert by_subject == {"Shops and News run": news, "Shops and News plain": shops}
+    assert jid
+
+
+async def test_a_rule_turned_off_or_deleted_mid_run_decides_no_rule(gbox):
+    from app.services.rules.store import delete_rule, update_rule
+
+    off, gone = rule(gbox, "Off"), rule(gbox, "Gone")
+    a, b = gbox.add("Off mail"), gbox.add("Gone mail")
+    jid = job_with(gbox, [off, gone], a, b)
+    with gbox.sf() as db:
+        update_rule(
+            db,
+            gbox.acc.id,
+            off,
+            RuleIn(name="Off", description="Off mail", actions=ARCHIVE, enabled=False),
+            "a",
+        )
+        delete_rule(db, gbox.acc.id, gone)
+    chooser = ByName()
+    await decide_all(gbox, chooser)
+    assert {n for n, _ in verdicts(gbox, jid).values()} == {""}
+    with gbox.sf() as db:
+        statuses = set(db.scalars(select(RuleDecision.status).where(RuleDecision.job_id == jid)))
+    assert statuses == {DecisionStatus.NO_RULE}
+    assert all(o == [] for o in chooser.offered)
+
+
+async def test_other_runs_and_other_mailboxes_ids_in_left_out_and_only_are_ignored(
+    gbox, make_account
+):
+    news = rule(gbox, "News")
+    for i in range(2):
+        gbox.add(f"News {i}")
+    worker, jobs = jobs_for(gbox)
+    other_run = await decided(gbox, worker, jobs, [news], RunScope(inbox=True))
+    foreign = {m.id for m in jobs.matches(gbox.acc.id, other_run)}
+    mine = await decided(gbox, worker, jobs, [news], RunScope(inbox=True))  # replaces the first
+    own = {m.id for m in jobs.matches(gbox.acc.id, mine)}
+    assert own and not own & foreign
+    bob = make_account("bob@example.com")
+    with gbox.sf() as db:  # a decision of another mailbox
+        from app.models import MailMessage as MM
+
+        bm = MM(
+            account_id=bob.id,
+            provider_id="b1",
+            thread_id="b1",
+            from_addr="",
+            to_addrs="",
+            cc_addrs="",
+            subject="x",
+            date=db.scalar(select(MailMessage.date).limit(1)),
+            size=1,
+            file_size=1,
+            sha256="0" * 64,
+            labels=[],
+            attachments=[],
+            snippet="",
+            file_path="x",
+            state="in_mail",
+        )
+        db.add(bm)
+        db.flush()
+        bd = RuleDecision(
+            account_id=bob.id,
+            message_id=bm.id,
+            status=DecisionStatus.PLANNED,
+            actions=ARCHIVE,
+            rule_name="x",
+        )
+        db.add(bd)
+        db.commit()
+        bob_decision = bd.id
+    jobs.run(gbox.acc.id, mine, left_out=[*foreign, bob_decision])
+    await jobs.wait(mine)
+    p = jobs.preview(gbox.acc.id, mine)
+    assert (p.applied, p.left_out) == (2, 0)  # none of the strangers' ids left anything out
+    with gbox.sf() as db:
+        assert db.get(RuleDecision, bob_decision).status == DecisionStatus.PLANNED
+        assert {
+            d.status for d in db.scalars(select(RuleDecision).where(RuleDecision.id.in_(foreign)))
+        } != {DecisionStatus.REJECTED}
+
+
+async def test_a_picked_thread_leaves_out_its_offloaded_mail(gbox):
+    news = rule(gbox, "News")
+    first = gbox.add("News")
+    old = gbox.add("Re: News")
+    with gbox.sf() as db:
+        row = db.get(MailMessage, old.id)
+        row.thread_id, row.state = first.thread_id, MailState.OFFLOADED
+        db.commit()
+    _, jobs = jobs_for(gbox)
+    scope = RunScope(view="all", thread_ids=[first.thread_id])
+    jid = jobs.start_preview(gbox.acc.id, rule_ids=[news], scope=scope)
+    assert covered(gbox, jid) == [first.id]

@@ -79,13 +79,13 @@ def event_to_dict(ev: Event) -> dict:
     }
 
 
-def _redact_value(value: Any) -> Any:
+def redact_value(value: Any) -> Any:
     if isinstance(value, str):
         return redact(value)
     if isinstance(value, dict):
-        return {k: _redact_value(v) for k, v in value.items()}
+        return {k: redact_value(v) for k, v in value.items()}
     if isinstance(value, list):
-        return [_redact_value(v) for v in value]
+        return [redact_value(v) for v in value]
     return value
 
 
@@ -106,7 +106,7 @@ def record_event(
         level=level,
         account_id=account_id,
         pair_id=pair_id,
-        data=_redact_value(data) if data is not None else None,
+        data=redact_value(data) if data is not None else None,
     )
     db.add(ev)
     db.commit()

@@ -203,7 +203,9 @@ class Decisions:
                 db.add(nd)
                 db.flush()
                 new_id = nd.id
-                learn(db, account_id, rid, sender, self.clock())
+                if not is_forever(actions):
+                    # Delete forever is counted when the owner approves it, not here too.
+                    learn(db, account_id, rid, sender, self.clock())
             db.commit()
         if new_id is not None and not is_forever(to_fields[3]):
             # Delete forever is never applied here: the owner approves it with the typed count.

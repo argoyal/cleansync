@@ -68,11 +68,14 @@ def enqueue_new(db: Session, account_id: int, row: MailMessage) -> None:
 
 def job_rules(db: Session, job_id: int | None) -> list[int] | None:
     """The rules a run of rules decides with (running rules spec §8). None means every enabled
-    rule: for new inbox mail, and for runs from before migration 0012 (rule_ids [])."""
+    rule: for new inbox mail, and for runs from before migration 0012 (rule_ids []). A run
+    whose row is gone has no rules, so its mail is decided with none."""
     if job_id is None:
         return None
-    ids = db.scalar(select(RuleJob.rule_ids).where(RuleJob.id == job_id))
-    return [int(i) for i in ids] if ids else None
+    found = db.execute(select(RuleJob.rule_ids).where(RuleJob.id == job_id)).first()
+    if found is None:
+        return []
+    return [int(i) for i in found[0]] if found[0] else None
 
 
 def wake_waiting(db: Session, now) -> int:

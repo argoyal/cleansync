@@ -1115,7 +1115,7 @@ class MailOffloads:
             if outcome == UNTRASHED:
                 set_flags(row, list(st.labels))  # Gmail's labels once out of its trash
             if outcome != IN_SPAM:
-                mark_restored(db, row)
+                mark_restored(db, row, self.clock())
             db.commit()
         if outcome != IN_SPAM:
             job_log(log_path, f"{pid}: {outcome}" + (f" as {new_id}" if new_id else ""))

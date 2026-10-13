@@ -43,6 +43,11 @@ EMPTY_INBOX_MSG = "No mail in the Inbox to run this rule on."
 # Gmail's views a run can cover (spec §4). Suggested is a list of suggestions, not of mail.
 RUN_VIEWS = GMAIL_VIEWS - {"suggested"}
 LEFT_OUT_MSG = "You left it out."
+RULE_DELETED_MSG = "Its rule was deleted."
+REPLACED_MSG = "A newer run replaced this one. Close this and start again."
+WAIT_PREVIEW_MSG = "Wait until the preview is finished."
+NOTHING_PICKED_MSG = "Pick at least one mail, or close this to leave them all."
+ONE_KIND_MSG = "Pick one thing to run on: the Inbox, a search, or mails you picked."
 # Actions that take mail out of Gmail: approving them needs the typed count (spec §5).
 HEAVY_KINDS = ("offload", "delete_forever")
 MATCH_PAGE = 50
@@ -78,6 +83,18 @@ class RunScope:
     pick_all: bool = False
     message_ids: list[int] | None = None
     thread_ids: list[str] | None = None
+
+
+def _pick_kinds(scope: RunScope) -> int:
+    """How many kinds of pick a run start sends (the Inbox, mails, threads, a search)."""
+    return sum(
+        [
+            scope.inbox,
+            bool(scope.message_ids),
+            bool(scope.thread_ids),
+            scope.pick_all or bool(scope.q.strip()),
+        ]
+    )
 
 
 def _check_rules(db: Session, account_id: int, rule_ids: list[int]) -> None:
@@ -194,6 +211,8 @@ class RuleJobs:
         rule_ids = list(dict.fromkeys(rule_ids))
         if not rule_ids:
             raise RuleJobProblem(NO_RULES_MSG)
+        if _pick_kinds(scope) > 1:
+            raise RuleJobProblem(ONE_KIND_MSG)
         if scope.inbox and len(rule_ids) != 1:
             raise RuleJobProblem(ONE_RULE_MSG)
         with self.sf() as db:
@@ -295,6 +314,14 @@ class RuleJobs:
                 .group_by(RuleDecision.reason)
                 .order_by(func.count().desc())
             ).all()
+            # Planned changes whose rule was deleted meanwhile are not counted.
+            rule_gone = db.scalar(
+                select(func.count()).where(
+                    RuleDecision.job_id == job_id,
+                    RuleDecision.status == DecisionStatus.PLANNED,
+                    RuleDecision.rule_id.is_(None),
+                )
+            )
             groups: dict[int, dict] = defaultdict(lambda: {"count": 0, "examples": []})
             rows = db.execute(
                 select(
@@ -329,7 +356,7 @@ class RuleJobs:
                 state=job.state,
                 total=job.total,
                 decided=job.decided,
-                planned=counts.get(DecisionStatus.PLANNED, 0),
+                planned=counts.get(DecisionStatus.PLANNED, 0) - (rule_gone or 0),
                 per_rule=[
                     {
                         "rule": g["rule"],
@@ -348,7 +375,8 @@ class RuleJobs:
                 q=job.q,
                 filter_text=job.filter_text,
                 left_out=left_out or 0,
-                skip_reasons=[{"reason": r or "", "count": n} for r, n in skips],
+                skip_reasons=[{"reason": r or "", "count": n} for r, n in skips]
+                + ([{"reason": RULE_DELETED_MSG, "count": rule_gone}] if rule_gone else []),
             )
 
     def matches(
@@ -367,7 +395,11 @@ class RuleJobs:
             q = (
                 select(RuleDecision, MailMessage)
                 .join(MailMessage, MailMessage.id == RuleDecision.message_id)
-                .where(RuleDecision.job_id == job_id, RuleDecision.status == DecisionStatus.PLANNED)
+                .where(
+                    RuleDecision.job_id == job_id,
+                    RuleDecision.status == DecisionStatus.PLANNED,
+                    RuleDecision.rule_id.is_not(None),
+                )
             )
             if rule_id is not None:
                 q = q.where(RuleDecision.rule_id == rule_id)
@@ -406,15 +438,37 @@ class RuleJobs:
         with self.sf() as db:
             job = self._job(db, account_id, job_id)
             if job.state != RuleJobState.PREVIEWED:
-                raise RuleJobProblem("Wait until the preview is finished.")
+                newer = db.scalar(
+                    select(RuleJob.id)
+                    .where(RuleJob.account_id == account_id, RuleJob.id > job_id)
+                    .limit(1)
+                )
+                if job.state == RuleJobState.STOPPED and newer is not None:
+                    raise RuleJobProblem(REPLACED_MSG)
+                raise RuleJobProblem(WAIT_PREVIEW_MSG)
+            if only is not None and not only:
+                raise RuleJobProblem(NOTHING_PICKED_MSG)
             planned = dict(
                 db.execute(
                     select(RuleDecision.id, RuleDecision.actions).where(
                         RuleDecision.job_id == job_id,
                         RuleDecision.status == DecisionStatus.PLANNED,
+                        RuleDecision.rule_id.is_not(None),
                     )
                 ).all()
             )
+            # A planned change whose rule was deleted meanwhile is left out, with its reason.
+            gone = db.execute(
+                update(RuleDecision)
+                .where(
+                    RuleDecision.job_id == job_id,
+                    RuleDecision.status == DecisionStatus.PLANNED,
+                    RuleDecision.rule_id.is_(None),
+                )
+                .values(status=DecisionStatus.SKIPPED, reason=RULE_DELETED_MSG)
+                .execution_options(synchronize_session=False)
+            ).rowcount
+            job.skipped += gone or 0
             out = set(planned) - set(only) if only is not None else set(left_out) & set(planned)
             heavy, kinds = 0, set()
             for did, actions in planned.items():

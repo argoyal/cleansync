@@ -110,7 +110,7 @@ async def test_offload_checks_copy_trashes_and_ends_offloaded(gbox):
     assert get(gbox, MailMessage, row.id).offload_id is None
 
 
-async def test_delete_refuses_a_bad_copy_and_changes_nothing(gbox):
+async def test_offload_refuses_a_bad_copy_and_changes_nothing(gbox):
     row = gbox.add("Hi")
     eml_path(gbox.layout, gbox.acc.email, row.file_path).write_bytes(b"broken")
     did = decision(gbox, row, [{"kind": "offload"}])
@@ -154,7 +154,7 @@ async def test_undo_reverses_only_what_is_still_as_left(gbox):
     assert "INBOX" in gbox.fake.messages[row.provider_id].labels
 
 
-async def test_undo_delete_untrashes(gbox):
+async def test_undo_offload_untrashes(gbox):
     row = gbox.add("Hi")
     did = decision(gbox, row, [{"kind": "offload"}])
     await gbox.applier.apply(did)
@@ -310,7 +310,7 @@ async def test_undo_of_mail_no_longer_in_gmail_changes_nothing(gbox, actions, la
     assert gbox.fake.messages[row.provider_id].labels == labels_before
 
 
-async def test_rule_archive_and_delete_keep_label_views_and_counts_right(gbox):
+async def test_rule_archive_and_offload_keep_label_views_and_counts_right(gbox):
     """Merge of 0.2.1: the label table is kept by triggers; the Applier's local updates
     (set_flags after modify / trash) must show in the label views and counts at once."""
     from app.models import MailMessageLabel

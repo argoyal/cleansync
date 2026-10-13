@@ -126,7 +126,7 @@ def add_message(
     return row
 
 
-def mark_restored(db: Session, row: MailMessage) -> None:
+def mark_restored(db: Session, row: MailMessage, now: datetime | None = None) -> None:
     """The mail is in Gmail again: its offload's page shows it restored, and a rule that offloaded
     it won't offload it again. Not committed."""
     if row.offload_id is not None:
@@ -139,7 +139,7 @@ def mark_restored(db: Session, row: MailMessage) -> None:
         if item is not None:
             item.result = MailItemResult.RESTORED
     row.state, row.offload_id, row.import_started_at = MailState.IN_MAIL, None, None
-    note_restored(db, row)
+    note_restored(db, row, now)
 
 
 def adopt_restored_copy(

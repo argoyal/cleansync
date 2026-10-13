@@ -730,3 +730,32 @@ async def test_a_restore_of_more_ids_than_sqlite_takes_in_one_query_works(auth_c
         assert restore_targets(db, box.acc.id, Pick(thread_ids=threads), None, NOW) == [
             r.id for r in old
         ]
+
+
+async def test_restoring_marks_a_rules_decision_with_the_service_clock(
+    auth_client, offload_box, db
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row = box.row("Old statement")
+    rule = create_rule(
+        db,
+        box.acc.id,
+        RuleIn(name="Old", description="old mail", actions=[{"kind": "offload"}]),
+        "a",
+    )
+    d = RuleDecision(
+        account_id=box.acc.id,
+        message_id=row.id,
+        rule_id=rule.id,
+        status="applied",
+        changes={"trash": True},
+    )
+    db.add(d)
+    db.commit()
+    fixed = datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC)
+    box.offloads.clock = lambda: fixed
+    _restore(auth_client, box, message_ids=[row.id])
+    await box.run_queued()
+    db.expire_all()
+    assert db.get(RuleDecision, d.id).moved_back_at.replace(tzinfo=UTC) == fixed
