@@ -41,7 +41,7 @@ from app.services.ai.client import AiError, AiPaused
 from app.services.google.client import RateLimited
 from app.services.google.quota import BudgetReached
 from app.services.mail.adapter import MailAuthError, MailUnreachable
-from app.services.mail.archive import ArchiveProblem
+from app.services.mail.forever import ForeverProblem
 from app.services.mail.search import SearchError, mail_conditions
 from app.services.rules import drafting, store
 from app.services.rules.apply import WAIT_ERRORS
@@ -96,7 +96,7 @@ PROBLEMS = (
     store.RuleNotFound,
     DecisionProblem,
     RuleJobProblem,
-    ArchiveProblem,
+    ForeverProblem,
     AiError,
 )
 
