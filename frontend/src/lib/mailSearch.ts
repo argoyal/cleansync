@@ -51,7 +51,8 @@ export const isWhole = (v: string) => /^\d+$/.test(v.trim());
 export function writeSearch(f: SearchFields): string {
   const parts: string[] = [];
   const add = (key: string, v: string) => {
-    const t = v.trim();
+    // The server has no way to escape a quote mark, so a typed one is dropped.
+    const t = v.replace(/"/g, "").trim();
     if (t) parts.push(`${key}:${quoted(t)}`);
   };
   add("from", f.from);
@@ -88,7 +89,12 @@ export function readSearch(text: string, labelNames: string[] = []): SearchField
   const rest: string[] = [];
   let sized = false;
   let dated = false;
-  for (const tok of text.match(TOKEN) ?? []) {
+  const tokens = text.match(TOKEN) ?? [];
+  // The server keeps the last size keyword of a kind, but the form writes its size after the
+  // words. So when a kind appears twice, all of them stay in the words, in their order.
+  const sizeCount = (k: string) => tokens.filter((t) => t.toLowerCase().startsWith(`${k}:`)).length;
+  const twice = sizeCount("larger") > 1 || sizeCount("smaller") > 1;
+  for (const tok of tokens) {
     const at = tok.indexOf(":");
     const key = at > 0 && !tok.startsWith('"') ? tok.slice(0, at).toLowerCase() : "";
     const value = key ? unquote(tok.slice(at + 1)) : "";
@@ -105,7 +111,7 @@ export function readSearch(text: string, labelNames: string[] = []): SearchField
         f.label = name;
         used = true;
       }
-    } else if ((key === "larger" || key === "smaller") && !sized) {
+    } else if ((key === "larger" || key === "smaller") && !sized && !twice) {
       const m = SIZE.exec(value);
       if (m) {
         f.sizeOp = key;

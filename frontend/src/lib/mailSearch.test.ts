@@ -44,6 +44,24 @@ describe("the search form's words", () => {
     expect(writeSearch(f)).toBe('from:a@x.com from:b@x.com "big deal" larger:2G in:archived label:Nope before:2024-01-01 newer_than:1y');
   });
 
+  it("keeps repeated size keywords in the words, so the server reads the same size", () => {
+    for (const text of ["larger:5M larger:3M", "larger:5M larger:2G", "smaller:1M smaller:2M"]) {
+      const f = readSearch(text);
+      expect(f.size).toBe("");
+      expect(f.words).toBe(text);
+      expect(writeSearch(f)).toBe(text);
+    }
+  });
+
+  it("round-trips To and Label values with spaces, and drops quote marks", () => {
+    const text = 'to:"Jane Doe" label:"My Label"';
+    const f = readSearch(text, ["My Label"]);
+    expect(f.to).toBe("Jane Doe");
+    expect(f.label).toBe("My Label");
+    expect(writeSearch(f)).toBe(text);
+    expect(writeSearch({ ...EMPTY_SEARCH, from: 'Jo "Bo" Smith', to: '"', label: 'a"b' })).toBe('from:"Jo Bo Smith" label:ab');
+  });
+
   it("checks numbers", () => {
     expect([isNumber("5"), isNumber("1.5"), isNumber(" 2 "), isNumber("abc"), isNumber("1e3")]).toEqual([true, true, true, false, false]);
     expect([isWhole("30"), isWhole("1.5"), isWhole("")]).toEqual([true, false, false]);
