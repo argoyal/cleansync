@@ -39,3 +39,7 @@ def test_saved_keys_go_to_the_log_redactor(settings, layout):
     redactor._secrets.discard(key)  # forget it, as a fresh process would
     create_app(settings, start_background=False)  # a restart must load it again
     assert key in redactor._secrets
+
+
+def test_the_ai_client_saves_pauses_in_the_settings(app):
+    assert app.state.ai_client.limits is app.state.ai

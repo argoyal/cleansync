@@ -367,7 +367,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     app.state.mail_offloads = MailOffloads(app.state.mail)
     app.state.ai = AiSettings(session_factory, layout.secrets_dir, on_secret=redactor.add_secret)
     app.state.ai.load_secrets()
-    app.state.ai_client = AiClient(app.state.ai)
+    app.state.ai_client = AiClient(app.state.ai, limits=app.state.ai)
 
     def _sorting_chooser():
         # None when no Sorting model is set. Fixed-only rules and remembered senders still

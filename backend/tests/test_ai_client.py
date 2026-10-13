@@ -1,12 +1,15 @@
+import dataclasses
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 import respx
 
-from app.services.ai.client import AiClient, AiRefused, AiUnreachable, read_json
+from app.services.ai.client import AiClient, AiPaused, AiRefused, AiUnreachable, read_json
 from app.services.ai.connections import AiTarget
+from app.services.ai.limits import DOWN, LIMITED, NEEDS_YOU, Pause
 
 URL = "http://ollama.example.com:11434/v1"
 SCHEMA = {"type": "object", "properties": {"rule": {"type": "integer"}}, "required": ["rule"]}
@@ -251,3 +254,187 @@ def test_read_json_gives_up_quickly_on_a_long_unbalanced_answer():
     assert read_json(text) is None  # the object sits past the first 8,000 characters
     assert time.monotonic() - started < 2
     assert read_json('{"rule": 1}' + " " * 100_000) == {"rule": 1}
+
+
+NOW = datetime(2026, 10, 13, 10, 0, tzinfo=UTC)
+
+
+class Limits:
+    """An in-memory stand-in for AiSettings' pause methods."""
+
+    def __init__(self, resets=("00:00", "UTC"), streak=0, pause=None, secrets=()):
+        self.resets, self.streak, self.pause, self._secrets = resets, streak, pause, list(secrets)
+        self.cleared = 0
+
+    def pause_of(self, cid, now=None):
+        p = self.pause
+        if p is None or (p.until is not None and p.until <= (now or NOW)):
+            return None
+        return p
+
+    def limits_of(self, cid):
+        return (*self.resets, self.streak)
+
+    def set_pause(self, cid, kind, until, reason, detail, now):
+        if kind == DOWN:
+            self.streak += 1
+        self.pause = Pause(kind, until, reason, detail, now)
+        return self.pause
+
+    def clear_pause(self, cid):
+        had = self.pause is not None or self.streak > 0
+        self.pause, self.streak = None, 0
+        self.cleared += had
+        return had
+
+    def secrets_of(self, cid):
+        return self._secrets
+
+
+def limited_client(limits):
+    return AiClient(Modes(), limits=limits, retry_pause_s=0, clock=lambda: NOW)
+
+
+@respx.mock
+async def test_429_with_retry_after_pauses_and_is_not_retried():
+    limits = Limits()
+    route = respx.post(f"{URL}/chat/completions").mock(
+        return_value=httpx.Response(
+            429,
+            headers={"Retry-After": "3600"},
+            json={"error": {"message": "Rate limit reached for requests per day"}},
+        )
+    )
+    with pytest.raises(AiPaused) as e:
+        await ask(limited_client(limits))
+    assert route.call_count == 1  # no retry, no other answer format
+    p = e.value.pause
+    assert p.kind == LIMITED and p.until == NOW + timedelta(hours=1)
+    assert p.detail == "Rate limit reached for requests per day"
+    assert limits.pause is p
+
+
+@respx.mock
+async def test_429_without_headers_pauses_until_the_daily_reset():
+    limits = Limits(resets=("05:30", "UTC"))
+    respx.post(f"{URL}/chat/completions").mock(return_value=httpx.Response(429))
+    with pytest.raises(AiPaused) as e:
+        await ask(limited_client(limits))
+    assert e.value.pause.until == datetime(2026, 10, 14, 5, 30, tzinfo=UTC)
+
+
+@respx.mock
+async def test_quota_400_does_not_cycle_answer_formats():
+    route = respx.post(f"{URL}/chat/completions").mock(
+        return_value=httpx.Response(400, json={"error": {"message": "Quota exceeded"}})
+    )
+    with pytest.raises(AiPaused) as e:
+        await ask(limited_client(Limits()))
+    assert route.call_count == 1 and e.value.pause.kind == LIMITED
+
+
+@respx.mock
+async def test_402_is_limited():
+    respx.post(f"{URL}/chat/completions").mock(return_value=httpx.Response(402))
+    with pytest.raises(AiPaused) as e:
+        await ask(limited_client(Limits()))
+    assert e.value.pause.kind == LIMITED
+
+
+@pytest.mark.parametrize(
+    "status,text,kind",
+    [
+        (403, "rate limit for this key", LIMITED),
+        (403, "forbidden", NEEDS_YOU),
+        (401, "", NEEDS_YOU),
+        (405, "", NEEDS_YOU),
+    ],
+)
+@respx.mock
+async def test_plain_text_replies_are_sorted(status, text, kind):
+    # A remembered "text" mode sends no response_format, so the status is judged directly.
+    m = Modes()
+    m.saved[(1, "llama3.1:8b")] = "text"
+    respx.post(f"{URL}/chat/completions").mock(return_value=httpx.Response(status, text=text))
+    with pytest.raises(AiPaused) as e:
+        await ask(AiClient(m, limits=Limits(), retry_pause_s=0, clock=lambda: NOW))
+    assert e.value.pause.kind == kind
+    if status == 405:
+        assert "/v1" in e.value.pause.reason
+
+
+@respx.mock
+async def test_503_twice_is_down_on_the_first_step():
+    limits = Limits()
+    m = Modes()
+    m.saved[(1, "llama3.1:8b")] = "text"
+    route = respx.post(f"{URL}/chat/completions").mock(return_value=httpx.Response(503))
+    with pytest.raises(AiPaused) as e:
+        await ask(AiClient(m, limits=limits, retry_pause_s=0, clock=lambda: NOW))
+    assert route.call_count == 2 and e.value.pause.kind == DOWN
+    assert e.value.pause.until == NOW + timedelta(minutes=1) and limits.streak == 1
+
+
+@respx.mock
+async def test_timeout_is_down():
+    m = Modes()
+    m.saved[(1, "llama3.1:8b")] = "text"
+    respx.post(f"{URL}/chat/completions").mock(side_effect=httpx.ReadTimeout("slow"))
+    with pytest.raises(AiPaused) as e:
+        await ask(AiClient(m, limits=Limits(), retry_pause_s=0, clock=lambda: NOW))
+    assert e.value.pause.kind == DOWN
+
+
+@respx.mock
+async def test_paused_connection_makes_no_call():
+    route = respx.post(f"{URL}/chat/completions").mock(return_value=reply('{"rule": 1}'))
+    limits = Limits(pause=Pause(LIMITED, NOW + timedelta(hours=2), "r", None, NOW))
+    with pytest.raises(AiPaused):
+        await ask(limited_client(limits))
+    assert route.call_count == 0
+
+
+@respx.mock
+async def test_ended_pause_lets_the_call_through_and_success_clears_it():
+    respx.post(f"{URL}/chat/completions").mock(return_value=reply('{"rule": 1}'))
+    limits = Limits(pause=Pause(LIMITED, NOW - timedelta(seconds=1), "r", None, NOW), streak=2)
+    ans = await ask(limited_client(limits))
+    assert ans.data == {"rule": 1} and limits.pause is None and limits.streak == 0
+
+
+@respx.mock
+async def test_skip_pause_calls_anyway():
+    respx.post(f"{URL}/chat/completions").mock(return_value=reply('{"rule": 1}'))
+    limits = Limits(pause=Pause(NEEDS_YOU, None, "r", None, NOW))
+    ans = await ask(limited_client(limits), dataclasses.replace(target(), skip_pause=True))
+    assert ans.data == {"rule": 1} and limits.pause is None
+
+
+@respx.mock
+async def test_detail_never_carries_the_key():
+    respx.post(f"{URL}/chat/completions").mock(
+        return_value=httpx.Response(
+            429, json={"error": {"message": "limit for key sk-live-abcdef123456"}}
+        )
+    )
+    limits = Limits(secrets=["sk-live-abcdef123456"])
+    with pytest.raises(AiPaused) as e:
+        await ask(limited_client(limits), target("sk-live-abcdef123456"))
+    assert "sk-live-abcdef123456" not in str(e.value) and "sk-live" not in (
+        e.value.pause.detail or ""
+    )
+
+
+def test_paused_message_shapes():
+    lim = AiPaused(Pause(LIMITED, NOW, "The model's usage limit is used up.", None, NOW))
+    assert (
+        str(lim)
+        == "The model's usage limit is used up. CleanSync will try again after 2026-10-13 10:00 UTC."
+    )
+    you = AiPaused(
+        Pause(NEEDS_YOU, None, "The model's server refused the API key.", "bad key", NOW)
+    )
+    assert (
+        str(you)
+        == "The model's server refused the API key. Check Settings → Models. The server said: bad key"
+    )
