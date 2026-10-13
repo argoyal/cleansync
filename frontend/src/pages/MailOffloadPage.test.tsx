@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { ACCOUNT, json, mockApi, renderApp } from "../test/utils";
-import { MailOffloadPage, MailOffloadsPage } from "./MailOffloadPage";
+import { MailOffloadPage, OffloadBatches } from "./MailOffloadPage";
 
 const OFF = {
   id: 7,
@@ -61,9 +61,9 @@ describe("an offload's page", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, offload_id: 7 }));
   });
 
-  it("lists every offload", async () => {
+  it("lists every offload batch", async () => {
     mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/mail/offloads": [OFF] });
-    renderApp(<MailOffloadsPage />, { withAccount: true, route: "/mail/offloads" });
+    renderApp(<OffloadBatches accountId={ACCOUNT.id} />, { withAccount: true, route: "/mail?view=offloaded&tab=batches" });
     expect(await screen.findByRole("link", { name: "older_than:1y" })).toHaveAttribute("href", "/mail/offloads/7");
   });
 

@@ -33,8 +33,8 @@ export function MailOffloadPage() {
   const busy = o.state === "WAITING" || o.state === "RUNNING";
   return (
     <div className="space-y-4 p-4 sm:p-6">
-      <Link to="/mail/offloads" className="text-table text-accent">
-        All mail offloads
+      <Link to="/mail?view=offloaded&tab=batches" className="text-table text-accent">
+        Offload batches
       </Link>
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-title font-semibold">Mail offload</h1>
@@ -78,27 +78,25 @@ export function MailOffloadPage() {
   );
 }
 
-export function MailOffloadsPage() {
-  const { accountId } = useCurrentAccount();
+/** The Batches tab of Offloaded (mail panel spec §4): offloads started from a filter or a
+ * pick, with the space each freed. Mail offloaded one at a time or by a rule isn't listed. */
+export function OffloadBatches({ accountId }: { accountId: number }) {
   const list = useMailOffloads(accountId).data ?? [];
+  if (list.length === 0) return <Empty icon="inventory_2" title="No offload batches yet" />;
   return (
-    <div className="space-y-4 p-4 sm:p-6">
-      <h1 className="text-title font-semibold">Mail offloads</h1>
-      {list.length === 0 && <Empty icon="inventory_2" title="No mail offloaded yet" />}
-      <ul className="divide-y divide-line rounded-card border border-line">
-        {list.map((o) => (
-          <li key={o.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-table">
-            <Link to={`/mail/offloads/${o.id}`} className="font-semibold text-accent">
-              {o.filter_text}
-            </Link>
-            <span className="text-ink-2">{OFFLOAD_STATE_TEXT[o.state] ?? o.state}</span>
-            <span className="tabular text-ink-2">
-              {o.done.toLocaleString()} mails · {formatBytes(o.bytes)}
-            </span>
-            <span className="ml-auto text-ink-2">{formatWhen(o.created_at)}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
+    <ul aria-label="Offload batches" className="divide-y divide-line rounded-card border border-line">
+      {list.map((o) => (
+        <li key={o.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-table">
+          <Link to={`/mail/offloads/${o.id}`} className="font-semibold text-accent">
+            {o.filter_text}
+          </Link>
+          <span className="text-ink-2">{OFFLOAD_STATE_TEXT[o.state] ?? o.state}</span>
+          <span className="tabular text-ink-2">
+            {o.done.toLocaleString()} mails · {formatBytes(o.bytes)}
+          </span>
+          <span className="ml-auto text-ink-2">{formatWhen(o.created_at)}</span>
+        </li>
+      ))}
+    </ul>
   );
 }

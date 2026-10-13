@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
+import { mailHref } from "../lib/mail";
 import type { SectionId } from "../lib/sections";
 import { Icon } from "./Icon";
 import { SyncIndicator } from "./SyncIndicator";
@@ -18,11 +19,20 @@ export function ContentBar({ section, onViews }: { section: SectionId; onViews: 
     setShownFor(section);
     setQ(params.get("q") ?? "");
   }
+  const { pathname } = useLocation();
+  /** Mail panel spec §5: the search runs in the view and label on screen. An empty search
+   * clears it; one letter finds too much (the hint says 2). */
+  const searchMail = (text: string) => {
+    if (text.length === 1) return;
+    const here = pathname === "/mail";
+    navigate(mailHref({ view: here ? (params.get("view") ?? undefined) : undefined, label: here ? (params.get("label") ?? undefined) : undefined, q: text || undefined }));
+  };
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const text = q.trim();
+    if (mail) return searchMail(text);
     if (text.length < 2) return;
-    navigate(mail ? `/mail?q=${encodeURIComponent(text)}` : `/search?q=${encodeURIComponent(text)}`);
+    navigate(`/search?q=${encodeURIComponent(text)}`);
   };
   return (
     <header className="flex shrink-0 items-center gap-3 border-b border-line bg-surface px-3 py-3 sm:px-6">

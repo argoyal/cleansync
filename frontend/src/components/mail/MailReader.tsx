@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { friendlyError } from "../../api/client";
 import { mailThreadQuery, useMailCounts, useMailThreads, useMailTotals } from "../../api/queries";
@@ -8,7 +8,8 @@ import type { Account } from "../../api/types";
 import { useRestoreMail } from "../../hooks/useMailOffload";
 import { useApprove } from "../../hooks/useRules";
 import { formatBytes } from "../../lib/format";
-import { viewTitle } from "../../lib/mail";
+import { mailHref, mailView, viewTitle } from "../../lib/mail";
+import { OffloadBatches } from "../../pages/MailOffloadPage";
 import { useToast } from "../Toasts";
 import { Button } from "../ui";
 import { DeleteForeverDialog } from "./DeleteForeverDialog";
@@ -26,7 +27,8 @@ type PickedAction = "offload" | "delete" | "rule" | null;
  * "Offload mail…", and offload or restore for picked threads. */
 export function MailReader({ account }: { account: Account }) {
   const [params] = useSearchParams();
-  const view = params.get("view") ?? "all";
+  const view = mailView(params.get("view"));
+  const batches = view === "offloaded" && params.get("tab") === "batches";
   const label = params.get("label") ?? "";
   const q = params.get("q") ?? "";
   const thread = params.get("thread") ?? "";
@@ -58,7 +60,7 @@ export function MailReader({ account }: { account: Account }) {
   const pickForever = () => {
     if (finding) return;
     setFinding(true);
-    Promise.all([...picked].map((id) => qc.fetchQuery(mailThreadQuery(account.id, id, true))))
+    Promise.all([...picked].map((id) => qc.fetchQuery(mailThreadQuery(account.id, id, view))))
       .then((threads) => setForever(threads.flat().map((m) => m.id)))
       .catch((e: unknown) => toast(friendlyError(e), { tone: "error" }))
       .finally(() => setFinding(false));
@@ -92,6 +94,16 @@ export function MailReader({ account }: { account: Account }) {
           <MailHeaderActions account={account} q={q} view={view} label={label} scope={scope} total={totals?.total} />
         </div>
       </div>
+      {view === "offloaded" && (
+        <nav aria-label="Offloaded" className="flex gap-4 px-4 pb-2 text-table font-semibold sm:px-6">
+          <Link to={mailHref({ view: "offloaded" })} aria-current={batches ? undefined : "page"} className={batches ? "text-ink-2" : "text-accent"}>
+            Mail
+          </Link>
+          <Link to={mailHref({ view: "offloaded", tab: "batches" })} aria-current={batches ? "page" : undefined} className={batches ? "text-accent" : "text-ink-2"}>
+            Batches
+          </Link>
+        </nav>
+      )}
       {picked.size > 0 && (
         <section aria-label="Picked mail" className="flex flex-wrap items-center gap-3 border-t border-line bg-sunken px-4 py-2 sm:px-6">
           <span className="text-table">
@@ -133,14 +145,20 @@ export function MailReader({ account }: { account: Account }) {
           onClose={() => setForever(null)}
         />
       )}
-      <div className="flex min-h-0 flex-1 border-t border-line">
-        <section ref={list} aria-label="Mail list" className={`min-w-0 overflow-y-auto xl:w-[440px] xl:shrink-0 xl:border-r xl:border-line ${thread ? "hidden xl:block" : "flex-1 xl:flex-none"}`}>
-          <MailList accountId={account.id} view={view} label={label} q={q} thread={thread} selected={picked} onToggle={toggle} />
-        </section>
-        <section aria-label="Open mail" className={`min-w-0 flex-1 overflow-y-auto ${thread ? "" : "hidden xl:block"}`}>
-          {thread ? <MailThread account={account} threadId={thread} onBack={() => (backFrom.current = thread)} /> : <p className="p-6 text-ink-2">Pick a mail to read it.</p>}
-        </section>
-      </div>
+      {batches ? (
+        <div className="min-h-0 flex-1 overflow-y-auto border-t border-line p-4 sm:p-6">
+          <OffloadBatches accountId={account.id} />
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 border-t border-line">
+          <section ref={list} aria-label="Mail list" className={`min-w-0 overflow-y-auto xl:w-[440px] xl:shrink-0 xl:border-r xl:border-line ${thread ? "hidden xl:block" : "flex-1 xl:flex-none"}`}>
+            <MailList accountId={account.id} view={view} label={label} q={q} thread={thread} selected={picked} onToggle={toggle} />
+          </section>
+          <section aria-label="Open mail" className={`min-w-0 flex-1 overflow-y-auto ${thread ? "" : "hidden xl:block"}`}>
+            {thread ? <MailThread account={account} threadId={thread} onBack={() => (backFrom.current = thread)} /> : <p className="p-6 text-ink-2">Pick a mail to read it.</p>}
+          </section>
+        </div>
+      )}
     </div>
   );
 }

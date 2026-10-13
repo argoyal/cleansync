@@ -4,7 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { friendlyError } from "../../api/client";
 import { useMailThread } from "../../api/queries";
 import type { Account } from "../../api/types";
-import { mailHref } from "../../lib/mail";
+import { mailHref, mailView } from "../../lib/mail";
 import { Icon } from "../Icon";
 import { Notice } from "../ui";
 import { MessageMailActions } from "./MailActions";
@@ -15,7 +15,7 @@ export const isNarrow = () => !(window.matchMedia?.("(min-width: 1280px)").match
 
 export function MailThread({ account, threadId, onBack }: { account: Account; threadId: string; onBack?: () => void }) {
   const [params] = useSearchParams();
-  const thread = useMailThread(account.id, threadId, params.get("view") === "archive");
+  const thread = useMailThread(account.id, threadId, mailView(params.get("view")));
   const messages = thread.data ?? [];
   const [open, setOpen] = useState<Set<number>>(new Set());
   const newest = messages.at(-1)?.id;

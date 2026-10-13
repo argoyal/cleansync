@@ -221,6 +221,30 @@ describe("rail and panel", () => {
     expect(screen.getByRole("textbox", { name: "Search mail" })).toBeInTheDocument();
   });
 
+  it("puts the Gmail views first and CleanSync's own below its line", async () => {
+    const active = { ...ACCOUNT, services: { files: "active" as const, mail: "active" as const } };
+    mockApi({
+      "GET /api/accounts": [active],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/status": STATUS,
+      "GET /api/mail/counts": {
+        views: { inbox: 3, starred: 1, important: 0, sent: 2, archived: 4, all: 9, suggested: 1, offloaded: 5, deleted: 6 },
+        labels: [{ id: "Label_2", name: "Receipts", count: 2 }],
+      },
+    });
+    renderApp(<AppShell />, { withAccount: true, route: "/mail?view=offloaded&tab=batches" });
+    const views = await screen.findByRole("navigation", { name: "Mail views" });
+    const names = (group: HTMLElement) => within(group).getAllByRole("link").map((l) => l.textContent?.replace(/\s+/g, " ").trim());
+    const gmail = within(views).getByRole("group", { name: "Gmail" });
+    await within(gmail).findByRole("link", { name: "Inbox 3" });
+    expect(names(gmail)).toEqual(["Inbox 3", "Starred 1", "Important 0", "Sent 2", "Archived 4", "All mail 9", "Receipts 2"]);
+    const own = within(views).getByRole("group", { name: "CleanSync" });
+    expect(names(own)).toEqual(["Suggested 1", "Rules", "Offloaded 5", "Deleted in Gmail 6"]);
+    expect(within(own).getByRole("link", { name: "Offloaded 5" })).toHaveAttribute("aria-current", "page");
+    expect(within(views).getByText("CleanSync")).toBeInTheDocument();
+    expect(within(views).queryByRole("link", { name: /Local archive/ })).not.toBeInTheDocument();
+  });
+
   it("asks to set up Files when an account has no file storage set up", async () => {
     shell("/drive", { ...ACCOUNT, services: { files: "not_set_up", mail: "not_set_up" } });
     expect(await screen.findByRole("heading", { name: "Set up Files" })).toBeInTheDocument();
@@ -447,6 +471,16 @@ describe("content bar", () => {
     await open("/mail");
     await userEvent.type(screen.getByRole("textbox", { name: "Search mail" }), "from:bank{Enter}");
     expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/mail?q=from%3Abank");
+  });
+
+  it("searches mail in the view and label on screen, and an empty search clears it", async () => {
+    await open("/mail?view=inbox&label=Label_2");
+    const box = screen.getByRole("textbox", { name: "Search mail" });
+    await userEvent.type(box, "from:bank{Enter}");
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent("/mail?view=inbox&label=Label_2&q=from%3Abank");
+    await userEvent.clear(box);
+    await userEvent.type(box, "{Enter}");
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent(/^\/mail\?view=inbox&label=Label_2$/);
   });
 });
 

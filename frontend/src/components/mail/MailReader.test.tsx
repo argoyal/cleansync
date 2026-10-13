@@ -432,119 +432,6 @@ describe("offload and restore in the reader", () => {
 describe("AI rules and the local archive in the reader", () => {
   const CHIP = { id: 3, rule_name: "Newsletters", status: "suggested", how: "ai", why: "a weekly digest" };
 
-  it("in the Local archive, picked threads restore from the archive or delete forever, not offload", async () => {
-    const { calls } = mockApi({
-      "GET /api/accounts": [ACTIVE],
-      "GET /api/mail/counts": { views: {}, labels: [] },
-      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", subject: "One" })], next_cursor: null, total: 1, total_bytes: 1 },
-      "POST /api/mail/restore": { queued: "queued", count: 1 },
-    });
-    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive" });
-    expect(await screen.findByRole("heading", { name: "Local archive" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete forever…" })).toBeInTheDocument(); // for the whole list
-    expect(screen.queryByRole("button", { name: "Offload mail…" })).not.toBeInTheDocument();
-    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
-    const bar = screen.getByRole("region", { name: "Picked mail" });
-    expect(within(bar).getByRole("button", { name: "Delete forever…" })).toBeInTheDocument();
-    expect(within(bar).queryByRole("button", { name: "Offload" })).not.toBeInTheDocument();
-    expect(within(bar).queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
-    await userEvent.click(within(bar).getByRole("button", { name: "Restore to Gmail" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, thread_ids: ["t1"], archive: true }));
-  });
-
-  it("deletes picked archived threads forever by their mails, after the typed count", async () => {
-    const { calls } = mockApi({
-      "GET /api/accounts": [ACTIVE],
-      "GET /api/mail/counts": { views: {}, labels: [] },
-      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", subject: "One", count: 2 })], next_cursor: null, total: 2, total_bytes: 1 },
-      "GET /api/mail/threads/t1": ({ url }: { url: URL }) =>
-        url.searchParams.get("archive") === "true" ? [msg({ id: 4, state: "local_archive" }), msg({ id: 5, state: "local_archive" })] : [],
-      "POST /api/mail/archive/delete-forever": { deleted: 2, left: 0 },
-    });
-    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive" });
-    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
-    await userEvent.click(within(screen.getByRole("region", { name: "Picked mail" })).getByRole("button", { name: "Delete forever…" }));
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.type(within(dialog).getByLabelText(/Type 2/), "2");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Delete forever" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/archive/delete-forever")?.body).toEqual({ account_id: 1, message_ids: [4, 5], confirm: 2 }));
-  });
-
-  it("keeps the picks when Delete forever… is cancelled", async () => {
-    mockApi({
-      "GET /api/accounts": [ACTIVE],
-      "GET /api/mail/counts": { views: {}, labels: [] },
-      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", subject: "One" })], next_cursor: null, total: 1, total_bytes: 1 },
-      "GET /api/mail/threads/t1": [msg({ id: 4, state: "local_archive" })],
-    });
-    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive" });
-    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
-    await userEvent.click(within(screen.getByRole("region", { name: "Picked mail" })).getByRole("button", { name: "Delete forever…" }));
-    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Pick One" })).toBeChecked();
-  });
-
-  it("shows no rule chip in the Local archive, in the list or the reader", async () => {
-    mockApi({
-      "GET /api/accounts": [ACTIVE],
-      "GET /api/mail/counts": { views: {}, labels: [] },
-      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", decision: { ...CHIP, status: "applied" } })], next_cursor: null, total: 1, total_bytes: 1 },
-      "GET /api/mail/threads/t1": [msg({ id: 2, state: "local_archive", gmail_url: null, decision: { ...CHIP, status: "applied" } })],
-    });
-    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive&thread=t1" });
-    const open = await screen.findByRole("region", { name: "Open mail" });
-    expect(await within(open).findByRole("button", { name: "Restore to Gmail" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Your invoice/ })).not.toHaveAccessibleName(/Newsletters/);
-    expect(screen.queryByRole("button", { name: /Newsletters · applied/ })).not.toBeInTheDocument();
-  });
-
-  it("deletes the whole archive list forever with the search spelled out", async () => {
-    const { calls } = mockApi({
-      "GET /api/accounts": [ACTIVE],
-      "GET /api/mail/counts": { views: {}, labels: [] },
-      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: null, total_bytes: null },
-      "GET /api/mail/totals": { total: 3, total_bytes: 1 }, // the count comes from its own request (0.2.1)
-      "POST /api/mail/archive/delete-forever": { deleted: 3, left: 0 },
-    });
-    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive" });
-    await screen.findByText(/3 mails/);
-    await userEvent.click(screen.getByRole("button", { name: "Delete forever…" }));
-    await userEvent.type(screen.getByLabelText(/Type 3/), "3");
-    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete forever" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/archive/delete-forever")?.body).toEqual({ account_id: 1, q: "is:archived", confirm: 3 }));
-  });
-
-  it("asks for the totals again after Delete forever, so the header and count are not stale", async () => {
-    const { calls } = mockApi({
-      "GET /api/accounts": [ACTIVE],
-      "GET /api/mail/counts": { views: {}, labels: [] },
-      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: null, total_bytes: null },
-      "GET /api/mail/totals": { total: 3, total_bytes: 1 },
-      "POST /api/mail/archive/delete-forever": { deleted: 3, left: 0 },
-    });
-    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive" });
-    await screen.findByText(/3 mails/);
-    const totals = () => calls.filter((c) => c.path === "/api/mail/totals").length;
-    const before = totals();
-    await userEvent.click(screen.getByRole("button", { name: "Delete forever…" }));
-    await userEvent.type(screen.getByLabelText(/Type 3/), "3");
-    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete forever" }));
-    await waitFor(() => expect(totals()).toBeGreaterThan(before));
-  });
-
-  it("has no Delete forever… for the whole list when a label filter is set", async () => {
-    mockApi({
-      "GET /api/accounts": [ACTIVE],
-      "GET /api/mail/counts": { views: {}, labels: [{ id: "Label_2", name: "Receipts", count: 3 }] },
-      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: null, total_bytes: null },
-      "GET /api/mail/totals": { total: 3, total_bytes: 1 },
-    });
-    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive&label=Label_2" });
-    await screen.findByText(/3 mails/);
-    expect(screen.queryByRole("button", { name: "Delete forever…" })).not.toBeInTheDocument();
-  });
-
   it("deletes picked threads after a plain confirm", async () => {
     const { calls } = mockApi({
       "GET /api/accounts": [ACTIVE],
@@ -593,25 +480,50 @@ describe("AI rules and the local archive in the reader", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Approve all" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-decisions/approve")?.body).toEqual({ account_id: 1, ids: [3, 4] }));
   });
+});
 
-  it("offers Delete and Make a rule… for a mail in Gmail, and restore or delete forever for an archived one", async () => {
+describe("the CleanSync views", () => {
+  const OFF = {
+    id: 7, account_id: 1, filter_text: "older_than:1y", state: "DONE", total: 3, done: 3, skipped: 0, not_done: 0,
+    bytes: 3000, reason: null, created_at: "2026-10-10T09:00:00Z", finished_at: "2026-10-10T09:20:00Z",
+    trash_until: "2026-11-09", google_emptied: false,
+  };
+
+  it("opens Offloaded for an old Local archive link", async () => {
     const { calls } = mockApi({
       "GET /api/accounts": [ACTIVE],
       "GET /api/mail/counts": { views: {}, labels: [] },
-      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: 1, total_bytes: 1 },
-      "GET /api/mail/threads/t1": ({ url }: { url: URL }) =>
-        url.searchParams.get("archive") === "true" ? [msg({ id: 2, state: "local_archive", gmail_url: null })] : [msg({ id: 1, decision: CHIP })],
-      "POST /api/mail/restore": { queued: "queued", count: 1 },
+      "GET /api/mail/threads": { threads: [], next_cursor: null, total: 0, total_bytes: 0 },
     });
-    const first = renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?thread=t1" });
-    expect(await screen.findByRole("button", { name: "Make a rule…" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /Newsletters · suggested/ }).length).toBeGreaterThan(0);
-    first.unmount();
-    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive&thread=t1" });
-    const open = await screen.findByRole("region", { name: "Open mail" });
-    expect(await within(open).findByRole("button", { name: "Delete forever…" })).toBeInTheDocument();
-    await userEvent.click(within(open).getByRole("button", { name: "Restore to Gmail" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, message_ids: [2], archive: true }));
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=archive" });
+    expect(await screen.findByRole("heading", { name: "Offloaded" })).toBeInTheDocument();
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/threads")?.url.searchParams.get("view")).toBe("offloaded"));
+  });
+
+  it("shows the offload batches in a tab of Offloaded", async () => {
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [], next_cursor: null, total: 0, total_bytes: 0 },
+      "GET /api/mail/offloads": [OFF],
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=offloaded&tab=batches" });
+    const tabs = await screen.findByRole("navigation", { name: "Offloaded" });
+    expect(within(tabs).getByRole("link", { name: "Batches" })).toHaveAttribute("aria-current", "page");
+    expect(within(tabs).getByRole("link", { name: "Mail" })).toHaveAttribute("href", "/mail?view=offloaded");
+    expect(await screen.findByRole("link", { name: "older_than:1y" })).toHaveAttribute("href", "/mail/offloads/7");
+    expect(screen.queryByRole("list", { name: "Mail" })).not.toBeInTheDocument();
+  });
+
+  it("opens a thread with the mails of the view it is in", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", offloaded: true })], next_cursor: null, total: 1, total_bytes: 1 },
+      "GET /api/mail/threads/t1": [msg({ id: 2, state: "offloaded", gmail_url: null })],
+    });
+    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=offloaded&thread=t1" });
+    await screen.findByRole("region", { name: "Open mail" });
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/threads/t1")?.url.searchParams.get("view")).toBe("offloaded"));
   });
 });

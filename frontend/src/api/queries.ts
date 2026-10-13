@@ -244,16 +244,17 @@ export const useMailTotals = (accountId: number, p: { view: string; label: strin
     retry: false,
   });
 
-/** One thread's mails. `archive` reads its mails in the local archive instead of the ones
- * still in Gmail. Also used with `queryClient.fetchQuery` to learn the mails of picked threads. */
-export const mailThreadQuery = (accountId: number, threadId: string, archive = false) => ({
-  queryKey: ["mail-thread", accountId, threadId, archive],
+/** One thread's mails that belong to `view` (mail panel spec §4): in a Gmail view the ones in
+ * Gmail, in Offloaded the offloaded ones. Also used with `queryClient.fetchQuery` to learn
+ * the mails of picked threads. */
+export const mailThreadQuery = (accountId: number, threadId: string, view = "all") => ({
+  queryKey: ["mail-thread", accountId, threadId, view],
   queryFn: () =>
-    api<MailMessageInfo[]>(`/api/mail/threads/${encodeURIComponent(threadId)}${query({ account_id: accountId, archive: archive ? "true" : undefined })}`),
+    api<MailMessageInfo[]>(`/api/mail/threads/${encodeURIComponent(threadId)}${query({ account_id: accountId, view: view === "all" ? undefined : view })}`),
 });
 
-export const useMailThread = (accountId: number, threadId: string, archive = false) =>
-  useQuery({ ...mailThreadQuery(accountId, threadId, archive), enabled: threadId !== "" });
+export const useMailThread = (accountId: number, threadId: string, view = "all") =>
+  useQuery({ ...mailThreadQuery(accountId, threadId, view), enabled: threadId !== "" });
 /** One mail in full; the server reads its file to tell if it has remote images. */
 export const useMailMessage = (id: number, enabled = true) =>
   useQuery({ queryKey: ["mail-message", id], queryFn: () => api<MailMessageInfo>(`/api/mail/messages/${id}`), enabled });

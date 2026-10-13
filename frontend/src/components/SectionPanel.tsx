@@ -5,7 +5,7 @@ import { friendlyError } from "../api/client";
 import { useMailCounts, useStatus } from "../api/queries";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { useSetUpMail } from "../hooks/useSetUpMail";
-import { labelDot, MAIL_VIEWS, mailHref } from "../lib/mail";
+import { CLEANSYNC_VIEWS, GMAIL_VIEWS, labelDot, type MailViewDef, mailHref, mailView } from "../lib/mail";
 import { linkActive, SECTION_STYLE, type SectionId, SECTIONS } from "../lib/sections";
 import { TABS } from "../pages/SettingsPage";
 import { AccountSwitcher } from "./AccountSwitcher";
@@ -114,12 +114,15 @@ function labelsOpen(): boolean {
   }
 }
 
-/** The Mail views (spec §6.1, §9) with their counts, then the user labels. */
+/** Mail panel spec §4: Gmail's views and labels, then a line, then CleanSync's own views. */
 export function MailViews() {
   const { account } = useCurrentAccount();
   const counts = useMailCounts(account?.id ?? null).data;
-  // "/mail/rules" sits under "/mail", which would light up All mail too.
-  const onRules = useLocation().pathname === "/mail/rules";
+  const { pathname, search } = useLocation();
+  // Only the mail list lights a view: not the Rules page or an offload's page under /mail.
+  const onList = pathname === "/mail";
+  // Offloaded stays lit on its Batches tab and on an offload's own page.
+  const offloadedOn = (onList && mailView(new URLSearchParams(search).get("view")) === "offloaded") || pathname.startsWith("/mail/offloads");
   const [open, setOpenState] = useState(labelsOpen);
   const setOpen = (next: boolean) => {
     setOpenState(next);
@@ -129,48 +132,61 @@ export function MailViews() {
       // storage blocked: the fold lasts for this visit only
     }
   };
+  const link = (v: MailViewDef) => (
+    <PanelLink
+      key={v.id}
+      section="mail"
+      to={mailHref({ view: v.id })}
+      label={v.label}
+      icon={v.icon}
+      count={counts?.views[v.id]}
+      active={v.id === "offloaded" ? offloadedOn : onList ? undefined : false}
+    />
+  );
   return (
     <>
-      {MAIL_VIEWS.map((v) => (
-        <PanelLink
-          key={v.id}
-          section="mail"
-          to={mailHref({ view: v.id })}
-          label={v.label}
-          icon={v.icon}
-          count={counts?.views[v.id]}
-          active={onRules ? false : undefined}
-        />
-      ))}
-      <PanelLink section="mail" to="/mail/rules" label="Rules" icon="view_list" />
-      {counts && counts.labels.length > 0 && (
-        <>
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={() => setOpen(!open)}
-            className="mt-3 flex items-center gap-1 px-2.5 py-1 text-left text-meta font-bold uppercase tracking-[0.06em] text-ink-2 hover:text-ink"
-          >
-            Labels
-            <Icon name="keyboard_arrow_down" className={`text-[16px] transition-transform ${open ? "" : "-rotate-90"}`} />
-          </button>
-          {open && (
-            <ul aria-label="Labels" className="flex flex-col gap-0.5">
-              {counts.labels.map((l) => (
-                <li key={l.id}>
-                  <PanelLink
-                    section="mail"
-                    to={mailHref({ label: l.id })}
-                    label={l.name}
-                    count={l.count}
-                    badge={<span aria-hidden="true" className={`order-first h-2 w-2 shrink-0 rounded-full ${labelDot(l.id)}`} />}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </>
-      )}
+      <div role="group" aria-label="Gmail" className="flex flex-col gap-0.5">
+        <PanelHeading>Gmail</PanelHeading>
+        {GMAIL_VIEWS.map(link)}
+        {counts && counts.labels.length > 0 && (
+          <>
+            <button
+              type="button"
+              aria-expanded={open}
+              onClick={() => setOpen(!open)}
+              className="mt-3 flex items-center gap-1 px-2.5 py-1 text-left text-meta font-bold uppercase tracking-[0.06em] text-ink-2 hover:text-ink"
+            >
+              Labels
+              <Icon name="keyboard_arrow_down" className={`text-[16px] transition-transform ${open ? "" : "-rotate-90"}`} />
+            </button>
+            {open && (
+              <ul aria-label="Labels" className="flex flex-col gap-0.5">
+                {counts.labels.map((l) => (
+                  <li key={l.id}>
+                    <PanelLink
+                      section="mail"
+                      to={mailHref({ label: l.id })}
+                      label={l.name}
+                      count={l.count}
+                      badge={<span aria-hidden="true" className={`order-first h-2 w-2 shrink-0 rounded-full ${labelDot(l.id)}`} />}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </div>
+      <div role="group" aria-label="CleanSync" className="mt-4 flex flex-col gap-0.5">
+        <div className="flex items-center gap-2 px-2.5 py-1 text-meta font-bold uppercase tracking-[0.06em] text-ink-2">
+          <span aria-hidden="true" className="h-px flex-1 bg-line" />
+          CleanSync
+          <span aria-hidden="true" className="h-px flex-1 bg-line" />
+        </div>
+        {link(CLEANSYNC_VIEWS[0])}
+        <PanelLink section="mail" to="/mail/rules" label="Rules" icon="view_list" />
+        {CLEANSYNC_VIEWS.slice(1).map(link)}
+      </div>
     </>
   );
 }
