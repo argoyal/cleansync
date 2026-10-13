@@ -6,13 +6,11 @@ import { useMailCounts } from "../../api/queries";
 import type { Account, MailBrief, OffloadStart } from "../../api/types";
 import { usePreviewOffload, useStartOffload } from "../../hooks/useMailOffload";
 import { formatBytes, formatWhen } from "../../lib/format";
-import { mailHref } from "../../lib/mail";
+import { mailHref, quoted } from "../../lib/mail";
 import { Button, Dialog, Field, inputClass, Notice } from "../ui";
 
 export type FilterFields = { age: string; unit: "d" | "m" | "y"; from: string; to: string; label: string; larger: string; attachments: boolean };
 export const EMPTY_FIELDS: FilterFields = { age: "", unit: "y", from: "", to: "", label: "", larger: "", attachments: false };
-
-const quoted = (v: string) => (/\s/.test(v) ? `"${v}"` : v);
 
 /** Spec §5.1: the builder writes the reader's search language (the filters combine with AND). */
 export function buildQuery(f: FilterFields): string {

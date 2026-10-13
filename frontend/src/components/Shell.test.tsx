@@ -510,3 +510,88 @@ describe("switching account", () => {
     }
   });
 });
+
+describe("search options", () => {
+  const openMail = async (route: string) => {
+    mockApi({
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/mail/counts": { views: {}, labels: [{ id: "Label_2", name: "Receipts", count: 4 }] },
+    });
+    renderApp(<ContentBar section="mail" onViews={() => undefined} />, { withAccount: true, route });
+    await userEvent.click(screen.getByRole("button", { name: "Search options" }));
+    return screen.getByRole("region", { name: "Search options" });
+  };
+  const box = () => screen.getByRole("textbox", { name: "Search mail" });
+
+  it("builds the search from the form and runs it in the view", async () => {
+    const form = await openMail("/mail?view=inbox");
+    await userEvent.type(within(form).getByLabelText("From"), "Example News");
+    await userEvent.type(within(form).getByLabelText("To"), "me@example.com");
+    await userEvent.type(within(form).getByLabelText("Has the words"), "invoice");
+    await within(form).findByRole("option", { name: "Receipts" });
+    await userEvent.selectOptions(within(form).getByLabelText("Label"), "Receipts");
+    await userEvent.selectOptions(within(form).getByLabelText("Larger or smaller"), "smaller");
+    await userEvent.type(within(form).getByLabelText("Size"), "5");
+    await userEvent.selectOptions(within(form).getByLabelText("Size unit"), "KB");
+    await userEvent.selectOptions(within(form).getByLabelText("Date"), "older");
+    await userEvent.type(within(form).getByLabelText("Age"), "2");
+    await userEvent.selectOptions(within(form).getByLabelText("Age unit"), "y");
+    await userEvent.click(within(form).getByLabelText("Has attachment"));
+    await userEvent.click(within(form).getByLabelText("Unread"));
+    await userEvent.click(within(form).getByLabelText("Starred"));
+    await userEvent.click(within(form).getByRole("button", { name: "Search" }));
+    const text = 'from:"Example News" to:me@example.com invoice label:Receipts smaller:5K older_than:2y has:attachment is:unread is:starred';
+    expect(box()).toHaveValue(text);
+    expect(screen.getAllByTestId("location")[0]).toHaveTextContent(`/mail?${new URLSearchParams({ view: "inbox", q: text })}`);
+    expect(screen.queryByRole("region", { name: "Search options" })).not.toBeInTheDocument();
+  });
+
+  it("reads the search box back into the form; Clear empties the form; closing changes nothing", async () => {
+    const q = 'from:"Example News" larger:2M before:2024-01-31 has:attachment shoes';
+    const form = await openMail(`/mail?${new URLSearchParams({ q })}`);
+    expect(within(form).getByLabelText("From")).toHaveValue("Example News");
+    expect(within(form).getByLabelText("Size")).toHaveValue("2");
+    expect(within(form).getByLabelText("Size unit")).toHaveValue("MB");
+    expect(within(form).getByLabelText("Date")).toHaveValue("before");
+    expect(within(form).getByLabelText("Day")).toHaveValue("2024-01-31");
+    expect(within(form).getByLabelText("Has attachment")).toBeChecked();
+    expect(within(form).getByLabelText("Has the words")).toHaveValue("shoes");
+    await userEvent.click(within(form).getByRole("button", { name: "Clear" }));
+    expect(within(form).getByLabelText("From")).toHaveValue("");
+    expect(within(form).getByLabelText("Has attachment")).not.toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Search options" }));
+    expect(screen.queryByRole("region", { name: "Search options" })).not.toBeInTheDocument();
+    expect(box()).toHaveValue(q);
+  });
+
+  it("keeps what it can't read in Has the words, so nothing is lost", async () => {
+    const q = 'from:a@x.com from:b@x.com "big deal" larger:2G in:archived label:Nope';
+    const form = await openMail(`/mail?${new URLSearchParams({ q })}`);
+    await within(form).findByRole("option", { name: "Receipts" });
+    expect(within(form).getByLabelText("Has the words")).toHaveValue('from:b@x.com "big deal" larger:2G in:archived label:Nope');
+    await userEvent.click(within(form).getByRole("button", { name: "Search" }));
+    expect(box()).toHaveValue(q);
+  });
+
+  it("has no Label in Deleted in Gmail, where a typed label stays in the words", async () => {
+    const form = await openMail(`/mail?${new URLSearchParams({ view: "deleted", q: "label:Receipts" })}`);
+    expect(within(form).queryByLabelText("Label")).not.toBeInTheDocument();
+    expect(within(form).getByLabelText("Has the words")).toHaveValue("label:Receipts");
+  });
+
+  it("takes only numbers for the size and the age, and closes on Escape", async () => {
+    const form = await openMail("/mail");
+    await userEvent.type(within(form).getByLabelText("Size"), "abc");
+    expect(within(form).getByText("Use a number.")).toBeInTheDocument();
+    expect(within(form).getByRole("button", { name: "Search" })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("region", { name: "Search options" })).not.toBeInTheDocument();
+  });
+
+  it("is offered on the mail list only", async () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR] });
+    renderApp(<ContentBar section="mail" onViews={() => undefined} />, { withAccount: true, route: "/mail/rules" });
+    expect(screen.queryByRole("button", { name: "Search options" })).not.toBeInTheDocument();
+  });
+});

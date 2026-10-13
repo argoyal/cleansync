@@ -59,7 +59,7 @@ export function mailHref(p: { view?: string; label?: string; q?: string; thread?
   return s ? `/mail?${s}` : "/mail";
 }
 
-const quoted = (v: string) => (/\s/.test(v) ? `"${v}"` : v);
+export const quoted = (v: string) => (/\s/.test(v) ? `"${v}"` : v);
 const RUN_RULES_VIEWS = ["all", "inbox"];
 
 /** What "Run rules on…" starts from for the list on screen, or null for a view the rules can't

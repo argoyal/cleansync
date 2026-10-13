@@ -63,6 +63,7 @@ import StorageSvg from "@material-symbols/svg-400/rounded/storage.svg?react";
 import SyncSvg from "@material-symbols/svg-400/rounded/sync.svg?react";
 import SyncProblemSvg from "@material-symbols/svg-400/rounded/sync_problem.svg?react";
 import TableChartSvg from "@material-symbols/svg-400/rounded/table_chart.svg?react";
+import TuneSvg from "@material-symbols/svg-400/rounded/tune.svg?react";
 import UploadSvg from "@material-symbols/svg-400/rounded/upload.svg?react";
 import UploadFileSvg from "@material-symbols/svg-400/rounded/upload_file.svg?react";
 import ViewListSvg from "@material-symbols/svg-400/rounded/view_list.svg?react";
@@ -134,6 +135,7 @@ const ICONS = {
   sync: SyncSvg,
   sync_problem: SyncProblemSvg,
   table_chart: TableChartSvg,
+  tune: TuneSvg,
   upload: UploadSvg,
   upload_file: UploadFileSvg,
   view_list: ViewListSvg,
