@@ -69,9 +69,12 @@ export function MailReader({ account }: { account: Account }) {
     setAll(false);
   };
   // Picks belong to one list: a new view, label or search starts with none.
+  // An open Offload or Delete forever dialog closes too: it would rebuild its start from the new search.
   useEffect(() => {
     setPicked(new Set());
     setAll(false);
+    setPickedAction(null);
+    setForever(null);
   }, [view, label, q]);
   const pickState: PickState = all ? "all" : picked.size > 0 ? "some" : "none";
   const isPicked = (id: string) => all || picked.has(id);

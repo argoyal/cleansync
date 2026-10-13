@@ -1,5 +1,6 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Link } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
@@ -586,13 +587,45 @@ describe("Pick all and the actions of each view", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-decisions/approve")?.body).toEqual({ account_id: 1, ids: [4] }));
   });
 
+  // One mounted reader whose address changes, like a search typed in the panel.
+  const withLink = (to: string) => (
+    <>
+      <MailReader account={ACTIVE} />
+      <Link to={to}>Go elsewhere</Link>
+    </>
+  );
+
   it("clears Pick all when the search changes", async () => {
     api();
-    const r = open("/mail?view=inbox&q=a");
+    renderApp(withLink("/mail?view=inbox&q=b"), { withAccount: true, route: "/mail?view=inbox&q=a" });
+    const all = await screen.findByRole("checkbox", { name: "Pick all" });
+    await userEvent.click(all);
+    expect(all).toBeChecked();
+    expect(screen.getByRole("region", { name: "Picked mail" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: "Go elsewhere" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Picked mail" })).not.toBeInTheDocument());
+    expect(screen.getByRole("checkbox", { name: "Pick all" })).not.toBeChecked();
+  });
+
+  it("closes an open Offload or Delete forever dialog when the search changes", async () => {
+    api();
+    renderApp(withLink("/mail?view=inbox&q=b"), { withAccount: true, route: "/mail?view=inbox&q=a" });
     await userEvent.click(await screen.findByRole("checkbox", { name: "Pick all" }));
-    r.unmount();
-    open("/mail?view=inbox&q=b");
-    expect(await screen.findByRole("checkbox", { name: "Pick all" })).not.toBeChecked();
+    await userEvent.click(within(bar()).getByRole("button", { name: "Offload" }));
+    expect(screen.getByRole("dialog", { name: "Offload mail" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Go elsewhere"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("closes an open Delete forever dialog when the view changes", async () => {
+    api({}, 7);
+    renderApp(withLink("/mail?view=offloaded"), { withAccount: true, route: "/mail?view=deleted" });
+    await screen.findByText(/7 mails/);
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick all" }));
+    await userEvent.click(within(bar()).getByRole("button", { name: "Delete forever…" }));
+    expect(screen.getByRole("dialog", { name: "Delete forever" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Go elsewhere"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("offers Offload and Make a rule… for a mail in Gmail, and Restore or Delete forever… for one out of Gmail", async () => {
