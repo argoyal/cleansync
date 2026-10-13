@@ -8,9 +8,12 @@ import { parseTyped } from "./OffloadMailDialog";
 
 const mails = (n: number) => `${n.toLocaleString()} ${n === 1 ? "mail" : "mails"}`;
 
-/** Removes mail from the Local archive for good: picked mails, or a search in the archive.
- * `count` is how many that is; the person types it to go ahead, and the server checks it again.
- * `onDone` runs only when mail was deleted; `onClose` runs on any close. */
+const PLACES: Record<string, string> = { offloaded: "Offloaded", deleted: "Deleted in Gmail" };
+
+/** Mail panel spec §7: removes CleanSync's copy of mail already out of Gmail. Picked mails
+ * (`message_ids`), or a pick-all as the view, label and search. `count` is how many that is;
+ * the person types it, and the server counts again. `onDone` runs only when mail was deleted;
+ * `onClose` runs on any close. */
 export function DeleteForeverDialog({
   account,
   start,
@@ -19,7 +22,7 @@ export function DeleteForeverDialog({
   onDone,
 }: {
   account: Account;
-  start: { message_ids?: number[]; q?: string };
+  start: { view: string; message_ids?: number[]; label?: string; q?: string };
   count: number;
   onClose: () => void;
   onDone?: () => void;
@@ -30,7 +33,14 @@ export function DeleteForeverDialog({
   const ok = count > 0 && parseTyped(typed) === count;
   const go = () =>
     forever.mutate(
-      { accountId: account.id, messageIds: start.message_ids, q: start.q, confirm: count },
+      {
+        accountId: account.id,
+        view: start.view,
+        messageIds: start.message_ids,
+        label: start.label,
+        q: start.message_ids ? undefined : (start.q ?? ""),
+        confirm: count,
+      },
       {
         onSuccess: ({ deleted }) => {
           toast(`Deleted ${mails(deleted)} forever.`);
@@ -53,8 +63,10 @@ export function DeleteForeverDialog({
         </>
       }
     >
-      <p>{mails(count)} from the Local archive.</p>
-      <p className="text-ink-2">This removes CleanSync's own copy. It can't be undone: the mail will exist nowhere.</p>
+      <p>
+        {mails(count)} from {PLACES[start.view] ?? start.view}.
+      </p>
+      <p className="text-ink-2">This removes CleanSync's own copy. The mail is already gone from Gmail, so afterwards it exists nowhere. This can't be undone.</p>
       {count > 0 && (
         <Field label={`Type ${count.toLocaleString()} to delete forever`}>
           <input className={`${inputClass} w-40`} inputMode="numeric" autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 
 import { friendlyError } from "../../api/client";
@@ -20,7 +21,6 @@ function Mark({ children }: { children: string }) {
 
 function Row({
   accountId,
-  chips,
   t,
   href,
   open,
@@ -28,8 +28,6 @@ function Row({
   onToggle,
 }: {
   accountId: number;
-  /** Off in the Local archive: a chip's Undo or Correct… there would change Gmail. */
-  chips: boolean;
   t: ThreadRow;
   href: string;
   open: boolean;
@@ -43,7 +41,7 @@ function Row({
   if (t.has_attachments) parts.push("has attachments");
   if (t.offloaded) parts.push("offloaded");
   if (t.deleted) parts.push("deleted in Gmail");
-  const chip = chips ? t.decision : null;
+  const chip = t.decision;
   if (chip) parts.push(`${chip.status}: ${chip.rule_name}`);
   parts.push(formatWhen(t.last_date));
   const label = parts.join(", ");
@@ -87,23 +85,45 @@ function Row({
   );
 }
 
-/** `selected` and `onToggle` turn on picking threads (spec §5.1: offload or restore them together). */
+/** The checkbox at the top of the list (mail panel spec §6): empty, mixed (some picked by
+ * hand) or ticked (every mail of the view and search). */
+export type PickState = "none" | "some" | "all";
+
+function PickAllBox({ state, onChange }: { state: PickState; onChange: () => void }) {
+  const box = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (box.current) box.current.indeterminate = state === "some";
+  }, [state]);
+  return (
+    <label className="flex items-center gap-3 border-b border-line px-4 py-2 text-table text-ink-2">
+      <input ref={box} type="checkbox" className="h-4 w-4 accent-accent" aria-label="Pick all" checked={state === "all"} onChange={onChange} />
+      <span aria-hidden="true">Pick all</span>
+    </label>
+  );
+}
+
+/** `isPicked` and `onToggle` turn on picking threads; `onPickAll` adds the Pick all checkbox
+ * (not in Suggested, where Approve all covers the list). */
 export function MailList({
   accountId,
   view,
   label,
   q,
   thread,
-  selected,
+  isPicked,
   onToggle,
+  pickState = "none",
+  onPickAll,
 }: {
   accountId: number;
   view: string;
   label: string;
   q: string;
   thread: string;
-  selected?: Set<string>;
+  isPicked?: (threadId: string) => boolean;
   onToggle?: (threadId: string) => void;
+  pickState?: PickState;
+  onPickAll?: () => void;
 }) {
   const list = useMailThreads(accountId, { view, label, q });
   const rows = list.data?.pages.flatMap((p) => p.threads) ?? [];
@@ -112,16 +132,16 @@ export function MailList({
   if (list.isSuccess && rows.length === 0) return <p className="p-6 text-ink-2">No mail here.</p>;
   return (
     <div>
+      {onPickAll && <PickAllBox state={pickState} onChange={onPickAll} />}
       <ul aria-label="Mail">
         {rows.map((t) => (
           <Row
             key={t.thread_id}
             accountId={accountId}
-            chips={view !== "archive"}
             t={t}
             open={t.thread_id === thread}
             href={mailHref({ view, label, q, thread: t.thread_id })}
-            picked={selected?.has(t.thread_id) ?? false}
+            picked={isPicked?.(t.thread_id) ?? false}
             onToggle={onToggle}
           />
         ))}

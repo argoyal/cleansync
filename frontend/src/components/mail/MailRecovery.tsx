@@ -73,7 +73,7 @@ export function MailRecovery({ accountId }: { accountId: number }) {
                   data-autofocus
                   onClick={() => {
                     setAsking(false);
-                    restore.mutate({ accountId, start: { q: "is:deleted" } });
+                    restore.mutate({ accountId, start: { view: "deleted", q: "" } });
                   }}
                 >
                   Put back

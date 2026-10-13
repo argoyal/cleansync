@@ -87,7 +87,6 @@ export type JobPreview = {
 /** Counts by outcome, e.g. { applied: 2, waiting: 1 }: "waiting" means the mail is queued and not yet changed. */
 export type ApproveResult = Record<string, number>;
 export type UndoResult = { status: string; left: string[] };
-export type DeleteMailResult = { deleted: number; failed: { message_id: number; reason: string }[] };
 
 /** Why a model connection is not being called right now, and until when. */
 export type AiPause = {

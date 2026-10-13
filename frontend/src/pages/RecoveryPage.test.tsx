@@ -210,7 +210,7 @@ describe("mail in Recovery", () => {
     expect(within(mail).getByRole("link", { name: "Show them" })).toHaveAttribute("href", "/mail?view=deleted");
     await userEvent.click(within(mail).getByRole("button", { name: "Restore all to Gmail" }));
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Put back" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, q: "is:deleted" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, view: "deleted", q: "" }));
     expect(calls.some((c) => c.path === "/api/recovery")).toBe(false); // the Files list is not loaded under Mail
   });
 
@@ -225,7 +225,7 @@ describe("mail in Recovery", () => {
     expect(calls.some((c) => c.path === "/api/mail/restore")).toBe(false);
     await userEvent.click(within(mail).getByRole("button", { name: "Restore all to Gmail" }));
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Put back" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, q: "is:deleted" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, view: "deleted", q: "" }));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 

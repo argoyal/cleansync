@@ -18,24 +18,43 @@ export const useStartOffload = () =>
   });
 
 /** Spec §5.5: restore never makes a second copy in Gmail, so it needs no typed confirmation.
- * `archive` restores mail from the local archive (mail deleted by hand or by a rule). */
+ * `view` keeps a pick of threads to the mails of the view they were picked in. */
 export function useRestoreMail() {
   const toast = useToast();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (b: { accountId: number; start?: OffloadStart; offloadId?: number; archive?: boolean }) =>
+    mutationFn: (b: { accountId: number; start?: OffloadStart; offloadId?: number; view?: string }) =>
       api<{ queued: string; count: number }>("/api/mail/restore", {
         method: "POST",
         body: {
           account_id: b.accountId,
           ...(b.start ?? {}),
           ...(b.offloadId !== undefined ? { offload_id: b.offloadId } : {}),
-          ...(b.archive ? { archive: true } : {}),
+          ...(b.view !== undefined ? { view: b.view } : {}),
         },
       }),
     onSuccess: ({ count }) => {
       toast(`Putting ${count.toLocaleString()} ${count === 1 ? "mail" : "mails"} back in Gmail. Sync activity shows when it's done.`);
       void qc.invalidateQueries({ queryKey: ["mail-status"] });
+    },
+    onError: (e) => toast(friendlyError(e), { tone: "error" }),
+  });
+}
+
+const MAIL_LISTS = ["mail-threads", "mail-counts", "mail-totals", "mail-thread", "mail-message", "rule-decisions"];
+
+/** Offload one mail open in the reader (mail panel spec §8), through the same checks as a
+ * rule's Offload. */
+export function useOffloadOne() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (b: { accountId: number; messageId: number }) =>
+      api<{ offloaded: boolean; reason: string | null }>(`/api/mail/messages/${b.messageId}/offload`, { method: "POST", body: { account_id: b.accountId } }),
+    onSuccess: ({ offloaded, reason }) => {
+      if (offloaded) toast("Offloaded. CleanSync keeps its copy in Offloaded.");
+      else toast(`It wasn't offloaded: ${reason ?? "try again."}`, { tone: "error" });
+      MAIL_LISTS.forEach((k) => void qc.invalidateQueries({ queryKey: [k] }));
     },
     onError: (e) => toast(friendlyError(e), { tone: "error" }),
   });

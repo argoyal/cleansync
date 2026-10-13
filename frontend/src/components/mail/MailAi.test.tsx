@@ -31,15 +31,15 @@ describe("AI in mail", () => {
   });
 
   it("delete forever needs the typed count", async () => {
-    const { calls } = mockApi({ "POST /api/mail/archive/delete-forever": { deleted: 2, left: 0 } });
-    renderApp(<DeleteForeverDialog account={ACCOUNT} start={{ message_ids: [1, 2] }} count={2} onClose={() => {}} />);
-    const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveTextContent("can't be undone");
+    const { calls } = mockApi({ "POST /api/mail/delete-forever": { deleted: 2, left: 0 } });
+    renderApp(<DeleteForeverDialog account={ACCOUNT} start={{ view: "offloaded", message_ids: [1, 2] }} count={2} onClose={() => {}} />);
+    const dialog = screen.getByRole("dialog", { name: "Delete forever" });
+    expect(dialog).toHaveTextContent("2 mails from Offloaded.");
     const go = within(dialog).getByRole("button", { name: "Delete forever" });
     expect(go).toBeDisabled();
-    await userEvent.type(within(dialog).getByLabelText(/Type 2/), "2");
+    await userEvent.type(within(dialog).getByLabelText("Type 2 to delete forever"), "2");
     await userEvent.click(go);
-    await waitFor(() => expect(calls[0].body).toEqual({ account_id: ACCOUNT.id, message_ids: [1, 2], confirm: 2 }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/delete-forever")?.body).toEqual({ account_id: 1, view: "offloaded", message_ids: [1, 2], confirm: 2 }));
   });
 
   it("run rules shows the preview and runs after the typed count", async () => {

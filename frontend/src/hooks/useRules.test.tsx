@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { describeAction, useRules } from "../api/rules";
 import { mockApi, wrapper } from "../test/utils";
-import { useApprove, useDeleteMail, useDeleteRule } from "./useRules";
+import { useApprove, useDeleteRule } from "./useRules";
 
 describe("rules api", () => {
   it("describes actions in plain words", () => {
@@ -24,17 +24,13 @@ describe("rules api", () => {
     expect(calls.at(-1)?.body).toEqual({ account_id: 1, ids: [5, 6] });
   });
 
-  it("deletes a rule with the mailbox in the query and mail by message or thread", async () => {
+  it("deletes a rule with the mailbox in the query", async () => {
     const { calls } = mockApi({
       "DELETE /api/rules/4": null,
-      "POST /api/mail/delete": { deleted: 1, failed: [] },
     });
     const del = renderHook(() => useDeleteRule(), { wrapper: wrapper() });
     await act(() => del.result.current.mutateAsync({ accountId: 1, id: 4 }));
     expect(calls.at(-1)?.method).toBe("DELETE");
     expect(calls.at(-1)?.url.searchParams.get("account_id")).toBe("1");
-    const mail = renderHook(() => useDeleteMail(), { wrapper: wrapper() });
-    await act(() => mail.result.current.mutateAsync({ accountId: 1, messageIds: [9], threadIds: ["t"] }));
-    expect(calls.at(-1)?.body).toEqual({ account_id: 1, message_ids: [9], thread_ids: ["t"] });
   });
 });

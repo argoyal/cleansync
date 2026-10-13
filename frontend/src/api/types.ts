@@ -376,7 +376,7 @@ export type MailMessageInfo = {
   size: number;
   file_size: number;
   labels: { id: string; name: string }[];
-  state: "in_mail" | "offloaded" | "deleted_in_provider" | "local_archive";
+  state: "in_mail" | "offloaded" | "deleted_in_provider";
   offload_id: number | null;
   attachments: MailAttachment[];
   /** Known for one opened mail (`useMailMessage`); null in a thread list. */
@@ -398,7 +398,9 @@ export type MailOffloadPreview = {
   excluded: { reason: string; count: number; text: string }[];
 };
 /** What an offload or restore starts from: a search, picked mails, or picked threads. */
-export type OffloadStart = { q: string } | { message_ids: number[] } | { thread_ids: string[] };
+/** Pick all (mail panel spec §6): every mail of the view and search, worked out by the server. */
+export type MailPickAll = { view: string; label?: string; q: string };
+export type OffloadStart = { q: string } | { message_ids: number[] } | { thread_ids: string[] } | MailPickAll;
 export type MailOffloadState = "WAITING" | "RUNNING" | "DONE" | "DONE_WITH_SKIPS" | "FAILED";
 export type MailOffload = {
   id: number;

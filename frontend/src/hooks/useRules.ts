@@ -7,7 +7,6 @@ import type {
   AiTaskName,
   AiTest,
   ApproveResult,
-  DeleteMailResult,
   RuleDraft,
   Rule,
   RuleFields,
@@ -137,23 +136,16 @@ export const useRunRuleJob = () =>
 export const useStopRuleJob = () =>
   useChange((b: Acc & { jobId: number }) => post<void>(`/api/rule-jobs/${b.jobId}/stop`, { account_id: b.accountId }));
 
-// ---- deleting mail ----
-/** Delete by hand: Gmail Trash, with a copy kept in the local archive. */
-export const useDeleteMail = () =>
-  useChange((b: Acc & { messageIds?: number[]; threadIds?: string[] }) =>
-    post<DeleteMailResult>("/api/mail/delete", {
-      account_id: b.accountId,
-      ...(b.messageIds ? { message_ids: b.messageIds } : {}),
-      ...(b.threadIds ? { thread_ids: b.threadIds } : {}),
-    }),
-  );
-
-/** Removes archived mail for good. Give message ids or a search `q`; `confirm` is the typed count. */
+// ---- Delete forever ----
+/** Removes CleanSync's copy of mail already out of Gmail (mail panel spec §7): picked mails,
+ * or a pick-all as the view, label and search. `confirm` is the typed count. */
 export const useDeleteForever = () =>
-  useChange((b: Acc & { messageIds?: number[]; q?: string; confirm: number }) =>
-    post<{ deleted: number; left: number }>("/api/mail/archive/delete-forever", {
+  useChange((b: Acc & { view: string; messageIds?: number[]; label?: string; q?: string; confirm: number }) =>
+    post<{ deleted: number; left: number }>("/api/mail/delete-forever", {
       account_id: b.accountId,
+      view: b.view,
       ...(b.messageIds ? { message_ids: b.messageIds } : {}),
+      ...(b.label ? { label: b.label } : {}),
       ...(b.q !== undefined ? { q: b.q } : {}),
       confirm: b.confirm,
     }),

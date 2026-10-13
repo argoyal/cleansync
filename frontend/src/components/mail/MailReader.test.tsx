@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
-import { MailReader } from "./MailReader";
+import { allPickedText, MailReader } from "./MailReader";
 
 const ACTIVE = { ...ACCOUNT, services: { files: "active" as const, mail: "active" as const }, mail_permission: true };
 
@@ -362,7 +362,7 @@ describe("offload and restore in the reader", () => {
     await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Pick Two" }));
     await userEvent.click(within(screen.getByRole("region", { name: "Picked mail" })).getByRole("button", { name: "Restore to Gmail" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, thread_ids: ["t1", "t2"] }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, thread_ids: ["t1", "t2"], view: "offloaded" }));
     expect(await screen.findByText("Putting 2 mails back in Gmail. Sync activity shows when it's done.")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Picked mail" })).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Pick One" })).not.toBeChecked();
@@ -382,39 +382,6 @@ describe("offload and restore in the reader", () => {
     expect(link.querySelector("input")).toBeNull(); // the checkbox sits beside the link, not in it
   });
 
-  it("offers Offload for a mail still in Gmail, and nothing for one whose file is missing", async () => {
-    mockApi({
-      "GET /api/accounts": [ACTIVE],
-      "GET /api/mail/counts": { views: {}, labels: [] },
-      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: 1, total_bytes: 1 },
-      "GET /api/mail/threads/t1": [msg({ id: 1, subject: "Old" }), msg({ id: 2, subject: "Gone", file_missing: true, state: "offloaded" })],
-    });
-    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?thread=t1" });
-    await userEvent.click(await screen.findByRole("button", { name: /^Old, from/ }));
-    await userEvent.click(await screen.findByRole("button", { name: "Offload" }));
-    expect(screen.getByText("The picked mails.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Restore to Gmail" })).not.toBeInTheDocument();
-  });
-
-  it("restores a view's whole list only when the search language can say that view", async () => {
-    const { calls } = mockApi({
-      "GET /api/accounts": [ACTIVE],
-      "GET /api/mail/counts": { views: {}, labels: [{ id: "Label_2", name: "Receipts", count: 3 }] },
-      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", offloaded: true })], next_cursor: null, total: 1, total_bytes: 1 },
-      "POST /api/mail/restore": { queued: "queued", count: 1 },
-    });
-    const first = renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=offloaded&q=from%3Abank" });
-    await userEvent.click(await screen.findByRole("button", { name: "Restore these to Gmail" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, q: "is:offloaded from:bank" }));
-    first.unmount();
-    for (const route of ["/mail?label=Label_2&q=from%3Abank", "/mail?view=inbox&q=from%3Abank", "/mail"]) {
-      const r = renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route });
-      await screen.findByRole("button", { name: "Offload mail…" });
-      expect(screen.queryByRole("button", { name: "Restore these to Gmail" }), route).not.toBeInTheDocument();
-      r.unmount();
-    }
-  });
-
   it("tells the offload dialog which label isn't part of the filter", async () => {
     mockApi({
       "GET /api/accounts": [ACTIVE],
@@ -429,27 +396,8 @@ describe("offload and restore in the reader", () => {
 });
 
 
-describe("AI rules and the local archive in the reader", () => {
+describe("AI rules in the reader", () => {
   const CHIP = { id: 3, rule_name: "Newsletters", status: "suggested", how: "ai", why: "a weekly digest" };
-
-  it("deletes picked threads after a plain confirm", async () => {
-    const { calls } = mockApi({
-      "GET /api/accounts": [ACTIVE],
-      "GET /api/mail/counts": { views: {}, labels: [] },
-      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", subject: "One" }), thread({ thread_id: "t2", subject: "Two" })], next_cursor: null, total: 2, total_bytes: 2 },
-      "POST /api/mail/delete": { deleted: 2, failed: [] },
-    });
-    renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=inbox" });
-    expect(await screen.findByRole("button", { name: "Run rules on…" })).toBeInTheDocument();
-    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Pick Two" }));
-    await userEvent.click(within(screen.getByRole("region", { name: "Picked mail" })).getByRole("button", { name: "Delete" }));
-    const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus(); // not the button that deletes
-    expect(dialog).toHaveTextContent("Move 2 threads to Gmail's trash? CleanSync keeps them in the Local archive, where you can restore them or delete them forever.");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/delete")?.body).toEqual({ account_id: 1, thread_ids: ["t1", "t2"] }));
-  });
 
   it("shows a rule chip beside the row's link and says it in the row's name", async () => {
     mockApi({
@@ -525,5 +473,152 @@ describe("the CleanSync views", () => {
     renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route: "/mail?view=offloaded&thread=t1" });
     await screen.findByRole("region", { name: "Open mail" });
     await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/threads/t1")?.url.searchParams.get("view")).toBe("offloaded"));
+  });
+});
+
+describe("Pick all and the actions of each view", () => {
+  const TWO = { threads: [thread({ thread_id: "t1", subject: "One" }), thread({ thread_id: "t2", subject: "Two" })], next_cursor: null, total: null, total_bytes: null };
+  const api = (more: Record<string, unknown> = {}, total = 12430) =>
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": TWO,
+      "GET /api/mail/totals": { total, total_bytes: 1 },
+      ...more,
+    });
+  const open = (route: string) => renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route });
+  const bar = () => screen.getByRole("region", { name: "Picked mail" });
+
+  it("has three states, and says what is picked", async () => {
+    api();
+    open("/mail?view=inbox&q=from%3Ashop");
+    const all = await screen.findByRole("checkbox", { name: "Pick all" });
+    expect(all).not.toBeChecked();
+    await screen.findByText(/12,430 mails/);
+    await userEvent.click(all);
+    expect(all).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Pick One" })).toBeChecked();
+    expect(within(bar()).getByText("All 12,430 mails in this search are picked.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Pick One" }));
+    expect(all).toBePartiallyChecked();
+    expect(within(bar()).getByText("1 thread picked")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Pick Two" })).toBeChecked();
+    await userEvent.click(all);
+    expect(all).toBeChecked();
+    await userEvent.click(all);
+    expect(all).not.toBeChecked();
+    expect(screen.queryByRole("region", { name: "Picked mail" })).not.toBeInTheDocument();
+  });
+
+  it("says this view when there is no search, and The 1 mail for one", () => {
+    expect(allPickedText(1204, false)).toBe("All 1,204 mails in this view are picked.");
+    expect(allPickedText(1, true)).toBe("The 1 mail in this search is picked.");
+    expect(allPickedText(undefined, true)).toBe("All mails in this search are picked.");
+  });
+
+  it("offers Offload and Make a rule… in Gmail views, and offloads a pick-all as the view and search", async () => {
+    const { calls } = api({ "POST /api/mail/offloads/preview": { filter_text: "Inbox · from:shop", count: 2, bytes: 10, largest: [], oldest: [], excluded: [] } });
+    open("/mail?view=inbox&q=from%3Ashop");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick all" }));
+    expect(within(bar()).queryByRole("button", { name: "Restore to Gmail" })).not.toBeInTheDocument();
+    expect(within(bar()).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
+    expect(within(bar()).getByRole("button", { name: "Make a rule…" })).toBeInTheDocument();
+    await userEvent.click(within(bar()).getByRole("button", { name: "Offload" }));
+    const dialog = screen.getByRole("dialog", { name: "Offload mail" });
+    expect(within(dialog).getByText("Every mail of the list you picked them in.")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/offloads/preview")?.body).toEqual({ account_id: 1, view: "inbox", q: "from:shop" }));
+  });
+
+  it("restores a pick-all of Offloaded as the view and search", async () => {
+    const { calls } = api({ "POST /api/mail/restore": { queued: "queued", count: 2 } });
+    open("/mail?view=offloaded&label=Label_2");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick all" }));
+    expect(within(bar()).queryByRole("button", { name: "Offload" })).not.toBeInTheDocument();
+    await userEvent.click(within(bar()).getByRole("button", { name: "Restore to Gmail" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, view: "offloaded", label: "Label_2", q: "" }));
+  });
+
+  it("deletes a pick-all of Deleted in Gmail forever after the typed count", async () => {
+    const { calls } = api({ "POST /api/mail/delete-forever": { deleted: 7, left: 0 } }, 7);
+    open("/mail?view=deleted");
+    await screen.findByText(/7 mails/);
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick all" }));
+    await userEvent.click(within(bar()).getByRole("button", { name: "Delete forever…" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete forever" });
+    expect(dialog).toHaveTextContent("7 mails from Deleted in Gmail.");
+    await userEvent.type(within(dialog).getByLabelText("Type 7 to delete forever"), "7");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete forever" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/delete-forever")?.body).toEqual({ account_id: 1, view: "deleted", q: "", confirm: 7 }));
+    expect(await screen.findByText("Deleted 7 mails forever.")).toBeInTheDocument();
+  });
+
+  it("deletes picked Offloaded threads forever by their offloaded mails, and keeps the pick on Cancel", async () => {
+    const { calls } = api({
+      "GET /api/mail/threads/t1": [msg({ id: 4, state: "offloaded" }), msg({ id: 5, state: "offloaded" })],
+      "POST /api/mail/delete-forever": { deleted: 2, left: 0 },
+    });
+    open("/mail?view=offloaded");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
+    await userEvent.click(within(bar()).getByRole("button", { name: "Delete forever…" }));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("checkbox", { name: "Pick One" })).toBeChecked();
+    await userEvent.click(within(bar()).getByRole("button", { name: "Delete forever…" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(calls.find((c) => c.path === "/api/mail/threads/t1")?.url.searchParams.get("view")).toBe("offloaded");
+    await userEvent.type(within(dialog).getByLabelText("Type 2 to delete forever"), "2");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete forever" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/delete-forever")?.body).toEqual({ account_id: 1, view: "offloaded", message_ids: [4, 5], confirm: 2 }));
+  });
+
+  it("has no Pick all in Suggested, and approves the picked suggestions", async () => {
+    const CHIP = { id: 3, rule_name: "Newsletters", status: "suggested", how: "ai", why: "a digest" };
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", subject: "One", decision: CHIP }), thread({ thread_id: "t2", subject: "Two", decision: { ...CHIP, id: 4 } })], next_cursor: null, total: 2, total_bytes: 2 },
+      "POST /api/rule-decisions/approve": { applied: 1 },
+    });
+    open("/mail?view=suggested");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick Two" }));
+    expect(screen.queryByRole("checkbox", { name: "Pick all" })).not.toBeInTheDocument();
+    await userEvent.click(within(bar()).getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-decisions/approve")?.body).toEqual({ account_id: 1, ids: [4] }));
+  });
+
+  it("clears Pick all when the search changes", async () => {
+    api();
+    const r = open("/mail?view=inbox&q=a");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick all" }));
+    r.unmount();
+    open("/mail?view=inbox&q=b");
+    expect(await screen.findByRole("checkbox", { name: "Pick all" })).not.toBeChecked();
+  });
+
+  it("offers Offload and Make a rule… for a mail in Gmail, and Restore or Delete forever… for one out of Gmail", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1" })], next_cursor: null, total: 1, total_bytes: 1 },
+      "GET /api/mail/threads/t1": ({ url }: { url: URL }) =>
+        url.searchParams.get("view") === "offloaded" ? [msg({ id: 2, state: "offloaded", gmail_url: null })] : [msg({ id: 1 })],
+      "POST /api/mail/messages/1/offload": { offloaded: true, reason: null },
+    });
+    const first = open("/mail?thread=t1");
+    const reader = await screen.findByRole("region", { name: "Open mail" });
+    expect(await within(reader).findByRole("button", { name: "Make a rule…" })).toBeInTheDocument();
+    expect(within(reader).queryByRole("button", { name: /^Delete/ })).not.toBeInTheDocument();
+    await userEvent.click(within(reader).getByRole("button", { name: "Offload" }));
+    const ask = screen.getByRole("dialog", { name: "Offload this mail?" });
+    expect(within(ask).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await userEvent.click(within(ask).getByRole("button", { name: "Offload" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/messages/1/offload")?.body).toEqual({ account_id: 1 }));
+    expect(await screen.findByText("Offloaded. CleanSync keeps its copy in Offloaded.")).toBeInTheDocument();
+    first.unmount();
+    open("/mail?view=offloaded&thread=t1");
+    const out = await screen.findByRole("region", { name: "Open mail" });
+    expect(await within(out).findByRole("button", { name: "Delete forever…" })).toBeInTheDocument();
+    expect(within(out).getByRole("button", { name: "Restore to Gmail" })).toBeInTheDocument();
+    expect(within(out).queryByRole("button", { name: "Offload" })).not.toBeInTheDocument();
   });
 });

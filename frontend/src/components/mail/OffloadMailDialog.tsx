@@ -86,7 +86,7 @@ export function OffloadMailDialog({
   scope?: string | null;
 }) {
   const navigate = useNavigate();
-  const fixed = !("q" in start);
+  const fixed = !("q" in start) || "view" in start; // picked mail, or a pick-all
   const labels = useMailCounts(account.id, !fixed).data?.labels ?? [];
   const [fields, setFields] = useState<FilterFields>(EMPTY_FIELDS);
   const [text, setText] = useState("q" in start ? start.q : "");
@@ -169,7 +169,7 @@ export function OffloadMailDialog({
         restore it to Gmail at any time.
       </p>
       {fixed ? (
-        <p>{"thread_ids" in start ? "The picked threads." : "The picked mails."}</p>
+        <p>{"view" in start ? "Every mail of the list you picked them in." : "thread_ids" in start ? "The picked threads." : "The picked mails."}</p>
       ) : (
         // Locked while a start is on its way: an edit then would lose where it goes next.
         <fieldset disabled={run.isPending} className="grid gap-3 sm:grid-cols-2">
