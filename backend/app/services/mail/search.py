@@ -35,8 +35,9 @@ OUT_OF_GMAIL = {
     "deleted": (MailState.DELETED,),
     "kept": (MailState.OFFLOADED, MailState.DELETED),
 }
-VIEWS = GMAIL_VIEWS | set(OUT_OF_GMAIL) | {"archive"}  # "archive": the Local archive, until 0011
-IS_VALUES = ("unread", "starred", "offloaded", "deleted", "archived")
+VIEWS = GMAIL_VIEWS | set(OUT_OF_GMAIL)
+VIEW_ALIASES = {"archive": "offloaded"}  # old links to the Local archive
+IS_VALUES = ("unread", "starred", "offloaded", "deleted")
 OFFLOADED_ELSEWHERE_MSG = "Offloaded mail is in the Offloaded view."
 DELETED_ELSEWHERE_MSG = "Mail deleted in Gmail is in the Deleted in Gmail view."
 OPERATORS = (
@@ -79,7 +80,6 @@ class MailQuery:
     starred: bool = False
     offloaded: bool = False
     deleted: bool = False
-    archived: bool = False
     in_archived: bool = False
 
     def is_empty(self) -> bool:
@@ -238,8 +238,6 @@ def fts_match(words: list[str]) -> str:
 
 def query_conditions(db: Session, account_id: int, q: MailQuery, *, view: str = "all") -> list:
     conds: list = []
-    if q.archived and view != "archive":  # inside the archive the view already limits to it
-        raise SearchError("Archived mail is on the Local archive page.")
     if view in GMAIL_VIEWS:
         if q.offloaded:
             raise SearchError(OFFLOADED_ELSEWHERE_MSG)
@@ -321,16 +319,12 @@ def mail_conditions(
     label: str | None = None,
     q: str = "",
     now: datetime,
-    archive: bool = False,
 ) -> list:
     """Every condition for one account, view (or label) and search, ready for .where(*…).
-    Gmail views hold only mail in Gmail; the Local archive only with archive=True or the
-    archive view (until migration 0011 merges it into Offloaded)."""
-    if archive:
-        view = "archive"
+    Gmail views hold only mail in Gmail (mail panel spec §4)."""
+    view = VIEW_ALIASES.get(view, view)
     return [
         MailMessage.account_id == account_id,
-        *([MailMessage.state == MailState.LOCAL_ARCHIVE] if view == "archive" else []),
         *view_conditions(account_id, view, label),
         *query_conditions(db, account_id, parse_query(q, now=now), view=view),
     ]

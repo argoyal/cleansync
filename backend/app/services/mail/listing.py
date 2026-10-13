@@ -62,7 +62,7 @@ def decision_chips(db: Session, message_ids: list[int]) -> dict[int, dict]:
     ):
         out[d.message_id] = {
             "id": d.id,
-            "rule_name": d.rule_name or "Deleted by you",
+            "rule_name": d.rule_name or "Offloaded by you",
             "status": d.status,
             "how": d.how,
             "why": d.why,
@@ -290,7 +290,6 @@ def view_counts(
         "archived": archived,
         "offloaded": states.get(MailState.OFFLOADED, 0),
         "deleted": states.get(MailState.DELETED, 0),
-        "archive": states.get(MailState.LOCAL_ARCHIVE, 0),
         "suggested": suggested,
     }
 

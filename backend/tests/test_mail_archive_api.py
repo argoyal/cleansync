@@ -33,7 +33,7 @@ def test_delete_moves_to_archive_and_hides_from_threads(auth_client, mailbox):
     assert "TRASH" in fake.messages[row.provider_id].labels
     main = auth_client.get("/api/mail/threads", params={"account_id": acc.id}).json()["threads"]
     arch = auth_client.get(
-        "/api/mail/threads", params={"account_id": acc.id, "view": "archive"}
+        "/api/mail/threads", params={"account_id": acc.id, "view": "offloaded"}
     ).json()["threads"]
     assert main == [] and [t["subject"] for t in arch] == ["Promo"]
     assert (
@@ -41,9 +41,9 @@ def test_delete_moves_to_archive_and_hides_from_threads(auth_client, mailbox):
         == []
     )
     one = auth_client.get(
-        f"/api/mail/threads/{row.thread_id}", params={"account_id": acc.id, "archive": True}
+        f"/api/mail/threads/{row.thread_id}", params={"account_id": acc.id, "view": "offloaded"}
     ).json()
-    assert one[0]["state"] == "local_archive"
+    assert one[0]["state"] == "offloaded"
 
 
 def test_delete_by_thread_and_unknown_mail(auth_client, mailbox):
@@ -128,6 +128,6 @@ def test_delete_forever_with_an_empty_pick_never_falls_back_to_the_search(auth_c
     )
     assert r.status_code == 400 and r.json()["detail"] == "Pick mails or type a search."
     one = auth_client.get(
-        f"/api/mail/threads/{row.thread_id}", params={"account_id": acc.id, "archive": True}
+        f"/api/mail/threads/{row.thread_id}", params={"account_id": acc.id, "view": "offloaded"}
     ).json()
-    assert one[0]["state"] == "local_archive"
+    assert one[0]["state"] == "offloaded"

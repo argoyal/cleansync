@@ -221,7 +221,6 @@ class MailRecoveryOut(BaseModel):
 
 class RestoreMailIn(MailPickIn):
     offload_id: int | None = None
-    archive: bool = False
 
 
 class RestoreQueuedOut(BaseModel):

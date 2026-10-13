@@ -41,12 +41,12 @@ def archive_targets(
         if not message_ids:
             raise ArchiveProblem(NOTHING_PICKED_MSG)
         rows = rows_where_in(db, account_id, MailMessage.id, message_ids)
-        mine = [r for r in rows if r.state == MailState.LOCAL_ARCHIVE]
+        mine = [r for r in rows if r.state == MailState.OFFLOADED]
         return mine, len(rows) - len(mine)
     if not q.strip():
         raise ArchiveProblem(NOTHING_PICKED_MSG)
     try:
-        conds = mail_conditions(db, account_id, q=q, now=now, archive=True)
+        conds = mail_conditions(db, account_id, view="offloaded", q=q, now=now)
     except SearchError as e:
         raise ArchiveProblem(str(e)) from None
     return list(db.scalars(select(MailMessage).where(*conds))), 0

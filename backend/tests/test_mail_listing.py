@@ -135,7 +135,6 @@ def test_counts_for_views_and_labels(auth_client, db, make_account):
         "archived": 0,
         "offloaded": 1,
         "deleted": 1,
-        "archive": 0,
         "suggested": 0,
     }
     assert body["labels"] == [

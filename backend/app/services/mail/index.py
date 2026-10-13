@@ -154,9 +154,7 @@ def adopt_restored_copy(
             MailMessage.account_id == account_id,
             MailMessage.message_id == message_id,
             MailMessage.import_started_at.is_not(None),
-            MailMessage.state.in_(
-                [MailState.OFFLOADED, MailState.DELETED, MailState.LOCAL_ARCHIVE]
-            ),
+            MailMessage.state.in_([MailState.OFFLOADED, MailState.DELETED]),
         )
         .order_by(MailMessage.import_started_at.desc())
         .limit(1)
@@ -296,8 +294,6 @@ def apply_labels(
     labels = list(labels)
     before = set(row.labels or [])
     gone = bool(GONE_LABELS & set(labels))
-    if row.state == MailState.LOCAL_ARCHIVE and gone:
-        return row  # deleted by CleanSync into its local archive: in Gmail's trash is expected
     if row.state == MailState.OFFLOADED:
         if "TRASH" in labels:
             return row  # in the trash because of CleanSync's own offload: no change (spec §4.4)
@@ -324,8 +320,7 @@ def apply_labels(
 
 def mark_deleted(db: Session, account_id: int, provider_id: str) -> MailMessage | None:
     """Deleted for good in Gmail. The file stays (spec §4.4); an offloaded mail leaving
-    Gmail's trash is Gmail emptying its trash and stays offloaded, and local-archive mail
-    stays in the archive."""
+    Gmail's trash is Gmail emptying its trash and stays offloaded."""
     row = by_provider_id(db, account_id, provider_id)
     if row is not None and row.state == MailState.IN_MAIL:
         row.state = MailState.DELETED

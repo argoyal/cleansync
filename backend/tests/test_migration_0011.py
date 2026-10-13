@@ -1,0 +1,98 @@
+"""Migration 0011: one state for mail removed from Gmail (mail panel spec §8)."""
+
+import json
+
+from sqlalchemy import text
+
+from app.database.engine import make_engine
+from app.database.migrate import run_migrations
+
+STAMP = "2026-01-02 03:04:05.000000"
+
+
+def old_database(tmp_path):
+    """A 0.4.0 database: one mail in the Local archive, one in Gmail, one offloaded, and a
+    rule, a rule version and a decision that use the old action name."""
+    f = tmp_path / "v040.db"
+    run_migrations(f, "0010")
+    eng = make_engine(f)
+    with eng.begin() as c:
+        c.execute(
+            text(
+                "INSERT INTO accounts (id, email, remote_name, status, connected_at) "
+                "VALUES (1, 'a@x.com', 'a', 'CONNECTED', :t)"
+            ),
+            {"t": STAMP},
+        )
+        for i, state in ((1, "local_archive"), (2, "in_mail"), (3, "offloaded")):
+            c.execute(
+                text(
+                    "INSERT INTO mail_messages (id, account_id, provider_id, thread_id, "
+                    "from_addr, to_addrs, cc_addrs, subject, date, size, file_size, sha256, "
+                    "labels, unread, starred, has_attachments, attachments, snippet, "
+                    "file_path, state, first_seen_at, updated_at) VALUES (:i, 1, :p, :p, '', "
+                    "'', '', '', :t, 10, 12, :sha, '[]', 0, 0, 0, '[]', '', 'x', :s, :t, :t)"
+                ),
+                {"i": i, "p": f"m{i}", "t": STAMP, "sha": "0" * 64, "s": state},
+            )
+        c.execute(
+            text(
+                "INSERT INTO rules (id, account_id, name, description, conditions, combine, "
+                "actions, mode, position, enabled, version, created_at, updated_at) VALUES "
+                "(1, 1, 'Junk', 'junk mail', '{}', 'ai_only', :a, 'suggest', 0, 1, 1, :t, :t)"
+            ),
+            {"a": json.dumps([{"kind": "delete"}]), "t": STAMP},
+        )
+        c.execute(
+            text(
+                "INSERT INTO rules (id, account_id, name, description, conditions, combine, "
+                "actions, mode, position, enabled, version, created_at, updated_at) VALUES "
+                "(2, 1, 'News', 'digests', '{}', 'ai_only', :a, 'suggest', 1, 1, 1, :t, :t)"
+            ),
+            {
+                "a": json.dumps([{"kind": "label", "label": "delete"}, {"kind": "archive"}]),
+                "t": STAMP,
+            },
+        )
+        c.execute(
+            text(
+                "INSERT INTO rule_versions (id, rule_id, version, snapshot, saved_by, saved_at) "
+                "VALUES (1, 1, 1, :s, 'admin', :t)"
+            ),
+            {"s": json.dumps({"name": "Junk", "actions": [{"kind": "delete"}]}), "t": STAMP},
+        )
+        c.execute(
+            text(
+                "INSERT INTO rule_decisions (id, account_id, message_id, rule_id, rule_version, "
+                "rule_name, how, why, model, took_ms, actions, changes, labels_seen, status, "
+                "created_at) VALUES (1, 1, 1, NULL, NULL, '', 'manual', 'Deleted by you.', '', "
+                "0, :a, :c, '[]', 'applied', :t)"
+            ),
+            {
+                "a": json.dumps([{"kind": "delete"}]),
+                "c": json.dumps({"add": [], "remove": [], "trash": True}),
+                "t": STAMP,
+            },
+        )
+    eng.dispose()
+    return f
+
+
+def read(f, sql):
+    eng = make_engine(f)
+    try:
+        with eng.begin() as c:
+            return c.execute(text(sql)).all()
+    finally:
+        eng.dispose()
+
+
+def test_local_archive_mail_becomes_offloaded(tmp_path):
+    f = old_database(tmp_path)
+    run_migrations(f)
+    assert read(f, "SELECT version_num FROM alembic_version") == [("0011",)]
+    assert read(f, "SELECT id, state, offload_id FROM mail_messages ORDER BY id") == [
+        (1, "offloaded", None),
+        (2, "in_mail", None),
+        (3, "offloaded", None),
+    ]

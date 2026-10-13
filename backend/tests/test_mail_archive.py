@@ -19,7 +19,7 @@ NOW = datetime(2026, 10, 12, tzinfo=UTC)
 
 def archived(db, layout, acc, subject):
     row = keep(db, layout, acc, make_mail(subject))
-    row.state = MailState.LOCAL_ARCHIVE
+    row.state = MailState.OFFLOADED
     db.commit()
     return row
 
@@ -94,15 +94,15 @@ def test_by_archive_search(db, layout, make_account):
 def test_restore_targets_include_the_archive(db, layout, make_account):
     acc = make_account()
     a = archived(db, layout, acc, "promo")
-    assert restore_targets(db, acc.id, Pick(q="promo", archive=True), None, NOW) == [a.id]
-    assert restore_targets(db, acc.id, Pick(message_ids=[a.id], archive=True), None, NOW) == [a.id]
+    assert restore_targets(db, acc.id, Pick(q="promo"), None, NOW) == [a.id]
+    assert restore_targets(db, acc.id, Pick(message_ids=[a.id]), None, NOW) == [a.id]
 
 
 def _archive(box, *subjects):
     with box.app.state.session_factory() as db:
         for s in subjects:
             row = db.scalar(select(MailMessage).where(MailMessage.subject == s))
-            row.state, row.offload_id = MailState.LOCAL_ARCHIVE, None
+            row.state, row.offload_id = MailState.OFFLOADED, None
         db.commit()
 
 
@@ -112,7 +112,7 @@ async def test_archived_mail_restores_untrashed_or_imported(auth_client, offload
     in_trash, gone = box.row("Old statement"), box.row("Old photos")
     _archive(box, "Old statement", "Old photos")
     box.fake.remove(gone.provider_id)  # Gmail emptied its trash
-    r = _restore(auth_client, box, message_ids=[in_trash.id, gone.id], archive=True)
+    r = _restore(auth_client, box, message_ids=[in_trash.id, gone.id])
     assert r.status_code == 202 and r.json()["count"] == 2
     await box.run_queued()
     assert box.row("Old statement").state == MailState.IN_MAIL
@@ -127,7 +127,7 @@ async def test_restore_the_whole_archive_by_search(auth_client, offload_box):
     box = offload_box
     await _offloaded(auth_client, box)
     _archive(box, "Old statement")
-    r = _restore(auth_client, box, q="statement", archive=True)
+    r = _restore(auth_client, box, q="statement")
     assert r.status_code == 202 and r.json()["count"] == 1
     await box.run_queued()
     assert box.row("Old statement").state == MailState.IN_MAIL
@@ -142,7 +142,7 @@ async def test_a_lost_import_answer_for_an_archived_mail_never_makes_a_second_co
     _archive(box, "Old photos")
     box.fake.remove(row.provider_id)
     _lose_first_import_answer(box)
-    _restore(auth_client, box, message_ids=[row.id], archive=True)
+    _restore(auth_client, box, message_ids=[row.id])
     await box.run_queued()
     await box.backup()  # the check sees the imported mail
     (copy,) = _copies(box, "Old photos")
@@ -265,7 +265,7 @@ async def test_deleting_forever_takes_its_rule_rows_and_offload_item_with_it(
     row = box.row("Old photos")
     off_id = row.offload_id
     with box.app.state.session_factory() as s:
-        s.get(MailMessage, row.id).state = MailState.LOCAL_ARCHIVE
+        s.get(MailMessage, row.id).state = MailState.OFFLOADED
         s.add(RuleDecision(account_id=box.acc.id, message_id=row.id))
         s.add(RuleTodo(account_id=box.acc.id, message_id=row.id))
         s.commit()

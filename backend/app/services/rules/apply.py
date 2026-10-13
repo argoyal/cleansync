@@ -1,7 +1,7 @@
 # backend/app/services/rules/apply.py
 """Applying a decision to Gmail, and undoing it (AI rules spec §6, §7). The exact label
 changes are recorded on the decision before Gmail is called; the local row follows at once.
-Delete checks the local copy, moves the mail to Gmail's trash and into the local archive."""
+Offload checks the local copy, moves the mail to Gmail's trash and marks it offloaded."""
 
 import asyncio
 from collections.abc import Callable
@@ -226,7 +226,7 @@ class Applier:
             row = db.get(MailMessage, d.message_id)
             set_flags(row, new_labels)
             if planned.trash:
-                row.state = MailState.LOCAL_ARCHIVE
+                row.state, row.offload_id = MailState.OFFLOADED, None  # in no offload batch
             d.status, d.reason, d.applied_at = DecisionStatus.APPLIED, None, self.clock()
             db.commit()
         return DecisionStatus.APPLIED
@@ -241,8 +241,8 @@ class Applier:
             changes = dict(d.changes or {})
             labels_now, state, pid = set(row.labels or []), row.state, row.provider_id
             seen = list(d.labels_seen or [])
-            # A trash is undone from the local archive; a label change only while it's in Gmail.
-            if state != (MailState.LOCAL_ARCHIVE if changes.get("trash") else MailState.IN_MAIL):
+            # An offload is undone while it's still offloaded; a label change while in Gmail.
+            if state != (MailState.OFFLOADED if changes.get("trash") else MailState.IN_MAIL):
                 d.reason = NOT_UNDONE_MSG
                 db.commit()
                 return UndoResult(DecisionStatus.APPLIED, [])

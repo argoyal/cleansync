@@ -40,7 +40,7 @@ from app.services.mail.reader import (
     served_type,
     user_label_map,
 )
-from app.services.mail.search import SearchError, mail_conditions
+from app.services.mail.search import VIEW_ALIASES, SearchError, mail_conditions
 from app.services.mail.store import eml_path
 
 MAX_QUERY_CHARS = 1000
@@ -48,7 +48,6 @@ MAX_QUERY_CHARS = 1000
 THREAD_STATES = {
     "offloaded": (MailState.OFFLOADED,),
     "deleted": (MailState.DELETED,),
-    "archive": (MailState.LOCAL_ARCHIVE,),
 }
 log = logging.getLogger(__name__)
 
@@ -254,14 +253,13 @@ def thread(
     account_id: int,
     request: Request,
     view: str = "all",
-    archive: bool = False,
     ctx: AuthContext = Depends(require_user),
     db: Session = Depends(get_db),
 ):
     account = account_or_404(db, account_id)
     if valid_mail_id(thread_id) is None:
         raise HTTPException(404, "thread not found")
-    states = THREAD_STATES.get("archive" if archive else view, (MailState.IN_MAIL,))
+    states = THREAD_STATES.get(VIEW_ALIASES.get(view, view), (MailState.IN_MAIL,))
     rows = db.scalars(
         select(MailMessage)
         .where(

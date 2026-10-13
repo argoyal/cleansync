@@ -184,18 +184,14 @@ def restorable_labels(db: Session, account_id: int, labels: list[str]) -> list[s
 def restore_targets(
     db: Session, account_id: int, pick: Pick, offload_id: int | None, now: datetime
 ) -> list[int]:
-    """The offloaded, Deleted-in-Gmail and local-archive mails of a pick (or of one offload): the only ones
+    """The offloaded and Deleted-in-Gmail mails of a pick (or of one offload): the only ones
     a restore touches. Mail already in Gmail is never part of it."""
-    restorable = (MailState.OFFLOADED, MailState.DELETED, MailState.LOCAL_ARCHIVE)
+    restorable = (MailState.OFFLOADED, MailState.DELETED)
     if offload_id is None and (pick.message_ids or pick.thread_ids):
         # A picked list can be longer than SQLite takes in one query: asked in chunks.
         column = MailMessage.id if pick.message_ids else MailMessage.thread_id
         rows = rows_where_in(db, account_id, column, pick.message_ids or pick.thread_ids or [])
-        # A picked thread can hold archived and offloaded mail: keep to the side it was picked on.
-        side = (
-            (MailState.LOCAL_ARCHIVE,) if pick.archive else (MailState.OFFLOADED, MailState.DELETED)
-        )
-        found = {r.id: r for r in rows if r.state in side}
+        found = {r.id: r for r in rows if r.state in restorable}
         return [r.id for r in sorted(found.values(), key=lambda r: (as_utc(r.date), r.id))]
     q = select(MailMessage.id).where(
         MailMessage.account_id == account_id,
@@ -205,13 +201,7 @@ def restore_targets(
         q = q.where(MailMessage.offload_id == offload_id)
     elif (pick.q or "").strip():
         q = q.where(
-            *mail_conditions(
-                db,
-                account_id,
-                view="archive" if pick.archive else "kept",
-                q=(pick.q or "").strip(),
-                now=now,
-            )
+            *mail_conditions(db, account_id, view="kept", q=(pick.q or "").strip(), now=now)
         )
     else:
         return []
@@ -911,9 +901,7 @@ class MailOffloads:
                         select(MailMessage.id).where(
                             MailMessage.account_id == account_id,
                             MailMessage.id.in_(part),
-                            MailMessage.state.in_(
-                                [MailState.OFFLOADED, MailState.DELETED, MailState.LOCAL_ARCHIVE]
-                            ),
+                            MailMessage.state.in_([MailState.OFFLOADED, MailState.DELETED]),
                         )
                     )
                 )

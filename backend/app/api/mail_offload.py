@@ -1,6 +1,6 @@
 """Mail offload and restore (spec 5)."""
 
-from dataclasses import asdict, replace
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
@@ -113,7 +113,7 @@ def get_offload(
 async def restore(body: RestoreMailIn, request: Request, ctx: AuthContext = Depends(require_user)):
     try:
         queued, count = await _offloads(request).request_restore(
-            body.account_id, replace(_pick(body), archive=body.archive), body.offload_id
+            body.account_id, _pick(body), body.offload_id
         )
     except MailError as e:
         raise HTTPException(e.status, str(e)) from e

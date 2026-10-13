@@ -124,3 +124,22 @@ def test_a_thread_opened_from_a_view_shows_that_views_mails(auth_client, db, mak
     assert ids(view="deleted") == ["c"]
     assert [t["thread_id"] for t in _page(auth_client, acc)["threads"]] == ["t"]
     assert [t["count"] for t in _page(auth_client, acc, view="offloaded")["threads"]] == [1]
+
+
+def test_the_old_archive_view_is_answered_as_offloaded(auth_client, db, make_account):
+    acc = make_account()
+    mailbox(db, acc)
+    assert found(db, acc, view="archive") == ["off1"]
+    assert [t["thread_id"] for t in _page(auth_client, acc, view="archive")["threads"]] == ["off1"]
+    r = auth_client.get("/api/mail/threads/off1", params={"account_id": acc.id, "view": "archive"})
+    assert [m["provider_id"] for m in r.json()] == ["off1"]
+    assert (
+        "archive"
+        not in auth_client.get("/api/mail/counts", params={"account_id": acc.id}).json()["views"]
+    )
+
+
+def test_is_archived_is_no_longer_a_search_word(db, make_account):
+    acc = make_account()
+    with pytest.raises(SearchError, match='"is:" knows unread, starred, offloaded and deleted.'):
+        found(db, acc, view="offloaded", q="is:archived")

@@ -102,8 +102,7 @@ class MailState(StrEnum):
     IN_MAIL = "in_mail"  # in Gmail, and kept here
     OFFLOADED = "offloaded"  # CleanSync moved it out of Gmail; kept here
     DELETED = "deleted_in_provider"  # deleted in Gmail by someone else; kept here
-    # Deleted by a rule or by hand: in Gmail's trash (or gone from it), kept here as archive
-    # only, out of the main views and search (AI rules spec §7).
+    # No longer used: migration 0011 moved it into OFFLOADED. Kept so old backups still read.
     LOCAL_ARCHIVE = "local_archive"
 
 

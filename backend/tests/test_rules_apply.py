@@ -101,12 +101,13 @@ async def test_label_created_elsewhere_meanwhile_is_found_after_409(gbox):
     assert len(gbox.fake.user_labels) == 1
 
 
-async def test_delete_checks_copy_trashes_and_archives_locally(gbox):
+async def test_offload_checks_copy_trashes_and_ends_offloaded(gbox):
     row = gbox.add("Spam-ish")
     did = decision(gbox, row, [{"kind": "delete"}])
     assert await gbox.applier.apply(did) == "applied"
     assert "TRASH" in gbox.fake.messages[row.provider_id].labels
-    assert get(gbox, MailMessage, row.id).state == MailState.LOCAL_ARCHIVE
+    assert get(gbox, MailMessage, row.id).state == MailState.OFFLOADED
+    assert get(gbox, MailMessage, row.id).offload_id is None
 
 
 async def test_delete_refuses_a_bad_copy_and_changes_nothing(gbox):
@@ -171,9 +172,7 @@ async def test_delete_by_hand_is_logged_and_undoable(gbox):
     assert "TRASH" not in gbox.fake.messages[row.provider_id].labels
     await gbox.applier.delete_by_hand(gbox.acc.id, row.id)
     with gbox.sf() as db:
-        assert (
-            db.scalar(select(MailMessage).where(MailMessage.id == row.id)).state == "local_archive"
-        )
+        assert db.scalar(select(MailMessage).where(MailMessage.id == row.id)).state == "offloaded"
 
 
 async def test_label_already_on_the_mail_is_not_undone(gbox):
@@ -329,7 +328,7 @@ async def test_rule_archive_and_delete_keep_label_views_and_counts_right(gbox):
         )
     assert "INBOX" not in rows
     c = counts()
-    assert c["inbox"] == 1 and c["all"] == 2 and c["archive"] == 0
+    assert c["inbox"] == 1 and c["all"] == 2 and c["offloaded"] == 0
     assert await gbox.applier.apply(decision(gbox, b, [{"kind": "delete"}])) == "applied"
     c = counts()
-    assert c["inbox"] == 0 and c["all"] == 1 and c["archive"] == 1
+    assert c["inbox"] == 0 and c["all"] == 1 and c["offloaded"] == 1
