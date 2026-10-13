@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { Link } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
-import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
+import { ACCOUNT, type Call, json, mockApi, renderApp } from "../../test/utils";
 import { allPickedText, MailReader } from "./MailReader";
 
 const ACTIVE = { ...ACCOUNT, services: { files: "active" as const, mail: "active" as const }, mail_permission: true };
@@ -663,5 +663,96 @@ describe("Pick all and the actions of each view", () => {
     expect(await within(out).findByRole("button", { name: "Delete forever…" })).toBeInTheDocument();
     expect(within(out).getByRole("button", { name: "Restore to Gmail" })).toBeInTheDocument();
     expect(within(out).queryByRole("button", { name: "Offload" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Run rules on a search or a pick", () => {
+  const TWO = { threads: [thread({ thread_id: "t1", subject: "One" }), thread({ thread_id: "t2", subject: "Two" })], next_cursor: null, total: null, total_bytes: null };
+  const base = { description: "x", mode: "suggest", position: 0, version: 1, decided_7d: 0, senders: [] };
+  const RULES = [
+    { ...base, id: 2, name: "Marketing", conditions: { list_unsubscribe: true }, combine: "fixed_then_ai", actions: [{ kind: "label", label: "Marketing" }, { kind: "archive" }], enabled: true },
+    { ...base, id: 3, name: "Calendar", conditions: { calendar_invite: true }, combine: "fixed_only", actions: [{ kind: "label", label: "Calendar" }], enabled: true, position: 1 },
+    { ...base, id: 4, name: "Old", conditions: {}, combine: "ai_only", actions: [{ kind: "archive" }], enabled: false, position: 2 },
+  ];
+  const JOB = { job_id: 9, state: "PREVIEWING", total: 2, decided: 0, planned: 0, no_rule: 0, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [], view: "inbox", q: "", rule_ids: [2], filter_text: "", left_out: 0, skip_reasons: [] };
+  const api = (modelSet = true) =>
+    mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": TWO,
+      "GET /api/mail/totals": { total: 1284, total_bytes: 1 },
+      "GET /api/rules": RULES,
+      "GET /api/rules/sorting": { enabled: false, waiting: 0, sorted_today: 0, suggested: 0, failing_since: null, last_error: null, warning: false, model_set: modelSet, paused: null },
+      "POST /api/rule-jobs": { job_id: 9 },
+      "GET /api/rule-jobs/9": JOB,
+    });
+  const open = (route: string) => renderApp(<MailReader account={ACTIVE} />, { withAccount: true, route });
+  const started = (calls: Call[]) => calls.find((c) => c.method === "POST" && c.path === "/api/rule-jobs")?.body;
+
+  it("is offered above a search in a Gmail view, not on a plain view or in CleanSync's views", async () => {
+    api();
+    const plain = open("/mail?view=inbox");
+    await screen.findByRole("checkbox", { name: "Pick One" });
+    expect(screen.queryByRole("button", { name: "Run rules" })).not.toBeInTheDocument();
+    plain.unmount();
+    for (const route of ["/mail?view=offloaded&q=shop", "/mail?view=deleted&q=shop", "/mail?view=suggested&q=shop"]) {
+      const r = open(route);
+      await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
+      expect(screen.queryByRole("button", { name: "Run rules" }), route).not.toBeInTheDocument();
+      r.unmount();
+    }
+    open("/mail?view=inbox&q=from%3Ashop");
+    expect(await screen.findByRole("button", { name: "Run rules" })).toBeInTheDocument();
+  });
+
+  it("runs the ticked rules on every mail of the search", async () => {
+    const { calls } = api();
+    open("/mail?view=inbox&q=from%3Ashop");
+    await screen.findByText(/1,284 mails/);
+    await userEvent.click(await screen.findByRole("button", { name: "Run rules" }));
+    const dialog = screen.getByRole("dialog", { name: "Run rules" });
+    expect(within(dialog).getByText("Run on: 1,284 mails matching from:shop")).toBeInTheDocument();
+    const run = within(dialog).getByRole("button", { name: "Run" });
+    expect(run).toBeDisabled();
+    expect(await within(dialog).findByRole("checkbox", { name: /^Marketing/ })).not.toBeChecked();
+    expect(within(dialog).queryByRole("checkbox", { name: /^Old/ })).not.toBeInTheDocument(); // turned off
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: /^Marketing/ }));
+    await userEvent.click(run);
+    expect(await screen.findByText("Deciding… 0 of 2")).toBeInTheDocument();
+    expect(started(calls)).toEqual({ account_id: 1, rule_ids: [2], view: "inbox", q: "from:shop" });
+  });
+
+  it("runs on picked threads, or on a pick-all as the view, label and search", async () => {
+    const { calls } = api();
+    const first = open("/mail?view=inbox");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
+    await userEvent.click(within(screen.getByRole("region", { name: "Picked mail" })).getByRole("button", { name: "Run rules" }));
+    let dialog = screen.getByRole("dialog", { name: "Run rules" });
+    expect(within(dialog).getByText("Run on: 1 picked thread")).toBeInTheDocument();
+    await userEvent.click(await within(dialog).findByRole("checkbox", { name: /^Calendar/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Run" }));
+    await waitFor(() => expect(started(calls)).toEqual({ account_id: 1, rule_ids: [3], view: "inbox", thread_ids: ["t1"] }));
+    first.unmount();
+    const again = api();
+    open("/mail?label=Label_2&q=older_than%3A1y");
+    await screen.findByText(/1,284 mails/);
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick all" }));
+    expect(screen.getAllByRole("button", { name: "Run rules" })).toHaveLength(1); // the bar's only
+    await userEvent.click(within(screen.getByRole("region", { name: "Picked mail" })).getByRole("button", { name: "Run rules" }));
+    dialog = screen.getByRole("dialog", { name: "Run rules" });
+    expect(within(dialog).getByText("Run on: 1,284 mails matching older_than:1y")).toBeInTheDocument();
+    await userEvent.click(await within(dialog).findByRole("checkbox", { name: /^Marketing/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Run" }));
+    await waitFor(() => expect(started(again.calls)).toEqual({ account_id: 1, rule_ids: [2], view: "all", label: "Label_2", q: "older_than:1y", pick_all: true }));
+  });
+
+  it("greys out a rule that needs a model when none is set", async () => {
+    api(false);
+    open("/mail?view=inbox&q=x");
+    await userEvent.click(await screen.findByRole("button", { name: "Run rules" }));
+    const dialog = screen.getByRole("dialog", { name: "Run rules" });
+    expect(await within(dialog).findByRole("checkbox", { name: /^Marketing/ })).toBeDisabled();
+    expect(within(dialog).getByText("Set up a model in Settings → Models.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("checkbox", { name: /^Calendar/ })).toBeEnabled();
   });
 });

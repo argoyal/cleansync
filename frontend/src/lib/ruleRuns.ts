@@ -90,3 +90,10 @@ export function runBlock(rule: { enabled: boolean; combine: string }, modelSet: 
   if (rule.combine !== "fixed_only" && !modelSet) return "Set up a model in Settings → Models.";
   return null;
 }
+
+/** The rule picker's first line (running rules spec §4): what the ticked rules will run on. */
+export function runOnText(on: { threads: number } | { total: number | undefined; q: string; place: string }): string {
+  if ("threads" in on) return `Run on: ${on.threads.toLocaleString()} picked ${on.threads === 1 ? "thread" : "threads"}`;
+  const n = on.total === undefined ? "the mails" : mails(on.total);
+  return on.q.trim() ? `Run on: ${n} matching ${on.q.trim()}` : `Run on: ${n} in ${on.place}`;
+}

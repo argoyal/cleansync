@@ -9,6 +9,7 @@ import { useRestoreMail } from "../../hooks/useMailOffload";
 import { useApprove } from "../../hooks/useRules";
 import { formatBytes } from "../../lib/format";
 import { mailHref, mailView, viewKind, viewTitle } from "../../lib/mail";
+import { runOnText } from "../../lib/ruleRuns";
 import { OffloadBatches } from "../../pages/MailOffloadPage";
 import { useToast } from "../Toasts";
 import { Button } from "../ui";
@@ -18,10 +19,11 @@ import { MailList, type PickState } from "./MailList";
 import { isNarrow, MailThread } from "./MailThread";
 import { MakeRuleDialog } from "./MakeRuleDialog";
 import { OffloadMailDialog } from "./OffloadMailDialog";
+import { RulePickerDialog } from "./RulePickerDialog";
 
 /** "Make a rule…" drafts from at most this many picked mails (mail panel spec §6). */
 export const RULE_FROM_AT_MOST = 10;
-type PickedAction = "offload" | "rule" | null;
+type PickedAction = "offload" | "rule" | "rules" | null;
 type Forever = { message_ids: number[] } | "all";
 
 const WHOLE_MAILBOX_MSG = "Search or pick a label first: Offload never takes the whole mailbox.";
@@ -130,7 +132,7 @@ export function MailReader({ account }: { account: Account }) {
           </Button>
         )}
         <div className="ml-auto flex flex-wrap gap-2">
-          <MailHeaderActions account={account} q={q} view={view} label={label} scope={scope} />
+          <MailHeaderActions account={account} q={q} view={view} label={label} scope={scope} total={totals?.total} picking={pickState !== "none"} />
         </div>
       </div>
       {view === "offloaded" && (
@@ -155,6 +157,7 @@ export function MailReader({ account }: { account: Account }) {
               </Button>
               {wholeMailbox && <span className="text-table text-ink-2">{WHOLE_MAILBOX_MSG}</span>}
               <Button onClick={() => setPickedAction("rule")}>Make a rule…</Button>
+              <Button onClick={() => setPickedAction("rules")}>Run rules</Button>
             </>
           )}
           {kind === "out" && (
@@ -185,6 +188,14 @@ export function MailReader({ account }: { account: Account }) {
         <OffloadMailDialog account={account} start={all ? pickAll : { thread_ids: [...picked] }} onClose={() => setPickedAction(null)} />
       )}
       {pickedAction === "rule" && <MakeRuleDialog account={account} messageIds={ruleFrom} onClose={() => setPickedAction(null)} />}
+      {pickedAction === "rules" && (
+        <RulePickerDialog
+          account={account}
+          scope={all ? { ...pickAll, pick_all: true } : { view, ...(label ? { label } : {}), thread_ids: [...picked] }}
+          onText={all ? runOnText({ total: totals?.total, q, place: scope ?? "All mail" }) : runOnText({ threads: picked.size })}
+          onClose={() => setPickedAction(null)}
+        />
+      )}
       {forever && (
         <DeleteForeverDialog
           account={account}

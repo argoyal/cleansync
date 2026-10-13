@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { actionText, approveText, confirmLabel, heavyKinds, olderMailScope, ruleLine, runBlock, wouldText } from "./ruleRuns";
+import { actionText, approveText, confirmLabel, heavyKinds, olderMailScope, ruleLine, runBlock, runOnText, wouldText } from "./ruleRuns";
 
 describe("running rules, in words", () => {
   it("names one action and the count, else Apply N changes", () => {
@@ -51,5 +51,12 @@ describe("running rules, in words", () => {
     expect(runBlock({ enabled: true, combine: "fixed_then_ai" }, false)).toBe("Set up a model in Settings → Models.");
     expect(runBlock({ enabled: true, combine: "fixed_only" }, false)).toBeNull();
     expect(runBlock({ enabled: true, combine: "ai_only" }, true)).toBeNull();
+  });
+  it("says what Run rules will run on", () => {
+    expect(runOnText({ total: 1284, q: "from:shop.example.com", place: "Inbox" })).toBe("Run on: 1,284 mails matching from:shop.example.com");
+    expect(runOnText({ total: 1204, q: "", place: "Inbox" })).toBe("Run on: 1,204 mails in Inbox");
+    expect(runOnText({ total: undefined, q: "x", place: "All mail" })).toBe("Run on: the mails matching x");
+    expect(runOnText({ threads: 1 })).toBe("Run on: 1 picked thread");
+    expect(runOnText({ threads: 37 })).toBe("Run on: 37 picked threads");
   });
 });

@@ -3,35 +3,52 @@ import { useState } from "react";
 import type { Account, MailMessageInfo } from "../../api/types";
 import { useOffloadOne, useRestoreMail } from "../../hooks/useMailOffload";
 import { viewKind } from "../../lib/mail";
+import { runOnText } from "../../lib/ruleRuns";
 import { Button, Dialog } from "../ui";
 import { DeleteForeverDialog } from "./DeleteForeverDialog";
 import { MakeRuleDialog } from "./MakeRuleDialog";
 import { OffloadMailDialog } from "./OffloadMailDialog";
 import { RuleChip } from "./RuleChip";
+import { RulePickerDialog } from "./RulePickerDialog";
 
-/** The page's main action (spec §9: the deep indigo button), in the Gmail views only. Picked
- * mail has its own actions in the bar (mail panel spec §6). `scope` names the view or label
- * on screen, which the offload filter doesn't carry over. */
+/** The page's main action (spec §9: the deep indigo button), in the Gmail views only, and Run
+ * rules above a search when nothing is picked (running rules spec §4; picked mail has Run rules
+ * on its bar). `scope` names the view or label on screen; `total` is the search's mail count. */
 export function MailHeaderActions({
   account,
   q,
   view,
+  label = "",
   scope = null,
+  total,
+  picking = false,
 }: {
   account: Account;
   q: string;
   view: string;
   label?: string;
   scope?: string | null;
+  total?: number;
+  picking?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [rules, setRules] = useState(false);
   if (viewKind(view) !== "gmail") return null;
   return (
     <>
+      {q.trim() !== "" && !picking && <Button onClick={() => setRules(true)}>Run rules</Button>}
       <Button tone="main" onClick={() => setOpen(true)}>
         Offload mail…
       </Button>
       {open && <OffloadMailDialog account={account} start={{ q }} scope={scope} onClose={() => setOpen(false)} />}
+      {rules && (
+        <RulePickerDialog
+          account={account}
+          scope={{ view, ...(label ? { label } : {}), q }}
+          onText={runOnText({ total, q, place: scope ?? "All mail" })}
+          onClose={() => setRules(false)}
+        />
+      )}
     </>
   );
 }
