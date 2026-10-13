@@ -61,7 +61,7 @@ Offloads wait while the mail backup is still checking your mailbox (the first ba
 
 **Restore to Gmail** works on one mail, a conversation, a search, a whole offload, or everything deleted in Gmail (Recovery → Mail). A mail still in Gmail's trash is taken out of it; a mail Gmail no longer has is imported from its stored `.eml` with its labels; a mail already in Gmail is left as it is. Before importing, CleanSync looks in Gmail for the mail by its Message-ID, so a restore asked again after Gmail's answer got lost doesn't import it twice; and if the mail backup sees that import first, it keeps it as the same mail, not a new one. The one exception is below.
 
-Mail removed from Gmail for good is imported again from its stored `.eml` and comes back to the Inbox; the summary says "imported again".
+Mail removed from Gmail for good is imported again from its stored `.eml` with the labels it had when it was offloaded, so it comes back where it was: in the Inbox if it was there, archived if it was archived. The summary says "imported again".
 
 ## Delete forever
 
