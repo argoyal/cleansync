@@ -177,3 +177,53 @@ def test_thread_list_carries_the_rule_chip(auth_client, mailbox, db):
     assert t["decision"]["rule_name"] == "Newsletters" and t["decision"]["status"] == "suggested"
     m = auth_client.get(f"/api/mail/messages/{row.id}").json()
     assert m["decision"]["why"] == "a digest"
+
+
+async def _offload_for_good_by_a_rule(box, app, subject):
+    """A rule's Offload on a mailbox that allows permanent delete: the mail leaves Gmail."""
+    from app.models import Account
+    from app.services.accounts.oauth import FULL_MAIL_SCOPE
+
+    await box.backup()
+    row = box.row(subject)
+    with app.state.session_factory() as db:
+        acc = db.get(Account, box.acc.id)
+        acc.scopes, acc.permanent_delete = FULL_MAIL_SCOPE, True
+        d = RuleDecision(
+            account_id=box.acc.id,
+            message_id=row.id,
+            rule_name="Junk",
+            how=DecisionHow.AI,
+            actions=[{"kind": "offload"}],
+            labels_seen=list(row.labels),
+            status=DecisionStatus.SUGGESTED,
+        )
+        db.add(d)
+        db.commit()
+        did = d.id
+    assert await app.state.rule_applier.apply(did) == "applied"
+    assert row.provider_id not in box.fake.messages
+    return row
+
+
+async def test_restoring_mail_a_rule_removed_for_good_marks_it_moved_back(
+    auth_client, offload_box, app
+):
+    from app.services.rules.feedback import moved_back
+
+    box = offload_box
+    row = await _offload_for_good_by_a_rule(box, app, "Old photos")
+    assert _restore(auth_client, box, message_ids=[row.id]).status_code == 202
+    await box.run_queued()
+    with app.state.session_factory() as db:
+        assert moved_back(db, row.id)
+
+
+async def test_mail_a_rule_removed_for_good_comes_back_in_the_inbox(auth_client, offload_box, app):
+    box = offload_box
+    row = await _offload_for_good_by_a_rule(box, app, "Old photos")
+    assert _restore(auth_client, box, message_ids=[row.id]).status_code == 202
+    await box.run_queued()
+    back = box.row("Old photos")
+    assert back.state == MailState.IN_MAIL and "INBOX" in back.labels
+    assert "INBOX" in box.fake.messages[back.provider_id].labels

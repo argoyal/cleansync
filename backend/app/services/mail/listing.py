@@ -15,6 +15,7 @@ from app.models import MailLabel, MailMessage, MailMessageLabel, RuleDecision, R
 from app.models.enums import DecisionStatus, MailState, RuleJobState
 from app.services.mail.gmail import valid_mail_id
 from app.services.mail.search import SearchError, archived_conditions
+from app.services.rules.apply import is_forever
 
 BAD_CURSOR_MSG = "That page of the list is no longer valid. Start from the top."
 
@@ -66,6 +67,8 @@ def decision_chips(db: Session, message_ids: list[int]) -> dict[int, dict]:
             "status": d.status,
             "how": d.how,
             "why": d.why,
+            "undoable": not (d.changes or {}).get("removed"),
+            "forever": is_forever(d.actions),
         }
     return out
 

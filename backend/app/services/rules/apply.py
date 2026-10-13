@@ -1,7 +1,8 @@
 # backend/app/services/rules/apply.py
 """Applying a decision to Gmail, and undoing it (AI rules spec §6, §7). The exact label
 changes are recorded on the decision before Gmail is called; the local row follows at once.
-Offload checks the local copy, moves the mail to Gmail's trash and marks it offloaded."""
+Offload checks the local copy, then removes the mail from Gmail: for good when the mailbox
+allows permanent delete, else to Gmail's trash (bulk offload spec §4)."""
 
 import asyncio
 from collections.abc import Callable
@@ -15,6 +16,8 @@ from app.core.clock import utcnow
 from app.models import Account, MailLabel, MailMessage, RuleDecision
 from app.models.enums import DecisionHow, DecisionStatus, MailState
 from app.paths import Layout
+from app.services.accounts.permanent import permanent_delete_on, permission_lost
+from app.services.events.bus import EventBus
 from app.services.google.client import RateLimited
 from app.services.google.quota import BudgetReached
 from app.services.mail.adapter import (
@@ -23,6 +26,7 @@ from app.services.mail.adapter import (
     MailAuthError,
     MailNotFound,
     MailUnreachable,
+    PermanentDeleteRefused,
 )
 from app.services.mail.index import save_labels, set_flags
 from app.services.mail.store import check_eml, eml_path
@@ -36,6 +40,10 @@ RECONNECT_WAIT = "Reconnect this Google account; this is tried again after that.
 WAITING_REASONS = (BUDGET_WAIT, UNREACHABLE_WAIT, RECONNECT_WAIT)
 WAIT_ERRORS = (BudgetReached, RateLimited, MailUnreachable, MailAuthError)
 GONE_ROW_MSG = "That mail isn't here any more."
+NOT_UNDOABLE_MSG = (
+    "It was removed from Gmail for good, so Undo can't bring it back. "
+    "Use Restore to Gmail in Offloaded."
+)
 SYSTEM_LABELS = {
     "INBOX",
     "SPAM",
@@ -84,6 +92,10 @@ def plan_changes(actions: list[dict], labels_now: list[str]) -> Planned:
     return Planned(list(dict.fromkeys(add)), list(dict.fromkeys(remove)), trash)
 
 
+def is_forever(actions: list[dict] | None) -> bool:
+    return any(isinstance(a, dict) and a.get("kind") == "delete_forever" for a in actions or [])
+
+
 def _norm(name: str) -> str:
     return " ".join(name.split()).casefold()
 
@@ -109,11 +121,13 @@ class Applier:
         session_factory,
         layout: Layout,
         adapter_for: Callable[[Account], MailAdapter],
+        bus: EventBus | None = None,
         clock=utcnow,
     ) -> None:
         self.sf = session_factory
         self.layout = layout
         self.adapter_for = adapter_for
+        self.bus = bus or EventBus()
         self.clock = clock
         self._label_lock = asyncio.Lock()  # one label creation at a time: never two copies
 
@@ -171,6 +185,19 @@ class Applier:
             db.commit()
         return DecisionStatus.FAILED
 
+    async def _take_out(self, acc: Account, adapter: MailAdapter, pid: str) -> bool:
+        """Offload's Gmail step (bulk offload spec §4): for good when the mailbox allows
+        permanent delete, else to Gmail's trash. True when it was removed for good."""
+        if permanent_delete_on(acc):
+            try:
+                await adapter.delete(pid)
+                return True
+            except PermanentDeleteRefused:
+                with self.sf() as db:
+                    permission_lost(db, self.bus, acc.id)
+        await adapter.trash(pid)
+        return False
+
     async def apply(self, decision_id: int) -> str:
         with self.sf() as db:
             d = db.get(RuleDecision, decision_id)
@@ -197,6 +224,7 @@ class Applier:
                     decision_id,
                     f"The copy here didn't check out ({problem}), so nothing was offloaded.",
                 )
+        removed = False
         adapter = self.adapter_for(acc)
         try:
             add = [await self._label_id(adapter, acc.id, n) for n in planned.add_names]
@@ -206,8 +234,12 @@ class Applier:
                 db.get(RuleDecision, decision_id).changes = changes
                 db.commit()
             if planned.trash:
-                await adapter.trash(pid)
-                new_labels = [x for x in labels_now if x != "INBOX"] + ["TRASH"]
+                removed = await self._take_out(acc, adapter, pid)
+                # Removed for good: no Trash label, and the Inbox label stays so a restore
+                # imports it back where it was.
+                new_labels = (
+                    labels_now if removed else [x for x in labels_now if x != "INBOX"] + ["TRASH"]
+                )
             elif add or planned.remove:
                 new_labels = list(await adapter.modify(pid, add, planned.remove))
             else:
@@ -223,6 +255,8 @@ class Applier:
             return self._fail(decision_id, str(e))
         with self.sf() as db:
             d = db.get(RuleDecision, decision_id)
+            if removed:
+                d.changes = {**(d.changes or {}), "removed": True}  # no Undo (spec §4)
             row = db.get(MailMessage, d.message_id)
             set_flags(row, new_labels)
             if planned.trash:
@@ -241,6 +275,10 @@ class Applier:
             changes = dict(d.changes or {})
             labels_now, state, pid = set(row.labels or []), row.state, row.provider_id
             seen = list(d.labels_seen or [])
+            if changes.get("removed"):
+                d.reason = NOT_UNDOABLE_MSG
+                db.commit()
+                return UndoResult(DecisionStatus.APPLIED, [])
             # An offload is undone while it's still offloaded; a label change while in Gmail.
             if state != (MailState.OFFLOADED if changes.get("trash") else MailState.IN_MAIL):
                 d.reason = NOT_UNDONE_MSG

@@ -386,6 +386,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         session_factory=session_factory,
         layout=layout,
         adapter_for=lambda acc: app.state.mail.adapter_for(acc),  # tests swap the adapters
+        bus=app.state.bus,
     )
     app.state.rule_worker = SortingWorker(
         session_factory=session_factory,

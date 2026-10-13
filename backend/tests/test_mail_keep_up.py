@@ -215,3 +215,29 @@ async def test_mail_taken_out_of_the_trash_by_hand_after_a_rule_offloaded_it_cou
     jobs = RuleJobs(box.sf, None, type("W", (), {"poke": lambda s: None})())
     with pytest.raises(RuleJobProblem):
         jobs.start_preview(box.acc.id, rule_ids=[rule_id], scope=RunScope(message_ids=[mail_id]))
+
+
+async def test_offloaded_mail_removed_from_gmail_for_good_stays_offloaded(box):
+    ids = await _backed_up(box, n=1)
+    with box.sf() as db:
+        row = db.query(MailMessage).filter_by(provider_id=ids[0]).one()
+        row.state, row.offload_id = MailState.OFFLOADED, 7
+        db.commit()
+    box.fake.remove(ids[0])  # a permanent delete: no trash step, straight to messagesDeleted
+    await box.run()
+    assert _row(box, ids[0]).state == MailState.OFFLOADED and _row(box, ids[0]).offload_id == 7
+
+
+async def test_a_recheck_leaves_mail_removed_for_good_offloaded(box):
+    ids = await _backed_up(box, n=2)
+    with box.sf() as db:
+        row = db.query(MailMessage).filter_by(provider_id=ids[0]).one()
+        row.state, row.offload_id = MailState.OFFLOADED, 7
+        db.commit()
+    box.fake.forget_history()
+    del box.fake.messages[ids[0]]  # gone from Gmail, and no history says so
+    box.fake.forget_history()
+    state, _, _ = await box.run()
+    assert state == JobState.SUCCESS
+    assert _row(box, ids[0]).state == MailState.OFFLOADED
+    assert eml_path(box.layout, box.acc.email, _row(box, ids[0]).file_path).is_file()
