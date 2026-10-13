@@ -7,11 +7,10 @@ import { useStopOffload } from "../../hooks/useMailOffload";
 import { useDeleteForever } from "../../hooks/useRules";
 import { percent } from "../../lib/format";
 import { viewKind } from "../../lib/mail";
+import { mails } from "../../lib/plural";
 import { useToast } from "../Toasts";
 import { Bar, Button, Dialog, Field, Notice, inputClass } from "../ui";
 import { parseTyped } from "./OffloadMailDialog";
-
-const mails = (n: number) => `${n.toLocaleString()} ${n === 1 ? "mail" : "mails"}`;
 
 const PLACES: Record<string, string> = { offloaded: "Offloaded", deleted: "Deleted in Gmail" };
 
@@ -48,8 +47,8 @@ function ForeverJob({ jobId, count, onClose }: { jobId: number; count: number; o
       </Dialog>
     );
   }
-  // Stopped by the owner: a choice, not a failure (the server words it "Stopped by you. …").
-  const stopped = job?.state === "FAILED" && !!job.reason?.startsWith("Stopped by you");
+  // Stopped by the owner: a choice, not a failure (the server says so with `stopped`).
+  const stopped = job?.state === "FAILED" && job.stopped;
   const busy = !job || job.state === "WAITING" || job.state === "RUNNING";
   return (
     <Dialog

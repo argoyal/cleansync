@@ -8,6 +8,11 @@ import { allPickedText, MailReader } from "./MailReader";
 
 const ACTIVE = { ...ACCOUNT, services: { files: "active" as const, mail: "active" as const }, mail_permission: true };
 
+const JOB_OFF = {
+  id: 3, account_id: 1, filter_text: "Inbox", state: "RUNNING", total: 2, done: 0, skipped: 0, not_done: 2, bytes: 0, reason: null,
+  created_at: "2026-10-10T09:00:00Z", finished_at: null, kind: "offload", removed: 0, trashed: 0, trash_until: "2026-11-09", google_emptied: false, stopped: false,
+};
+
 export function thread(over: Record<string, unknown> & { thread_id: string }) {
   return {
     count: 1,
@@ -435,7 +440,7 @@ describe("the CleanSync views", () => {
   const OFF = {
     id: 7, account_id: 1, filter_text: "older_than:1y", state: "DONE", total: 3, done: 3, skipped: 0, not_done: 0,
     bytes: 3000, reason: null, created_at: "2026-10-10T09:00:00Z", finished_at: "2026-10-10T09:20:00Z",
-    kind: "offload", removed: 0, trashed: 3, trash_until: "2026-11-09", google_emptied: false,
+    kind: "offload", removed: 0, trashed: 3, trash_until: "2026-11-09", google_emptied: false, stopped: false,
   };
 
   it("opens Offloaded for an old Local archive link", async () => {
@@ -637,6 +642,56 @@ describe("Pick all and the actions of each view", () => {
     expect(screen.getByRole("dialog", { name: "Delete forever" })).toBeInTheDocument();
     fireEvent.click(screen.getByText("Go elsewhere"));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("drops a Delete forever read that comes back after the view changed", async () => {
+    let answer: (r: Response) => void = () => {};
+    api({ "GET /api/mail/threads/t1": () => new Promise<Response>((r) => (answer = r)) });
+    renderApp(withLink("/mail?view=inbox"), { withAccount: true, route: "/mail?view=offloaded" });
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
+    await userEvent.click(within(bar()).getByRole("button", { name: "Delete forever…" })); // reads the picked thread's mails
+    fireEvent.click(screen.getByText("Go elsewhere"));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Picked mail" })).not.toBeInTheDocument());
+    answer(json(200, [msg({ id: 4, state: "offloaded" })]));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("deletes picked mail in Gmail forever with permanent delete on: the picked threads' mails and the typed count", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": { threads: [thread({ thread_id: "t1", subject: "One" })], next_cursor: null, total: 1, total_bytes: 1 },
+      "GET /api/mail/threads/t1": [msg({ id: 4 }), msg({ id: 5 })],
+      "POST /api/mail/delete-forever": { deleted: 0, left: 2, job_id: 3 },
+      "GET /api/mail/offloads/3": { ...JOB_OFF, id: 3, kind: "delete_forever" },
+    });
+    renderApp(<MailReader account={{ ...ACTIVE, permanent_delete: true }} />, { withAccount: true, route: "/mail?view=inbox" });
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick One" }));
+    await userEvent.click(within(bar()).getByRole("button", { name: "Delete forever…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete forever" });
+    await userEvent.type(within(dialog).getByLabelText("Type 2 to delete forever"), "2");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete forever" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/delete-forever")?.body).toEqual({ account_id: 1, view: "inbox", message_ids: [4, 5], confirm: 2 }));
+  });
+
+  it("deletes a pick-all in Gmail forever with permanent delete on: the view, label and search with the typed count", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACTIVE],
+      "GET /api/mail/counts": { views: {}, labels: [] },
+      "GET /api/mail/threads": TWO,
+      "GET /api/mail/totals": { total: 7, total_bytes: 1 },
+      "POST /api/mail/delete-forever": { deleted: 0, left: 7, job_id: 3 },
+      "GET /api/mail/offloads/3": { ...JOB_OFF, id: 3, kind: "delete_forever" },
+    });
+    renderApp(<MailReader account={{ ...ACTIVE, permanent_delete: true }} />, { withAccount: true, route: "/mail?view=inbox&q=from%3Ashop" });
+    await screen.findByText(/7 mails/);
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick all" }));
+    await userEvent.click(within(bar()).getByRole("button", { name: "Delete forever…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete forever" });
+    await userEvent.type(within(dialog).getByLabelText("Type 7 to delete forever"), "7");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete forever" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/delete-forever")?.body).toEqual({ account_id: 1, view: "inbox", q: "from:shop", confirm: 7 }));
   });
 
   it("offers Offload and Make a rule… for a mail in Gmail, and Restore or Delete forever… for one out of Gmail", async () => {

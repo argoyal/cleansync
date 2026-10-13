@@ -18,14 +18,15 @@ import type {
 import { useToast } from "../components/Toasts";
 
 export const RULE_KEYS = ["rules", "rules-sorting", "rule-decisions", "rule-job", "rule-job-open", "rule-job-matches"];
-const MAIL = ["mail-threads", "mail-counts", "mail-totals", "mail-thread", "mail-message"];
+/** The mail queries a change to mail or rules refreshes. */
+export const MAIL_LISTS = ["mail-threads", "mail-counts", "mail-totals", "mail-thread", "mail-message"];
 
 /**
  * One mutation: on success it refreshes rules and mail lists; on error it shows a toast.
  * `quiet` leaves the error to the caller, who shows it next to the form.
  * `keys` replaces the list that is refreshed.
  */
-function useChange<A, R>(fn: (a: A) => Promise<R>, { quiet = false, keys = [...RULE_KEYS, ...MAIL] } = {}) {
+function useChange<A, R>(fn: (a: A) => Promise<R>, { quiet = false, keys = [...RULE_KEYS, ...MAIL_LISTS] } = {}) {
   const qc = useQueryClient();
   const toast = useToast();
   return useMutation({

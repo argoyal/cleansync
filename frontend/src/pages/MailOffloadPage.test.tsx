@@ -23,6 +23,7 @@ const OFF = {
   trashed: 120,
   trash_until: "2026-11-09",
   google_emptied: false,
+  stopped: false,
   skipped_items: [{ message_id: 5, subject: "Old photos", from_addr: "friend@example.com", date: "2024-05-01T00:00:00Z", reason: "The copy on this server didn't check out (the file's contents changed), so it stayed in Gmail." }],
 };
 const open = (id = 7) => renderApp(<MailOffloadPage />, { withAccount: true, route: `/mail/offloads/${id}`, path: "/mail/offloads/:id" });
@@ -75,6 +76,33 @@ describe("an offload's page", () => {
     await waitFor(() => expect(restore).toBeEnabled()); // once the account has loaded
     await userEvent.click(restore);
     await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/restore")?.body).toEqual({ account_id: 1, offload_id: 7 }));
+  });
+
+  it("doesn't say the rest stayed in Gmail after a stop or restart left the last batch unknown", async () => {
+    mockApi({
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/mail/offloads/7": {
+        ...OFF,
+        state: "FAILED",
+        not_done: 40,
+        stopped: true,
+        reason: "Stopped by you. The last batch may already be out of Gmail. Those mails will show in Deleted in Gmail.",
+      },
+    });
+    open();
+    expect(await screen.findByText(/may already be out of Gmail/)).toBeInTheDocument();
+    expect(screen.queryByText(/weren't reached/)).not.toBeInTheDocument();
+    expect(screen.getByText("40 weren't counted as offloaded.")).toBeInTheDocument();
+  });
+
+  it("also leaves out where the rest is when the reason itself says the last batch may be out", async () => {
+    mockApi({
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/mail/offloads/7": { ...OFF, state: "FAILED", not_done: 40, stopped: false, reason: "CleanSync restarted. The last batch may already be out of Gmail." },
+    });
+    open();
+    expect(await screen.findByText(/CleanSync restarted/)).toBeInTheDocument();
+    expect(screen.queryByText(/weren't reached/)).not.toBeInTheDocument();
   });
 
   it("lists every offload batch", async () => {

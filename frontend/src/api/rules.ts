@@ -141,8 +141,13 @@ export type AiTest = { ok: boolean; took_ms: number; mode: string | null; chose:
 
 const ACTION_WORDS = { archive: "Archive", mark_read: "Mark read", star: "Star", offload: "Offload", delete_forever: "Delete forever" } as const;
 
+/** The kind an action is read as. An old rule may still carry `delete`, which has always meant Offload. */
+export function actionKind(a: RuleAction): RuleAction["kind"] {
+  return (a.kind as string) === "delete" ? "offload" : a.kind;
+}
+
 export function describeAction(a: RuleAction): string {
-  return a.kind === "label" ? `Label ${a.label}` : ACTION_WORDS[a.kind];
+  return a.kind === "label" ? `Label ${a.label}` : ACTION_WORDS[actionKind(a) as keyof typeof ACTION_WORDS];
 }
 
 export const useRules = (accountId: number | null) =>

@@ -1,6 +1,6 @@
 import type { IconName } from "../components/Icon";
 import { formatDay } from "./format";
-import { mails } from "./ruleRuns";
+import { mails } from "./plural";
 
 export type MailViewDef = { id: string; label: string; icon: IconName };
 

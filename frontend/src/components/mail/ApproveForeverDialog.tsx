@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { useApprove } from "../../hooks/useRules";
-import { mails } from "../../lib/ruleRuns";
+import { mails } from "../../lib/plural";
 import { Button, Dialog, Field, inputClass } from "../ui";
 import { parseTyped } from "./OffloadMailDialog";
 

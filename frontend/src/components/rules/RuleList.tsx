@@ -3,13 +3,12 @@ import { useState } from "react";
 import { friendlyError } from "../../api/client";
 import { describeAction, type Rule, ruleFields } from "../../api/rules";
 import { useDeleteRule, useForgetSender, useReorderRules, useSaveRule } from "../../hooks/useRules";
+import { mails } from "../../lib/plural";
 import { runBlock } from "../../lib/ruleRuns";
 import { useToast } from "../Toasts";
 import { Button, Dialog, Notice } from "../ui";
 import { RuleForm } from "./RuleForm";
 import { TryIt } from "./TryIt";
-
-const mails = (n: number) => `${n.toLocaleString()} ${n === 1 ? "mail" : "mails"}`;
 
 /** `ids` with the item at `from` moved to `to`. */
 function moved(ids: number[], from: number, to: number): number[] {
@@ -78,7 +77,7 @@ function Senders({ rule, accountId }: { rule: Rule; accountId: number }) {
 
 /** Run on a rule card (running rules spec §3): this rule alone over the Inbox. Disabled, with
  * the reason beside it, when the rule is off or needs a model that isn't set up. */
-function RunButton({ rule, modelSet, onRun }: { rule: Rule; modelSet: boolean; onRun: (rule: Rule) => void }) {
+function RunButton({ rule, modelSet, onRun }: { rule: Rule; modelSet: boolean | null; onRun: (rule: Rule) => void }) {
   const blocked = runBlock(rule, modelSet);
   const why = `run-why-${rule.id}`;
   return (
@@ -96,8 +95,8 @@ function RunButton({ rule, modelSet, onRun }: { rule: Rule; modelSet: boolean; o
 }
 
 /** The rules in the order they are asked, as cards. Drag a card, or use Move up / Move down.
- * `onRun` opens a run of one rule over the Inbox; `modelSet` says whether Sorting has a model. */
-export function RuleList({ rules, accountId, modelSet, onRun }: { rules: Rule[]; accountId: number; modelSet: boolean; onRun: (rule: Rule) => void }) {
+ * `onRun` opens a run of one rule over the Inbox; `modelSet` says whether Sorting has a model (null while that is loading). */
+export function RuleList({ rules, accountId, modelSet, onRun }: { rules: Rule[]; accountId: number; modelSet: boolean | null; onRun: (rule: Rule) => void }) {
   const [editing, setEditing] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<Rule | null>(null);
   const [dragged, setDragged] = useState<number | null>(null);

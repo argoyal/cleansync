@@ -82,6 +82,12 @@ export function MailReader({ account }: { account: Account }) {
     setPickedAction(null);
     setForever(null);
   }, [view, label, q]);
+  // The list on screen, for a slow read that comes back after the list changed.
+  const listKey = `${view}\n${label}\n${q}`;
+  const nowList = useRef(listKey);
+  useEffect(() => {
+    nowList.current = listKey;
+  }, [listKey]);
   const pickState: PickState = all ? "all" : picked.size > 0 ? "some" : "none";
   const isPicked = (id: string) => all || picked.has(id);
   const toggle = (id: string) => {
@@ -113,8 +119,10 @@ export function MailReader({ account }: { account: Account }) {
     if (all) return setForever("all");
     if (finding) return;
     setFinding(true);
+    const startedOn = listKey;
     Promise.all([...picked].map((id) => qc.fetchQuery(mailThreadQuery(account.id, id, view))))
-      .then((threads) => setForever({ message_ids: threads.flat().map((m) => m.id) }))
+      // The view or search changed while this was reading: its mails belong to the old list, so drop them.
+      .then((threads) => nowList.current === startedOn && setForever({ message_ids: threads.flat().map((m) => m.id) }))
       .catch((e: unknown) => toast(friendlyError(e), { tone: "error" }))
       .finally(() => setFinding(false));
   };

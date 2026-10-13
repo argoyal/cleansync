@@ -23,6 +23,7 @@ const JOB = {
   kind: "delete_forever",
   removed: 330,
   trashed: 0,
+  stopped: false,
   skipped_items: [],
 };
 
@@ -102,12 +103,32 @@ describe("Delete forever on mail in Gmail", () => {
         state: "FAILED",
         done: 330,
         skipped: 0,
+        stopped: true,
         reason: "Stopped by you. What wasn't deleted yet stays in Gmail, with CleanSync's copy.",
       },
     });
     await open();
     expect(await screen.findByText("Stopped. Deleted 330 mails forever; the rest are still in Gmail.")).toBeInTheDocument();
     expect(screen.queryByText(/Stopped by you/)).not.toBeInTheDocument();
+  });
+
+  it("reads the stopped flag, not the wording of the reason", async () => {
+    mockApi({
+      "POST /api/mail/delete-forever": { deleted: 0, left: 0, job_id: 7 },
+      "GET /api/mail/offloads/7": { ...JOB, state: "FAILED", done: 330, skipped: 0, stopped: true, reason: "You pressed Stop. The rest stays in Gmail." },
+    });
+    await open();
+    expect(await screen.findByText("Stopped. Deleted 330 mails forever; the rest are still in Gmail.")).toBeInTheDocument();
+  });
+
+  it("shows a failure as a failure even when its reason begins with the same words", async () => {
+    mockApi({
+      "POST /api/mail/delete-forever": { deleted: 0, left: 0, job_id: 7 },
+      "GET /api/mail/offloads/7": { ...JOB, state: "FAILED", done: 330, skipped: 0, stopped: false, reason: "Stopped by you is not what happened: Gmail refused." },
+    });
+    await open();
+    expect(await screen.findByText(/Gmail refused/)).toBeInTheDocument();
+    expect(screen.queryByText(/the rest are still in Gmail/)).not.toBeInTheDocument();
   });
 
   it("treats a missing job_id like null: the copy was removed at once", async () => {

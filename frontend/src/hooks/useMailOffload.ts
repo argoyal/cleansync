@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, friendlyError } from "../api/client";
 import type { MailOffloadPreview, OffloadStart } from "../api/types";
 import { useToast } from "../components/Toasts";
+import { MAIL_LISTS } from "./useRules";
 
 type Body = { accountId: number; start: OffloadStart };
 const body = ({ accountId, start }: Body) => ({ account_id: accountId, ...start });
@@ -52,8 +53,6 @@ export function useRestoreMail() {
   });
 }
 
-const MAIL_LISTS = ["mail-threads", "mail-counts", "mail-totals", "mail-thread", "mail-message", "rule-decisions"];
-
 /** Offload one mail open in the reader (mail panel spec §8), through the same checks as a
  * rule's Offload. */
 export function useOffloadOne() {
@@ -65,7 +64,7 @@ export function useOffloadOne() {
     onSuccess: ({ offloaded, reason }) => {
       if (offloaded) toast("Offloaded. CleanSync keeps its copy in Offloaded.");
       else toast(`It wasn't offloaded: ${reason ?? "try again."}`, { tone: "error" });
-      MAIL_LISTS.forEach((k) => void qc.invalidateQueries({ queryKey: [k] }));
+      [...MAIL_LISTS, "rule-decisions"].forEach((k) => void qc.invalidateQueries({ queryKey: [k] }));
     },
     onError: (e) => toast(friendlyError(e), { tone: "error" }),
   });

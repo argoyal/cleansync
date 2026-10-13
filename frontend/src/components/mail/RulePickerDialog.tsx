@@ -12,7 +12,8 @@ import { RunRulesDialog } from "./RunRulesDialog";
  * `onText` says what they will run on. */
 export function RulePickerDialog({ account, scope, onText, onClose }: { account: Account; scope: RunScope; onText: string; onClose: () => void }) {
   const rules = useRules(account.id);
-  const modelSet = useSorting(account.id).data?.model_set ?? true;
+  const sorting = useSorting(account.id);
+  const modelSet = sorting.isPending ? null : (sorting.data?.model_set ?? true); // null: still loading
   const [ticked, setTicked] = useState<Set<number>>(new Set());
   const [run, setRun] = useState<number[] | null>(null);
   if (run) return <RunRulesDialog account={account} start={{ rule_ids: run, scope }} onClose={onClose} />;

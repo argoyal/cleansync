@@ -141,7 +141,8 @@ export function RunRulesDialog({ account, start, jobId: existing, onClose }: Pro
   const listing = job !== undefined && state === "PREVIEWED" && planned > 0;
   const perRule = (job?.per_rule ?? []).map((r) => ({ ...r, picked: pickedOf(picks, r.rule_id, r.count) }));
   const pickedTotal = picks.mode === "all" ? planned - picks.ids.size : picks.ids.size;
-  const pickState: PickState = picks.mode === "all" && picks.ids.size === 0 ? "all" : pickedTotal > 0 ? "some" : "none";
+  // Every match picked is "all", whether Pick all is still on or each was ticked by hand.
+  const pickState: PickState = planned > 0 && pickedTotal === planned ? "all" : pickedTotal > 0 ? "some" : "none";
   const heavy = heavyKinds(perRule);
   const ok = pickedTotal > 0 && (heavy.count === 0 || parseTyped(typed) === heavy.count);
   const finished = state === "DONE" || state === "STOPPED";

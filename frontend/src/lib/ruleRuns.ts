@@ -1,8 +1,7 @@
-import { describeAction, type RuleAction, type RunScope } from "../api/rules";
+import { actionKind, describeAction, type RuleAction, type RunScope } from "../api/rules";
 import { hasSearch, viewKind } from "./mail";
+import { mails } from "./plural";
 
-/** "1 mail", "1,284 mails". */
-export const mails = (n: number) => `${n.toLocaleString()} ${n === 1 ? "mail" : "mails"}`;
 const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
 /** Actions that take mail out of Gmail: approving them needs the typed count (running rules spec §5). */
@@ -13,7 +12,8 @@ export type RulePick = { actions: RuleAction[]; picked: number };
 
 /** One action done to `n` mails, as the approve button says it. */
 export function actionText(a: RuleAction, n: number): string {
-  switch (a.kind) {
+  if (a.kind === "label") return `Add the label ${a.label} to ${mails(n)}`;
+  switch (actionKind(a)) {
     case "archive":
       return `Archive ${mails(n)}`;
     case "star":
@@ -21,7 +21,7 @@ export function actionText(a: RuleAction, n: number): string {
     case "mark_read":
       return `Mark ${mails(n)} read`;
     case "label":
-      return `Add the label ${a.label} to ${mails(n)}`;
+      return ""; // handled above
     case "offload":
       return `Offload ${mails(n)}`;
     case "delete_forever":
@@ -55,7 +55,7 @@ export function heavyKinds(rules: RulePick[]): { count: number; kinds: Set<strin
   const kinds = new Set<string>();
   let count = 0;
   for (const r of rules) {
-    const heavy = r.actions.map((a) => a.kind).filter((k) => HEAVY_KINDS.includes(k));
+    const heavy = r.actions.map(actionKind).filter((k) => HEAVY_KINDS.includes(k));
     if (heavy.length === 0 || r.picked === 0) continue;
     count += r.picked;
     heavy.forEach((k) => kinds.add(k));
@@ -84,9 +84,11 @@ export function olderMailScope(senders: string[], view: string, label: string, q
 }
 
 /** Why a rule can't run now (running rules spec §3), or null. Any rule that isn't
- * fixed-conditions-only may ask the model. */
-export function runBlock(rule: { enabled: boolean; combine: string }, modelSet: boolean): string | null {
+ * fixed-conditions-only may ask the model. `modelSet` is null while Sorting is still loading:
+ * such a rule waits, it isn't treated as ready. */
+export function runBlock(rule: { enabled: boolean; combine: string }, modelSet: boolean | null): string | null {
   if (!rule.enabled) return "Turn the rule on to run it.";
+  if (rule.combine !== "fixed_only" && modelSet === null) return "Checking whether a model is set up…";
   if (rule.combine !== "fixed_only" && !modelSet) return "Set up a model in Settings → Models.";
   return null;
 }

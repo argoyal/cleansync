@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { ApiError, friendlyError } from "../api/client";
 import { useMailOffload, useMailOffloads } from "../api/queries";
+import type { MailOffload } from "../api/types";
 import { Bar, Button, Empty, Notice } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { useRestoreMail, useStopOffload } from "../hooks/useMailOffload";
@@ -13,6 +14,15 @@ export { OFFLOAD_STATE_TEXT };
 const NO_SUCH_OFFLOAD = "That offload doesn't exist.";
 
 export const TRASH_NOTE = "Offloaded mail sits in Gmail's trash. Gmail empties its trash on its own after 30 days; that's when the space comes back.";
+
+/** What happened to the mails a failed offload didn't finish. The server's reason says it when the
+ * last batch may already be out of Gmail (after a stop or a restart), and a stop has its own words:
+ * then this line only counts them and doesn't say where they are. Otherwise they were never touched. */
+function notDoneLine(o: MailOffload): string {
+  const n = o.not_done.toLocaleString();
+  const explained = o.stopped || (o.reason ?? "").includes("may already be out of Gmail");
+  return explained ? `${n} weren't counted as offloaded.` : `${n} weren't reached and stayed in Gmail.`;
+}
 
 /** Spec §5.3–5.5: one offload — its state, what was skipped and why, when Gmail frees the space, restore. */
 export function MailOffloadPage() {
@@ -50,7 +60,7 @@ export function MailOffloadPage() {
         {o.skipped ? ` · ${o.skipped.toLocaleString()} skipped` : ""}
       </p>
       {o.reason && <Notice tone={o.state === "WAITING" ? "warn" : "err"}>{o.reason}</Notice>}
-      {o.state === "FAILED" && o.not_done > 0 && <p>{o.not_done.toLocaleString()} weren't reached and stayed in Gmail.</p>}
+      {o.state === "FAILED" && o.not_done > 0 && <p>{notDoneLine(o)}</p>}
       {o.done > 0 && (
         <div className="space-y-1">
           {spaceLines(o).map((line) => (

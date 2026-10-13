@@ -438,6 +438,8 @@ export type MailOffload = {
   removed: number;
   /** In Gmail's trash until Gmail empties it. */
   trashed: number;
+  /** The owner pressed Stop (the server says so; the reason's wording is not to be matched). */
+  stopped: boolean;
 };
 export type MailOffloadDetail = MailOffload & {
   skipped_items: { message_id: number; subject: string; from_addr: string; date: string; reason: string }[];

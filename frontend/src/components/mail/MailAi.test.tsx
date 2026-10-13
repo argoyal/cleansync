@@ -8,6 +8,7 @@ import { ACCOUNT, type Call, json, mockApi, renderApp } from "../../test/utils";
 import { DeleteForeverDialog } from "./DeleteForeverDialog";
 import { MakeRuleDialog } from "./MakeRuleDialog";
 import { RuleChip } from "./RuleChip";
+import { RulePickerDialog } from "./RulePickerDialog";
 import { RunRulesDialog } from "./RunRulesDialog";
 
 const RULES = [{ id: 7, name: "Receipts", description: "", conditions: {}, combine: "ai_only", actions: [{ kind: "star" }], mode: "suggest", enabled: true, position: 0, version: 1, decided_7d: 0, senders: [] }];
@@ -103,6 +104,32 @@ describe("AI in mail", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Save rule" }));
     expect(await screen.findByText("Set up a model in Settings → Models.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run it on older mail…" })).not.toBeInTheDocument();
+  });
+
+  it("holds Run it on older mail while the Sorting status is still loading", async () => {
+    let answer: (v: unknown) => void = () => {};
+    const draft = { name: "Shops", description: "Shop mail", conditions: { senders_in: ["a@example.com"] }, combine: "fixed_then_ai", actions: [{ kind: "archive" }], notes: [] };
+    mockApi({
+      "GET /api/rules/sorting": () => new Promise((r) => (answer = r)),
+      "POST /api/rules/draft-from-mail": draft,
+      "POST /api/rules": { ...draft, id: 8, mode: "suggest", enabled: true, position: 0, version: 1, decided_7d: 0, senders: [] },
+    });
+    renderApp(<MakeRuleDialog account={ACCOUNT} messageIds={[11]} onClose={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Save rule" }));
+    expect(await screen.findByText("Checking whether a model is set up…")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run it on older mail…" })).not.toBeInTheDocument();
+    answer({ enabled: false, waiting: 0, sorted_today: 0, suggested: 0, failing_since: null, last_error: null, warning: false, model_set: true, paused: null });
+    expect(await screen.findByRole("button", { name: "Run it on older mail…" })).toBeInTheDocument();
+  });
+
+  it("keeps a rule that may ask the model unticked in the rule picker while the Sorting status is still loading", async () => {
+    let answer: (v: unknown) => void = () => {};
+    mockApi({ "GET /api/rules": [{ ...RULES[0], combine: "ai_only" }], "GET /api/rules/sorting": () => new Promise((r) => (answer = r)) });
+    renderApp(<RulePickerDialog account={ACCOUNT} scope={{ inbox: true }} onText="Run on: the Inbox" onClose={() => {}} />);
+    const box = await screen.findByRole("checkbox", { name: /^Receipts/ });
+    expect(box).toBeDisabled();
+    answer({ enabled: false, waiting: 0, sorted_today: 0, suggested: 0, failing_since: null, last_error: null, warning: false, model_set: true, paused: null });
+    await waitFor(() => expect(box).toBeEnabled());
   });
 
   it("offers Approve only for a suggestion, and Undo only once applied", async () => {
@@ -229,6 +256,24 @@ describe("the Run rules window", () => {
     expect(all).toBePartiallyChecked();
     await userEvent.click(screen.getByRole("button", { name: "Archive 1 mail" }));
     await waitFor(() => expect(runBody(calls)).toEqual({ account_id: ACCOUNT.id, left_out: [], only: [11] }));
+  });
+
+  it("shows Pick all ticked, not partial, once every match was ticked by hand", async () => {
+    mockApi({
+      "GET /api/rule-jobs/9": JOB,
+      "GET /api/rule-jobs/9/matches": [match(13, "Digest three"), match(12, "Digest two"), match(11, "Digest one")],
+    });
+    renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+    const all = await screen.findByRole("checkbox", { name: "Pick all" });
+    await screen.findByRole("checkbox", { name: "Pick Digest one" });
+    await userEvent.click(all);
+    expect(all).not.toBeChecked();
+    for (const s of ["one", "two"]) await userEvent.click(screen.getByRole("checkbox", { name: `Pick Digest ${s}` }));
+    expect(all).toBePartiallyChecked();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Pick Digest three" }));
+    expect(all).toBeChecked();
+    expect(all).not.toBePartiallyChecked();
+    expect(screen.getByRole("button", { name: "Archive 3 mails" })).toBeEnabled();
   });
 
   it("with several rules: a line per rule, a chip per row, a filter that keeps the picks, and Apply N changes", async () => {

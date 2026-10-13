@@ -33,14 +33,21 @@ export function SearchOptions({
   const [f, setF] = useState<SearchFields>(() => readSearch(text, names));
   // The labels may arrive after the form opened: read the box again once they do.
   const [readWith, setReadWith] = useState(names.join("\n"));
-  if (readWith !== names.join("\n")) {
-    setReadWith(names.join("\n"));
-    setF(readSearch(writeSearch(f), names));
-  }
-  const set = (patch: Partial<SearchFields>) => setF({ ...f, ...patch });
   const aged = f.date === "older" || f.date === "newer";
   const badSize = f.size.trim() !== "" && !isNumber(f.size);
   const badAge = aged && f.age.trim() !== "" && !isWhole(f.age);
+  if (readWith !== names.join("\n")) {
+    setReadWith(names.join("\n"));
+    // A size or age that isn't a number can't be written as a keyword, so it would drop into the
+    // words: leave it out of the re-read and put it back in its own field.
+    const next = readSearch(writeSearch({ ...f, size: badSize ? "" : f.size, age: badAge ? "" : f.age }), names);
+    if (badSize) Object.assign(next, { size: f.size, sizeOp: f.sizeOp, sizeUnit: f.sizeUnit });
+    if (badAge) Object.assign(next, { date: f.date, age: f.age, ageUnit: f.ageUnit });
+    setF(next);
+  }
+  const set = (patch: Partial<SearchFields>) => setF({ ...f, ...patch });
+  // The server reads an open quote to the end, so keywords written after the words would be swallowed.
+  const openQuote = (f.words.match(/"/g) ?? []).length % 2 === 1;
   const escape = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
       e.stopPropagation();
@@ -66,6 +73,7 @@ export function SearchOptions({
           <Field label="Has the words">
             <input className={inputClass} value={f.words} onChange={(e) => set({ words: e.target.value })} />
           </Field>
+          {openQuote && <p className="mt-1 text-meta text-ink-2">The quote mark isn't closed, so keywords after it are read as words.</p>}
         </div>
         {showLabel && (
           <Field label="Label">

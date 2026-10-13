@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { RuleAction } from "../api/rules";
 import { actionText, approveText, confirmLabel, heavyKinds, olderMailScope, ruleLine, runBlock, runOnText, wouldText } from "./ruleRuns";
 
 describe("running rules, in words", () => {
@@ -51,6 +52,16 @@ describe("running rules, in words", () => {
     expect(runBlock({ enabled: true, combine: "fixed_then_ai" }, false)).toBe("Set up a model in Settings → Models.");
     expect(runBlock({ enabled: true, combine: "fixed_only" }, false)).toBeNull();
     expect(runBlock({ enabled: true, combine: "ai_only" }, true)).toBeNull();
+  });
+  it("holds a rule that may ask the model while Sorting is still loading", () => {
+    expect(runBlock({ enabled: true, combine: "ai_only" }, null)).toBe("Checking whether a model is set up…");
+    expect(runBlock({ enabled: true, combine: "fixed_only" }, null)).toBeNull();
+    expect(runBlock({ enabled: false, combine: "ai_only" }, null)).toBe("Turn the rule on to run it.");
+  });
+  it("reads an old delete action as Offload, a heavy one", () => {
+    const old = { kind: "delete" } as unknown as RuleAction;
+    expect(actionText(old, 3)).toBe("Offload 3 mails");
+    expect(heavyKinds([{ actions: [old], picked: 3 }])).toEqual({ count: 3, kinds: new Set(["offload"]) });
   });
   it("says what Run rules will run on", () => {
     expect(runOnText({ total: 1284, q: "from:shop.example.com", place: "Inbox" })).toBe("Run on: 1,284 mails matching from:shop.example.com");

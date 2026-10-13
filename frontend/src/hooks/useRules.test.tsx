@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { describeAction, useRules } from "../api/rules";
+import { describeAction, type RuleAction, useRules } from "../api/rules";
 import { mockApi, wrapper } from "../test/utils";
 import { useApprove, useDeleteRule } from "./useRules";
 
@@ -10,6 +10,7 @@ describe("rules api", () => {
     expect(describeAction({ kind: "label", label: "Receipts" })).toBe("Label Receipts");
     expect(describeAction({ kind: "mark_read" })).toBe("Mark read");
     expect(describeAction({ kind: "offload" })).toBe("Offload");
+    expect(describeAction({ kind: "delete" } as unknown as RuleAction)).toBe("Offload"); // an old action kind
     expect(describeAction({ kind: "delete_forever" })).toBe("Delete forever");
   });
 

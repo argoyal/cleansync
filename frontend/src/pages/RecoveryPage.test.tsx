@@ -196,7 +196,7 @@ describe("Recovery", () => {
 
 describe("mail in Recovery", () => {
   const MAIL = {
-    offloads: [{ id: 7, account_id: 1, filter_text: "older_than:1y", state: "DONE", total: 13, done: 13, skipped: 0, not_done: 0, bytes: 8 * 1024 ** 2, reason: null, created_at: "2026-10-10T09:00:00Z", finished_at: "2026-10-10T09:01:00Z", kind: "offload", removed: 0, trashed: 13, trash_until: "2026-11-09", google_emptied: false }],
+    offloads: [{ id: 7, account_id: 1, filter_text: "older_than:1y", state: "DONE", total: 13, done: 13, skipped: 0, not_done: 0, bytes: 8 * 1024 ** 2, reason: null, created_at: "2026-10-10T09:00:00Z", finished_at: "2026-10-10T09:01:00Z", kind: "offload", removed: 0, trashed: 13, trash_until: "2026-11-09", google_emptied: false, stopped: false }],
     deleted_count: 2,
   };
 

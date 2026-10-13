@@ -589,6 +589,52 @@ describe("search options", () => {
     expect(screen.queryByRole("region", { name: "Search options" })).not.toBeInTheDocument();
   });
 
+  it("keeps a size that isn't a number in the Size field when the labels arrive late", async () => {
+    let answer: (v: unknown) => void = () => {};
+    mockApi({
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/mail/counts": () => new Promise((r) => (answer = r)),
+    });
+    renderApp(<ContentBar section="mail" onViews={() => undefined} />, { withAccount: true, route: "/mail" });
+    await userEvent.click(screen.getByRole("button", { name: "Search options" }));
+    const form = screen.getByRole("region", { name: "Search options" });
+    await userEvent.type(within(form).getByLabelText("Size"), "abc");
+    await userEvent.type(within(form).getByLabelText("Has the words"), "shoes");
+    answer({ views: {}, labels: [{ id: "Label_2", name: "Receipts", count: 4 }] });
+    await within(form).findByRole("option", { name: "Receipts" });
+    expect(within(form).getByLabelText("Size")).toHaveValue("abc");
+    expect(within(form).getByLabelText("Has the words")).toHaveValue("shoes");
+    expect(within(form).getByText("Use a number.")).toBeInTheDocument();
+  });
+
+  it("keeps an age that isn't a whole number in the Age field when the labels arrive late", async () => {
+    let answer: (v: unknown) => void = () => {};
+    mockApi({
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/sync-pairs": [PAIR],
+      "GET /api/mail/counts": () => new Promise((r) => (answer = r)),
+    });
+    renderApp(<ContentBar section="mail" onViews={() => undefined} />, { withAccount: true, route: "/mail" });
+    await userEvent.click(screen.getByRole("button", { name: "Search options" }));
+    const form = screen.getByRole("region", { name: "Search options" });
+    await userEvent.selectOptions(within(form).getByLabelText("Date"), "older");
+    await userEvent.type(within(form).getByLabelText("Age"), "2.5");
+    answer({ views: {}, labels: [{ id: "Label_2", name: "Receipts", count: 4 }] });
+    await within(form).findByRole("option", { name: "Receipts" });
+    expect(within(form).getByLabelText("Age")).toHaveValue("2.5");
+    expect(within(form).getByLabelText("Has the words")).toHaveValue("");
+  });
+
+  it("says when a quote mark is left open, because the keywords after it are read as words", async () => {
+    const form = await openMail("/mail");
+    const words = within(form).getByLabelText("Has the words");
+    await userEvent.type(words, 'a "big deal');
+    expect(within(form).getByText("The quote mark isn't closed, so keywords after it are read as words.")).toBeInTheDocument();
+    await userEvent.type(words, '"');
+    expect(within(form).queryByText(/isn't closed/)).not.toBeInTheDocument();
+  });
+
   it("is offered on the mail list only", async () => {
     mockApi({ "GET /api/accounts": [ACCOUNT], "GET /api/sync-pairs": [PAIR] });
     renderApp(<ContentBar section="mail" onViews={() => undefined} />, { withAccount: true, route: "/mail/rules" });

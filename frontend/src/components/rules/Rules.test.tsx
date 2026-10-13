@@ -127,4 +127,16 @@ describe("Rules section", () => {
     expect(off).toHaveAccessibleDescription("Turn the rule on to run it.");
     expect(screen.getByRole("button", { name: "Run, Calendar" })).toBeEnabled();
   });
+
+  it("keeps Run off for a rule that may ask the model until the Sorting status has loaded", async () => {
+    let answer: (v: unknown) => void = () => {};
+    const FIXED = { ...RULE, id: 3, name: "Calendar", combine: "fixed_only", conditions: { calendar_invite: true }, position: 1 };
+    mockApi({ ...ACCOUNTS, "GET /api/rules": [RULE, FIXED], "GET /api/rules/sorting": () => new Promise((r) => (answer = r)) });
+    renderApp(<MailRulesPage />, { withAccount: true });
+    const receipts = await screen.findByRole("button", { name: "Run, Receipts" });
+    expect(receipts).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Run, Calendar" })).toBeEnabled(); // fixed conditions only: no model needed
+    answer(SORTING);
+    await waitFor(() => expect(receipts).toBeEnabled());
+  });
 });

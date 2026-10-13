@@ -17,7 +17,8 @@ export function MakeRuleDialog({ account, messageIds, onClose }: { account: Acco
   const [params] = useSearchParams();
   const label = params.get("label") ?? "";
   const draft = useDraftFromMail();
-  const modelSet = useSorting(account.id).data?.model_set ?? true;
+  const sorting = useSorting(account.id);
+  const modelSet = sorting.isPending ? null : (sorting.data?.model_set ?? true); // null: still loading
   const [saved, setSaved] = useState<Rule | null>(null);
   const [run, setRun] = useState<RunStart | null>(null);
   const asked = useRef(false);

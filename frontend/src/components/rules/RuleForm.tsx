@@ -2,7 +2,7 @@ import { type ReactNode, useId, useState } from "react";
 
 import { useAccounts } from "../../api/queries";
 import { friendlyError } from "../../api/client";
-import type { Combine, Rule, RuleAction, RuleConditions, RuleDraft, RuleFields } from "../../api/rules";
+import { actionKind, type Combine, Rule, RuleAction, RuleConditions, RuleDraft, RuleFields } from "../../api/rules";
 import { useSaveRule } from "../../hooks/useRules";
 import { FOREVER_OFF } from "../mail/DeleteForeverDialog";
 import { Button, Field, inputClass, Notice } from "../ui";
@@ -78,11 +78,11 @@ export function RuleForm({
   const c0 = initial.conditions;
   const [name, setName] = useState(initial.name);
   const [description, setDescription] = useState(initial.description);
-  const [simple, setSimple] = useState<Set<Simple>>(new Set(initial.actions.flatMap((a) => (SIMPLE.some(([k]) => k === a.kind) ? [a.kind as Simple] : []))));
+  const [simple, setSimple] = useState<Set<Simple>>(new Set(initial.actions.flatMap((a) => (SIMPLE.some(([k]) => k === actionKind(a)) ? [a.kind as Simple] : []))));
   const firstLabel = initial.actions.find((a) => a.kind === "label");
   const [labelOn, setLabelOn] = useState(firstLabel !== undefined);
   const [labelName, setLabelName] = useState(firstLabel && "label" in firstLabel ? firstLabel.label : "");
-  const [off, setOff] = useState(initial.actions.some((a) => a.kind === "offload"));
+  const [off, setOff] = useState(initial.actions.some((a) => actionKind(a) === "offload"));
   const [forever, setForever] = useState(initial.actions.some((a) => a.kind === "delete_forever"));
   const allowForever = useAccounts().data?.find((a) => a.id === accountId)?.permanent_delete ?? false;
   const [text, setText] = useState<Text>({
@@ -97,7 +97,8 @@ export function RuleForm({
   });
   const [addressed, setAddressed] = useState<string>(c0.addressed ?? "");
   const [combine, setCombine] = useState<Combine>(initial.combine);
-  const [mode, setMode] = useState<RuleFields["mode"]>(initial.mode ?? "suggest");
+  // A Delete forever rule is never Automatic: an old one saved that way opens as Suggest first.
+  const [mode, setMode] = useState<RuleFields["mode"]>(forever ? "suggest" : (initial.mode ?? "suggest"));
   const conditions = conditionsFrom(text, flags, addressed);
   const anyCondition = Object.keys(conditions).length > 0;
   const [showConditions, setShowConditions] = useState(Object.keys(c0).length > 0);

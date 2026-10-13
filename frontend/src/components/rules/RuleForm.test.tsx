@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { RuleDraft } from "../../api/rules";
+import type { RuleAction, RuleDraft } from "../../api/rules";
 import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
 import { RuleForm } from "./RuleForm";
 
@@ -130,5 +130,31 @@ describe("RuleForm", () => {
     await userEvent.selectOptions(how, "ai_only");
     await userEvent.type(screen.getByLabelText("Subject contains"), "digest");
     expect(screen.getByLabelText("How these work with the description")).toHaveValue("ai_only");
+  });
+
+  it("opens an old Automatic Delete forever rule as Suggest first, and saves it that way", async () => {
+    const { calls } = mockApi({ "GET /api/accounts": [{ ...ACCOUNT, permanent_delete: true }], "PUT /api/rules/5": SAVED });
+    renderApp(
+      <RuleForm accountId={1} ruleId={5} initial={{ ...DRAFT, actions: [{ kind: "delete_forever" }], mode: "automatic" }} onSaved={() => {}} onCancel={() => {}} />,
+    );
+    expect(screen.getByRole("radio", { name: /Suggest first/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Automatic" })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: "Automatic" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Save rule" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toMatchObject({ actions: [{ kind: "delete_forever" }], mode: "suggest" }));
+  });
+
+  it("keeps an Automatic rule that doesn't delete forever Automatic", () => {
+    mockApi({});
+    renderApp(<RuleForm accountId={1} ruleId={5} initial={{ ...DRAFT, mode: "automatic" }} onSaved={() => {}} onCancel={() => {}} />);
+    expect(screen.getByRole("radio", { name: "Automatic" })).toBeChecked();
+  });
+
+  it("shows and saves an old rule action of kind delete as Offload", async () => {
+    const { calls } = mockApi({ "PUT /api/rules/5": SAVED });
+    renderApp(<RuleForm accountId={1} ruleId={5} initial={{ ...DRAFT, actions: [{ kind: "delete" } as unknown as RuleAction] }} onSaved={() => {}} onCancel={() => {}} />);
+    expect(screen.getByRole("checkbox", { name: "Offload" })).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Save rule" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toMatchObject({ actions: [{ kind: "offload" }] }));
   });
 });
