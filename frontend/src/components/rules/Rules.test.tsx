@@ -80,4 +80,28 @@ describe("Rules section", () => {
     await waitFor(() => expect(calls.some((c) => c.path === "/api/rule-jobs/open")).toBe(true));
     expect(screen.queryByText(/A run of rules/)).not.toBeInTheDocument();
   });
+
+  it("runs a rule from its card over the Inbox, and has no Run rules on… any more", async () => {
+    const job = { job_id: 9, state: "PREVIEWING", total: 12, decided: 3, planned: 0, no_rule: 0, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [], view: "inbox", q: "", rule_ids: [1], filter_text: "Inbox", left_out: 0, skip_reasons: [] };
+    const { calls } = mockApi({ ...ACCOUNTS, "GET /api/rules": [RULE], "GET /api/rules/sorting": SORTING, "GET /api/rule-jobs/open": null, "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": job });
+    renderApp(<MailRulesPage />, { withAccount: true });
+    await userEvent.click(await screen.findByRole("button", { name: "Run, Receipts" }));
+    expect(await screen.findByText("Deciding… 3 of 12")).toBeInTheDocument();
+    expect(calls.find((c) => c.method === "POST" && c.path === "/api/rule-jobs")?.body).toEqual({ account_id: 1, rule_ids: [1], inbox: true });
+    expect(screen.queryByRole("button", { name: "Run rules on…" })).not.toBeInTheDocument();
+  });
+
+  it("disables Run, with the reason, for a rule that is off or needs a model that isn't set", async () => {
+    const OFF = { ...RULE, id: 2, name: "Old news", enabled: false, position: 1 };
+    const FIXED = { ...RULE, id: 3, name: "Calendar", combine: "fixed_only", conditions: { calendar_invite: true }, position: 2 };
+    mockApi({ ...ACCOUNTS, "GET /api/rules": [RULE, OFF, FIXED], "GET /api/rules/sorting": { ...SORTING, model_set: false } });
+    renderApp(<MailRulesPage />, { withAccount: true });
+    const receipts = await screen.findByRole("button", { name: "Run, Receipts" });
+    expect(receipts).toBeDisabled();
+    expect(receipts).toHaveAccessibleDescription("Set up a model in Settings → Models.");
+    const off = screen.getByRole("button", { name: "Run, Old news" });
+    expect(off).toBeDisabled();
+    expect(off).toHaveAccessibleDescription("Turn the rule on to run it.");
+    expect(screen.getByRole("button", { name: "Run, Calendar" })).toBeEnabled();
+  });
 });

@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { friendlyError } from "../api/client";
-import { describeAction, rulesExportUrl, type Sorting, useOpenRuleJob, useRules, useSorting, useStarters } from "../api/rules";
+import { describeAction, type Rule, rulesExportUrl, type Sorting, useOpenRuleJob, useRules, useSorting, useStarters } from "../api/rules";
 import type { Account } from "../api/types";
 import { RunRulesDialog } from "../components/mail/RunRulesDialog";
 import { RuleList } from "../components/rules/RuleList";
@@ -203,6 +203,7 @@ export function MailRulesPage() {
   const accountId = account?.id ?? null;
   const rules = useRules(accountId);
   const sorting = useSorting(accountId).data;
+  const [running, setRunning] = useState<Rule | null>(null);
   if (!account) {
     return (
       <Empty icon="mail" title="No Google account yet">
@@ -228,7 +229,8 @@ export function MailRulesPage() {
       <SentenceBox key={`sentence-${account.id}`} accountId={account.id} />
       {rules.isPending && <p className="text-ink-2">Loading rules…</p>}
       {rules.isError && <Notice tone="err">{friendlyError(rules.error)}</Notice>}
-      {rules.data && <RuleList key={`list-${account.id}`} rules={rules.data} accountId={account.id} />}
+      {rules.data && <RuleList key={`list-${account.id}`} rules={rules.data} accountId={account.id} modelSet={sorting?.model_set ?? true} onRun={setRunning} />}
+      {running && <RunRulesDialog key={running.id} account={account} start={{ rule_ids: [running.id], scope: { inbox: true } }} onClose={() => setRunning(null)} />}
       <Footer account={account} />
     </div>
   );

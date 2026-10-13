@@ -82,3 +82,11 @@ export function olderMailScope(senders: string[], view: string, label: string, q
   if (viewKind(view) === "gmail" && (q.trim() !== "" || label !== "" || view !== "all")) return { view, ...(label ? { label } : {}), q, pick_all: true };
   return { inbox: true };
 }
+
+/** Why a rule can't run now (running rules spec §3), or null. Any rule that isn't
+ * fixed-conditions-only may ask the model. */
+export function runBlock(rule: { enabled: boolean; combine: string }, modelSet: boolean): string | null {
+  if (!rule.enabled) return "Turn the rule on to run it.";
+  if (rule.combine !== "fixed_only" && !modelSet) return "Set up a model in Settings → Models.";
+  return null;
+}

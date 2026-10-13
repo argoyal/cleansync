@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { actionText, approveText, confirmLabel, heavyKinds, olderMailScope, ruleLine, wouldText } from "./ruleRuns";
+import { actionText, approveText, confirmLabel, heavyKinds, olderMailScope, ruleLine, runBlock, wouldText } from "./ruleRuns";
 
 describe("running rules, in words", () => {
   it("names one action and the count, else Apply N changes", () => {
@@ -43,5 +43,13 @@ describe("running rules, in words", () => {
     expect(olderMailScope([], "all", "", "")).toEqual({ inbox: true });
     expect(olderMailScope([], "suggested", "", "x")).toEqual({ inbox: true });
     expect(olderMailScope([], "offloaded", "", "x")).toEqual({ inbox: true });
+  });
+
+  it("says why a rule can't run", () => {
+    expect(runBlock({ enabled: false, combine: "fixed_only" }, true)).toBe("Turn the rule on to run it.");
+    expect(runBlock({ enabled: true, combine: "ai_only" }, false)).toBe("Set up a model in Settings → Models.");
+    expect(runBlock({ enabled: true, combine: "fixed_then_ai" }, false)).toBe("Set up a model in Settings → Models.");
+    expect(runBlock({ enabled: true, combine: "fixed_only" }, false)).toBeNull();
+    expect(runBlock({ enabled: true, combine: "ai_only" }, true)).toBeNull();
   });
 });

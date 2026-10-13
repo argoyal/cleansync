@@ -3,6 +3,7 @@ import { useState } from "react";
 import { friendlyError } from "../../api/client";
 import { describeAction, type Rule, ruleFields } from "../../api/rules";
 import { useDeleteRule, useForgetSender, useReorderRules, useSaveRule } from "../../hooks/useRules";
+import { runBlock } from "../../lib/ruleRuns";
 import { useToast } from "../Toasts";
 import { Button, Dialog } from "../ui";
 import { RuleForm } from "./RuleForm";
@@ -75,8 +76,28 @@ function Senders({ rule, accountId }: { rule: Rule; accountId: number }) {
   );
 }
 
-/** The rules in the order they are asked, as cards. Drag a card, or use Move up / Move down. */
-export function RuleList({ rules, accountId }: { rules: Rule[]; accountId: number }) {
+/** Run on a rule card (running rules spec §3): this rule alone over the Inbox. Disabled, with
+ * the reason beside it, when the rule is off or needs a model that isn't set up. */
+function RunButton({ rule, modelSet, onRun }: { rule: Rule; modelSet: boolean; onRun: (rule: Rule) => void }) {
+  const blocked = runBlock(rule, modelSet);
+  const why = `run-why-${rule.id}`;
+  return (
+    <>
+      <Button className="h-8" disabled={blocked !== null} aria-label={`Run, ${rule.name}`} aria-describedby={blocked ? why : undefined} onClick={() => onRun(rule)}>
+        Run
+      </Button>
+      {blocked && (
+        <span id={why} className="self-center text-meta text-ink-2">
+          {blocked}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** The rules in the order they are asked, as cards. Drag a card, or use Move up / Move down.
+ * `onRun` opens a run of one rule over the Inbox; `modelSet` says whether Sorting has a model. */
+export function RuleList({ rules, accountId, modelSet, onRun }: { rules: Rule[]; accountId: number; modelSet: boolean; onRun: (rule: Rule) => void }) {
   const [editing, setEditing] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<Rule | null>(null);
   const [dragged, setDragged] = useState<number | null>(null);
@@ -138,6 +159,7 @@ export function RuleList({ rules, accountId }: { rules: Rule[]; accountId: numbe
                   <Button className="h-8" onClick={() => setEditing(rule.id)}>
                     Edit
                   </Button>
+                  <RunButton rule={rule} modelSet={modelSet} onRun={onRun} />
                   <Button className="h-8" onClick={() => setDeleting(rule)}>
                     Delete
                   </Button>
