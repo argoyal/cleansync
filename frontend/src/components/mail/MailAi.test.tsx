@@ -4,13 +4,45 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { pauseLine } from "../../lib/pause";
-import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
+import { ACCOUNT, type Call, json, mockApi, renderApp } from "../../test/utils";
 import { DeleteForeverDialog } from "./DeleteForeverDialog";
 import { MakeRuleDialog } from "./MakeRuleDialog";
 import { RuleChip } from "./RuleChip";
 import { RunRulesDialog } from "./RunRulesDialog";
 
 const RULES = [{ id: 7, name: "Receipts", description: "", conditions: {}, combine: "ai_only", actions: [{ kind: "star" }], mode: "suggest", enabled: true, position: 0, version: 1, decided_7d: 0, senders: [] }];
+const JOB = {
+  job_id: 9,
+  state: "PREVIEWED",
+  total: 4,
+  decided: 4,
+  planned: 3,
+  no_rule: 1,
+  applied: 0,
+  skipped: 0,
+  failed: 0,
+  reason: null,
+  view: "inbox",
+  q: "",
+  rule_ids: [5],
+  filter_text: "Inbox",
+  left_out: 0,
+  skip_reasons: [],
+  per_rule: [{ rule: "Newsletters", rule_id: 5, count: 3, actions: [{ kind: "archive" }], examples: [] }],
+};
+const NEWS = { rule_id: 5, rule_name: "Newsletters", actions: [{ kind: "archive" }] };
+const match = (id: number, subject: string, rule: { rule_id: number; rule_name: string; actions: unknown[] } = NEWS) => ({
+  id,
+  message_id: id + 100,
+  thread_id: `t${id}`,
+  subject,
+  from_addr: "news@example.com",
+  date: "2026-10-01T09:00:00Z",
+  why: "a digest",
+  ...rule,
+});
+const INBOX_RUN = { rule_ids: [5], scope: { inbox: true as const } };
+const runBody = (calls: Call[]) => calls.find((c) => c.path === "/api/rule-jobs/9/run")?.body;
 
 describe("AI in mail", () => {
   it("a suggestion chip approves, and corrects to another rule", async () => {
@@ -42,36 +74,6 @@ describe("AI in mail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/delete-forever")?.body).toEqual({ account_id: 1, view: "offloaded", message_ids: [1, 2], confirm: 2 }));
   });
 
-  it("run rules shows the preview and runs after the typed count", async () => {
-    const preview = { job_id: 9, state: "PREVIEWED", total: 3, decided: 3, planned: 2, no_rule: 1, applied: 0, skipped: 0, failed: 0, reason: null,
-      per_rule: [{ rule: "Newsletters", count: 2, actions: [{ kind: "archive" }], examples: [{ subject: "Digest", sender: "n@example.com", why: "a digest" }] }] };
-    const { calls } = mockApi({
-      "POST /api/rule-jobs": { job_id: 9 },
-      "GET /api/rule-jobs/9": preview,
-      "POST /api/rule-jobs/9/run": { job_id: 9 },
-    });
-    renderApp(<RunRulesDialog account={ACCOUNT} start={{ q: "older_than:30d", view: "inbox" }} onClose={() => {}} />);
-    expect(await screen.findByText("Newsletters")).toBeInTheDocument();
-    expect(screen.getByText(/Archive/)).toBeInTheDocument();
-    expect(screen.getByText(/No rule: 1/)).toBeInTheDocument();
-    await userEvent.type(screen.getByLabelText(/Type 2/), "2");
-    await userEvent.click(screen.getByRole("button", { name: "Change 2 mails" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-jobs/9/run")?.body).toEqual({ account_id: ACCOUNT.id, confirm: 2 }));
-  });
-
-  it("says plainly why mail was left as it was, without sending it to Suggested", async () => {
-    const done = { job_id: 9, state: "DONE", total: 5, decided: 5, planned: 3, no_rule: 2, applied: 1, skipped: 2, failed: 0, reason: null, per_rule: [] };
-    mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": done });
-    const r = renderApp(<RunRulesDialog account={ACCOUNT} start={{ q: "", view: "inbox" }} onClose={() => {}} />);
-    expect(await screen.findByText("Done. Applied 1, skipped 2, failed 0.")).toBeInTheDocument();
-    expect(screen.getByText("2 mails were left as they were because they changed since the preview.")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Suggested/ })).not.toBeInTheDocument();
-    r.unmount();
-    mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": { ...done, state: "STOPPED", skipped: 1 } });
-    renderApp(<RunRulesDialog account={ACCOUNT} start={{ q: "", view: "inbox" }} onClose={() => {}} />);
-    expect(await screen.findByText("1 mail was left as it was.")).toBeInTheDocument();
-  });
-
   it("makes a rule from picked mail, saves it, then runs it on the sender's older mail", async () => {
     const draft = { name: "Shop receipts", description: "Receipts from the shop", conditions: { senders_in: ["shop@example.com"] }, combine: "fixed_then_ai", actions: [{ kind: "label", label: "Receipts" }], notes: ["The shop sends receipts and offers; this is only receipts."] };
     const { calls } = mockApi({
@@ -87,7 +89,7 @@ describe("AI in mail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save rule" }));
     await userEvent.click(await screen.findByRole("button", { name: "Run it on older mail…" }));
     expect(await screen.findByText("Deciding… 4 of 10")).toBeInTheDocument();
-    expect(calls.find((c) => c.path === "/api/rule-jobs")?.body).toEqual({ account_id: ACCOUNT.id, q: "from:shop@example.com", view: "all" });
+    expect(calls.find((c) => c.path === "/api/rule-jobs")?.body).toEqual({ account_id: ACCOUNT.id, rule_ids: [8], view: "all", q: "from:shop@example.com" });
   });
 
   it("offers Approve only for a suggestion, and Undo only once applied", async () => {
@@ -112,7 +114,7 @@ describe("AI in mail", () => {
     });
     function Harness() {
       const [open, setOpen] = useState(true);
-      return open ? <RunRulesDialog account={ACCOUNT} start={{ q: "", view: "inbox" }} onClose={() => setOpen(false)} /> : <p>closed</p>;
+      return open ? <RunRulesDialog account={ACCOUNT} start={INBOX_RUN} onClose={() => setOpen(false)} /> : <p>closed</p>;
     }
     renderApp(<Harness />);
     await waitFor(() => expect(calls.some((c) => c.path === "/api/rule-jobs")).toBe(true));
@@ -123,14 +125,14 @@ describe("AI in mail", () => {
   });
 
   it("closing a preview stops it, so it never blocks the next run; a running job keeps going", async () => {
-    const previewed = { job_id: 9, state: "PREVIEWED", total: 2, decided: 2, planned: 1, no_rule: 1, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [] };
-    const { calls } = mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": previewed, "POST /api/rule-jobs/9/stop": null });
-    const closed = renderApp(<RunRulesDialog account={ACCOUNT} start={{ q: "", view: "inbox" }} onClose={() => {}} />);
+    const previewed = { ...JOB, planned: 1 };
+    const { calls } = mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": previewed, "GET /api/rule-jobs/9/matches": [], "POST /api/rule-jobs/9/stop": null });
+    const closed = renderApp(<RunRulesDialog account={ACCOUNT} start={INBOX_RUN} onClose={() => {}} />);
     await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-jobs/9/stop")?.body).toEqual({ account_id: ACCOUNT.id }));
     closed.unmount();
-    const running = mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": { ...previewed, state: "RUNNING" }, "POST /api/rule-jobs/9/stop": null });
-    renderApp(<RunRulesDialog account={ACCOUNT} start={{ q: "", view: "inbox" }} onClose={() => {}} />);
+    const running = mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": { ...previewed, state: "RUNNING" }, "GET /api/rule-jobs/9/matches": [], "POST /api/rule-jobs/9/stop": null });
+    renderApp(<RunRulesDialog account={ACCOUNT} start={INBOX_RUN} onClose={() => {}} />);
     expect(await screen.findByText("It keeps going if you close this.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(running.calls.some((c) => c.path === "/api/rule-jobs/9/stop")).toBe(false);
@@ -143,15 +145,7 @@ describe("AI in mail", () => {
     expect(await screen.findByText(pauseLine(paused))).toBeInTheDocument();
   });
 
-  it("reopens a run that is already there instead of starting another", async () => {
-    const previewed = { job_id: 9, state: "PREVIEWED", total: 2, decided: 2, planned: 1, no_rule: 1, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [] };
-    const { calls } = mockApi({ "GET /api/rule-jobs/9": previewed });
-    renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
-    expect(await screen.findByLabelText("Type 1 to make these changes")).toBeInTheDocument();
-    expect(calls.some((c) => c.method === "POST")).toBe(false);
-  });
-
-  it("runs a rule from several senders on the list the reader showed, never on a view the rules can't use", async () => {
+  it("runs a rule from several senders on the list the reader showed, or on the Inbox from a list rules can't use", async () => {
     const draft = { name: "Shops", description: "Shop mail", conditions: { senders_in: ["a@example.com", "b@example.com"] }, combine: "fixed_then_ai", actions: [{ kind: "archive" }], notes: [] };
     const routes = {
       "GET /api/mail/counts": { views: {}, labels: [{ id: "Label_2", name: "My Shops", count: 3 }] },
@@ -161,8 +155,8 @@ describe("AI in mail", () => {
       "GET /api/rule-jobs/9": { job_id: 9, state: "PREVIEWING", total: 1, decided: 0, planned: 0, no_rule: 0, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [] },
     };
     for (const [route, expected] of [
-      ["/mail?label=Label_2&q=older_than%3A1y", { q: 'label:"My Shops" older_than:1y', view: "all" }],
-      ["/mail?view=suggested", { q: "", view: "inbox" }],
+      ["/mail?label=Label_2&q=older_than%3A1y", { rule_ids: [8], view: "all", label: "Label_2", q: "older_than:1y", pick_all: true }],
+      ["/mail?view=suggested", { rule_ids: [8], inbox: true }],
     ] as const) {
       const { calls } = mockApi(routes);
       const r = renderApp(<MakeRuleDialog account={ACCOUNT} messageIds={[11]} onClose={() => {}} />, { route });
@@ -171,5 +165,149 @@ describe("AI in mail", () => {
       await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-jobs")?.body, route).toEqual({ account_id: ACCOUNT.id, ...expected }));
       r.unmount();
     }
+  });
+});
+
+describe("the Run rules window", () => {
+  it("starts with every matched mail picked, and unticking one leaves it out", async () => {
+    const { calls } = mockApi({
+      "POST /api/rule-jobs": { job_id: 9 },
+      "GET /api/rule-jobs/9": JOB,
+      "GET /api/rule-jobs/9/matches": [match(13, "Digest three"), match(12, "Digest two"), match(11, "Digest one")],
+      "POST /api/rule-jobs/9/run": { job_id: 9 },
+    });
+    renderApp(<RunRulesDialog account={ACCOUNT} start={INBOX_RUN} onClose={() => {}} />);
+    expect(await screen.findByText("Newsletters would archive 3 mails. 1 didn't fit.")).toBeInTheDocument();
+    expect(screen.getByText("On: Inbox")).toBeInTheDocument();
+    expect(calls.find((c) => c.path === "/api/rule-jobs")?.body).toEqual({ account_id: ACCOUNT.id, rule_ids: [5], inbox: true });
+    const all = screen.getByRole("checkbox", { name: "Pick all" });
+    expect(all).toBeChecked();
+    expect(await screen.findByRole("checkbox", { name: "Pick Digest two" })).toBeChecked();
+    expect(screen.queryByLabelText(/^Type /)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Pick Digest two" }));
+    expect(all).toBePartiallyChecked();
+    expect(screen.getByRole("checkbox", { name: "Pick Digest three" })).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Archive 2 mails" }));
+    await waitFor(() => expect(runBody(calls)).toEqual({ account_id: ACCOUNT.id, left_out: [12] }));
+  });
+
+  it("unticking Pick all leaves nothing picked; ticked rows are sent as the only ones", async () => {
+    const { calls } = mockApi({
+      "GET /api/rule-jobs/9": JOB,
+      "GET /api/rule-jobs/9/matches": [match(13, "Digest three"), match(12, "Digest two"), match(11, "Digest one")],
+      "POST /api/rule-jobs/9/run": { job_id: 9 },
+    });
+    renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+    const all = await screen.findByRole("checkbox", { name: "Pick all" });
+    await screen.findByRole("checkbox", { name: "Pick Digest one" });
+    await userEvent.click(all);
+    expect(all).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Pick Digest one" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Archive 0 mails" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Pick Digest one" }));
+    expect(all).toBePartiallyChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Archive 1 mail" }));
+    await waitFor(() => expect(runBody(calls)).toEqual({ account_id: ACCOUNT.id, left_out: [], only: [11] }));
+  });
+
+  it("with several rules: a line per rule, a chip per row, a filter that keeps the picks, and Apply N changes", async () => {
+    const two = {
+      ...JOB,
+      rule_ids: [5, 6],
+      per_rule: [
+        { rule: "Newsletters", rule_id: 5, count: 2, actions: [{ kind: "archive" }], examples: [] },
+        { rule: "Receipts", rule_id: 6, count: 1, actions: [{ kind: "label", label: "Receipts" }], examples: [] },
+      ],
+    };
+    const RECEIPTS = { rule_id: 6, rule_name: "Receipts", actions: [{ kind: "label", label: "Receipts" }] };
+    const { calls } = mockApi({
+      "POST /api/rule-jobs": { job_id: 9 },
+      "GET /api/rule-jobs/9": two,
+      "GET /api/rule-jobs/9/matches": ({ url }: { url: URL }) =>
+        url.searchParams.get("rule_id") === "6" ? [match(13, "Bill", RECEIPTS)] : [match(13, "Bill", RECEIPTS), match(12, "Digest two"), match(11, "Digest one")],
+      "POST /api/rule-jobs/9/run": { job_id: 9 },
+    });
+    renderApp(<RunRulesDialog account={ACCOUNT} start={{ rule_ids: [5, 6], scope: { view: "inbox", q: "from:shop" } }} onClose={() => {}} />);
+    const lines = await screen.findByRole("list", { name: "What each rule would do" });
+    expect(within(lines).getByText("Newsletters · archive · 2")).toBeInTheDocument();
+    expect(within(lines).getByText("Receipts · label Receipts · 1")).toBeInTheDocument();
+    expect(screen.getByText("1 didn't fit.")).toBeInTheDocument();
+    expect(calls.find((c) => c.path === "/api/rule-jobs")?.body).toEqual({ account_id: ACCOUNT.id, rule_ids: [5, 6], view: "inbox", q: "from:shop" });
+    const list = screen.getByRole("list", { name: "Matched mail" });
+    expect(await within(list).findByText("Receipts")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply 3 changes" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Pick Digest one" }));
+    expect(screen.getByRole("button", { name: "Apply 2 changes" })).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("Show"), "Receipts");
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Pick Digest two" })).not.toBeInTheDocument());
+    expect(calls.some((c) => c.path === "/api/rule-jobs/9/matches" && c.url.searchParams.get("rule_id") === "6")).toBe(true);
+    await userEvent.click(screen.getByRole("checkbox", { name: "Pick Bill" }));
+    await userEvent.click(screen.getByRole("button", { name: "Archive 1 mail" }));
+    await waitFor(() => expect(runBody(calls)).toEqual({ account_id: ACCOUNT.id, left_out: [11, 13] }));
+  });
+
+  it("asks for the typed count only for picked offloads", async () => {
+    const mixed = {
+      ...JOB,
+      rule_ids: [5, 7],
+      per_rule: [
+        { rule: "Junk", rule_id: 7, count: 2, actions: [{ kind: "offload" }], examples: [] },
+        { rule: "Newsletters", rule_id: 5, count: 1, actions: [{ kind: "archive" }], examples: [] },
+      ],
+    };
+    const JUNK = { rule_id: 7, rule_name: "Junk", actions: [{ kind: "offload" }] };
+    const { calls } = mockApi({
+      "GET /api/rule-jobs/9": mixed,
+      "GET /api/rule-jobs/9/matches": [match(13, "Junk one", JUNK), match(12, "Junk two", JUNK), match(11, "Digest one")],
+      "POST /api/rule-jobs/9/run": { job_id: 9 },
+    });
+    renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+    expect(await screen.findByLabelText("Type 2 to offload these mails")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply 3 changes" })).toBeDisabled();
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick Junk two" }));
+    await userEvent.type(screen.getByLabelText("Type 1 to offload these mails"), "1");
+    await userEvent.click(screen.getByRole("button", { name: "Apply 2 changes" }));
+    await waitFor(() => expect(runBody(calls)).toEqual({ account_id: ACCOUNT.id, left_out: [12], confirm: 1 }));
+  });
+
+  it("reopens a run with its match list, and Show more loads the next page", async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => match(200 - i, `Digest ${200 - i}`));
+    const { calls } = mockApi({
+      "GET /api/rule-jobs/9": { ...JOB, planned: 51, per_rule: [{ ...JOB.per_rule[0], count: 51 }] },
+      "GET /api/rule-jobs/9/matches": ({ url }: { url: URL }) => (url.searchParams.get("before_id") === "151" ? [match(7, "Digest 7")] : page1),
+    });
+    renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+    expect(await screen.findByRole("checkbox", { name: "Pick Digest 151" })).toBeChecked();
+    expect(calls.find((c) => c.path === "/api/rule-jobs/9/matches")?.url.searchParams.get("limit")).toBe("50");
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(await screen.findByRole("checkbox", { name: "Pick Digest 7" })).toBeChecked();
+    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive 51 mails" })).toBeEnabled();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("says when nothing fits, with Close", async () => {
+    const none = { ...JOB, planned: 0, no_rule: 4, per_rule: [] };
+    mockApi({ "GET /api/rule-jobs/9": none });
+    const r = renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+    expect(await screen.findByText("No mail fits this rule.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+    r.unmount();
+    mockApi({ "GET /api/rule-jobs/9": { ...none, rule_ids: [5, 6] } });
+    renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+    expect(await screen.findByText("No mail fits these rules.")).toBeInTheDocument();
+  });
+
+  it("ends with applied, skipped and why, failed and left out", async () => {
+    const reason = "It changed since the preview, so it was left as it is.";
+    const done = { ...JOB, state: "DONE", planned: 0, applied: 1, skipped: 2, failed: 0, left_out: 3, skip_reasons: [{ reason, count: 2 }] };
+    mockApi({ "GET /api/rule-jobs/9": done });
+    const r = renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+    expect(await screen.findByText("Done. Applied 1, skipped 2, failed 0, left out 3.")).toBeInTheDocument();
+    expect(within(screen.getByRole("list", { name: "Why mail was skipped" })).getByText(`${reason} (2)`)).toBeInTheDocument();
+    r.unmount();
+    mockApi({ "GET /api/rule-jobs/9": { ...done, state: "STOPPED", skipped: 1, left_out: 0, skip_reasons: [] } });
+    renderApp(<RunRulesDialog account={ACCOUNT} jobId={9} onClose={() => {}} />);
+    expect(await screen.findByText("Stopped. Applied 1, skipped 1, failed 0, left out 0.")).toBeInTheDocument();
   });
 });

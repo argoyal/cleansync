@@ -2,24 +2,23 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { friendlyError } from "../../api/client";
-import { useMailCounts } from "../../api/queries";
-import type { Rule } from "../../api/rules";
+import type { Rule, RunStart } from "../../api/rules";
 import type { Account } from "../../api/types";
 import { useDraftFromMail } from "../../hooks/useRules";
-import { runRulesStart } from "../../lib/mail";
+import { mailView } from "../../lib/mail";
+import { olderMailScope } from "../../lib/ruleRuns";
 import { RuleForm } from "../rules/RuleForm";
 import { Button, Dialog, Notice } from "../ui";
-import { RunRulesDialog, type RunRulesStart } from "./RunRulesDialog";
+import { RunRulesDialog } from "./RunRulesDialog";
 
 /** "Make a rule…" from picked mail: the AI writes a draft from them, the person edits and saves
  * it, then may run it on older mail. Nothing is saved until Save rule. */
 export function MakeRuleDialog({ account, messageIds, onClose }: { account: Account; messageIds: number[]; onClose: () => void }) {
   const [params] = useSearchParams();
   const label = params.get("label") ?? "";
-  const labelName = useMailCounts(account.id, label !== "").data?.labels.find((l) => l.id === label)?.name;
   const draft = useDraftFromMail();
   const [saved, setSaved] = useState<Rule | null>(null);
-  const [run, setRun] = useState<RunRulesStart | null>(null);
+  const [run, setRun] = useState<RunStart | null>(null);
   const asked = useRef(false);
   const write = () => draft.mutate({ accountId: account.id, messageIds });
   useEffect(() => {
@@ -32,14 +31,7 @@ export function MakeRuleDialog({ account, messageIds, onClose }: { account: Acco
   if (run) return <RunRulesDialog account={account} start={run} onClose={onClose} />;
 
   if (saved) {
-    const senders = draft.data?.conditions.senders_in ?? [];
-    // One sender: its older mail. Otherwise the list on screen, as "Run rules on…" would take it;
-    // a view the rules can't take (Suggested, the archive…) falls back to the inbox.
-    const q = params.get("q") ?? "";
-    const start: RunRulesStart =
-      senders.length === 1
-        ? { q: `from:${senders[0]}`, view: "all" }
-        : (runRulesStart(params.get("view") ?? "all", label, labelName, q) ?? { q, view: "inbox" });
+    const scope = olderMailScope(draft.data?.conditions.senders_in ?? [], mailView(params.get("view")), label, params.get("q") ?? "");
     return (
       <Dialog
         title="Rule saved"
@@ -47,7 +39,7 @@ export function MakeRuleDialog({ account, messageIds, onClose }: { account: Acco
         footer={
           <>
             <Button onClick={onClose}>Done</Button>
-            <Button tone="primary" data-autofocus onClick={() => setRun(start)}>
+            <Button tone="primary" data-autofocus onClick={() => setRun({ rule_ids: [saved.id], scope })}>
               Run it on older mail…
             </Button>
           </>

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { api, query } from "./client";
 
@@ -82,8 +82,33 @@ export type JobPreview = {
   failed: number;
   reason: string | null;
   paused?: AiPause | null;
-  per_rule: { rule: string; count: number; actions: RuleAction[]; examples: { subject: string; sender: string; why: string }[] }[];
+  per_rule: { rule: string; rule_id: number | null; count: number; actions: RuleAction[]; examples: { subject: string; sender: string; why: string }[] }[];
+  /** The rules the run decides with ([]: every enabled rule, for runs from before 0.5.0). */
+  rule_ids: number[];
+  view: string;
+  q: string;
+  /** What it ran on, in words: "Inbox · from:shop". */
+  filter_text: string;
+  left_out: number;
+  skip_reasons: { reason: string; count: number }[];
 };
+/** One row of a run's match list (running rules spec §5). */
+export type RuleMatch = {
+  id: number;
+  message_id: number;
+  thread_id: string;
+  subject: string;
+  from_addr: string;
+  date: string;
+  rule_id: number | null;
+  rule_name: string;
+  actions: RuleAction[];
+  why: string;
+};
+/** What a run covers (running rules spec §8): the Inbox (a rule card's Run), a search or a
+ * pick-all as the view, label and search, or threads picked by hand in a view. */
+export type RunScope = { inbox: true } | { view: string; label?: string; q: string; pick_all?: true } | { view: string; label?: string; thread_ids: string[] };
+export type RunStart = { rule_ids: number[]; scope: RunScope };
 /** Counts by outcome, e.g. { applied: 2, waiting: 1 }: "waiting" means the mail is queued and not yet changed. */
 export type ApproveResult = Record<string, number>;
 export type UndoResult = { status: string; left: string[] };
@@ -146,6 +171,18 @@ export const useRuleJob = (accountId: number, jobId: number | null) =>
     queryFn: () => api<JobPreview>(`/api/rule-jobs/${jobId}${query({ account_id: accountId })}`),
     enabled: jobId !== null,
     refetchInterval: (q) => (q.state.data && JOB_DONE.includes(q.state.data.state) ? false : 2000),
+  });
+
+export const MATCH_PAGE = 50;
+/** A run's match list, newest first, 50 a page; `ruleId` keeps one rule's matches. */
+export const useRuleMatches = (accountId: number, jobId: number | null, ruleId: number | null) =>
+  useInfiniteQuery({
+    queryKey: ["rule-job-matches", jobId, ruleId],
+    queryFn: ({ pageParam }) =>
+      api<RuleMatch[]>(`/api/rule-jobs/${jobId}/matches${query({ account_id: accountId, rule_id: ruleId, before_id: pageParam, limit: MATCH_PAGE })}`),
+    initialPageParam: null as number | null,
+    getNextPageParam: (last) => (last.length < MATCH_PAGE ? undefined : last[last.length - 1].id),
+    enabled: jobId !== null,
   });
 
 const JOB_BUSY: JobState[] = ["PREVIEWING", "RUNNING"];

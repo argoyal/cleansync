@@ -2,13 +2,12 @@ import { useState } from "react";
 
 import type { Account, MailMessageInfo } from "../../api/types";
 import { useOffloadOne, useRestoreMail } from "../../hooks/useMailOffload";
-import { runRulesStart, viewKind } from "../../lib/mail";
+import { viewKind } from "../../lib/mail";
 import { Button, Dialog } from "../ui";
 import { DeleteForeverDialog } from "./DeleteForeverDialog";
 import { MakeRuleDialog } from "./MakeRuleDialog";
 import { OffloadMailDialog } from "./OffloadMailDialog";
 import { RuleChip } from "./RuleChip";
-import { RunRulesDialog, type RunRulesStart } from "./RunRulesDialog";
 
 /** The page's main action (spec §9: the deep indigo button), in the Gmail views only. Picked
  * mail has its own actions in the bar (mail panel spec §6). `scope` names the view or label
@@ -17,7 +16,6 @@ export function MailHeaderActions({
   account,
   q,
   view,
-  label = "",
   scope = null,
 }: {
   account: Account;
@@ -27,17 +25,13 @@ export function MailHeaderActions({
   scope?: string | null;
 }) {
   const [open, setOpen] = useState(false);
-  const [rules, setRules] = useState<RunRulesStart | null>(null);
   if (viewKind(view) !== "gmail") return null;
-  const rulesStart = runRulesStart(view, label, scope, q);
   return (
     <>
-      {rulesStart && <Button onClick={() => setRules(rulesStart)}>Run rules on…</Button>}
       <Button tone="main" onClick={() => setOpen(true)}>
         Offload mail…
       </Button>
       {open && <OffloadMailDialog account={account} start={{ q }} scope={scope} onClose={() => setOpen(false)} />}
-      {rules && <RunRulesDialog account={account} start={rules} onClose={() => setRules(null)} />}
     </>
   );
 }

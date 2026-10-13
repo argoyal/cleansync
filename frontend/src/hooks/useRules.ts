@@ -10,13 +10,14 @@ import type {
   RuleDraft,
   Rule,
   RuleFields,
+  RunStart,
   TryResult,
   UndoResult,
   Sorting,
 } from "../api/rules";
 import { useToast } from "../components/Toasts";
 
-export const RULE_KEYS = ["rules", "rules-sorting", "rule-decisions", "rule-job", "rule-job-open"];
+export const RULE_KEYS = ["rules", "rules-sorting", "rule-decisions", "rule-job", "rule-job-open", "rule-job-matches"];
 const MAIL = ["mail-threads", "mail-counts", "mail-totals", "mail-thread", "mail-message"];
 
 /**
@@ -117,20 +118,22 @@ export const useUndo = () =>
   useChange((b: Acc & { ids: number[] }) => post<UndoResult[]>("/api/rule-decisions/undo", { account_id: b.accountId, ids: b.ids }));
 
 // ---- jobs ----
+/** Starts a run (running rules spec §8): its rules, and what it covers. */
 export const useStartRuleJob = () =>
-  useChange((b: Acc & { q?: string; view?: string; messageIds?: number[] }) =>
-    post<{ job_id: number }>("/api/rule-jobs", {
-      account_id: b.accountId,
-      ...(b.q !== undefined ? { q: b.q } : {}),
-      ...(b.view !== undefined ? { view: b.view } : {}),
-      ...(b.messageIds ? { message_ids: b.messageIds } : {}),
-    }),
+  useChange((b: Acc & { start: RunStart }) =>
+    post<{ job_id: number }>("/api/rule-jobs", { account_id: b.accountId, rule_ids: b.start.rule_ids, ...b.start.scope }),
   );
 
-/** `confirm` is the number of mails the person saw in the preview. */
+/** Approves a run's match list: `leftOut` are the unticked matches, or `only` the ticked ones
+ * after Pick all was unticked. `confirm` is the typed count, for Offload and Delete forever. */
 export const useRunRuleJob = () =>
-  useChange((b: Acc & { jobId: number; confirm: number }) =>
-    post<{ job_id: number }>(`/api/rule-jobs/${b.jobId}/run`, { account_id: b.accountId, confirm: b.confirm }),
+  useChange((b: Acc & { jobId: number; leftOut?: number[]; only?: number[]; confirm?: number }) =>
+    post<{ job_id: number }>(`/api/rule-jobs/${b.jobId}/run`, {
+      account_id: b.accountId,
+      left_out: b.leftOut ?? [],
+      ...(b.only ? { only: b.only } : {}),
+      ...(b.confirm !== undefined ? { confirm: b.confirm } : {}),
+    }),
   );
 
 export const useStopRuleJob = () =>

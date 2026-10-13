@@ -144,7 +144,7 @@ function Footer({ account }: { account: Account }) {
   const importRules = useImportRules();
   const toast = useToast();
   const file = useRef<HTMLInputElement>(null);
-  const [open, setOpen] = useState<"starters" | "run" | "copy" | null>(null);
+  const [open, setOpen] = useState<"starters" | "copy" | null>(null);
   const readFile = async (f: File | undefined) => {
     if (!f) return;
     const yaml = await f.text();
@@ -154,7 +154,6 @@ function Footer({ account }: { account: Account }) {
   return (
     <div className="flex flex-wrap gap-2 border-t border-line pt-4">
       <Button onClick={() => setOpen("starters")}>Starter rules…</Button>
-      <Button onClick={() => setOpen("run")}>Run rules on…</Button>
       <a
         href={rulesExportUrl(account.id)}
         download
@@ -168,7 +167,6 @@ function Footer({ account }: { account: Account }) {
       <input ref={file} type="file" accept=".yaml,.yml,text/yaml" aria-label="Rules file to import" className="hidden" onChange={(e) => void readFile(e.target.files?.[0])} />
       {others.length > 0 && <Button onClick={() => setOpen("copy")}>Copy to another mailbox…</Button>}
       {open === "starters" && <StartersDialog accountId={account.id} onClose={() => setOpen(null)} />}
-      {open === "run" && <RunRulesDialog account={account} start={{ q: "", view: "inbox" }} onClose={() => setOpen(null)} />}
       {open === "copy" && <CopyDialog account={account} others={others} onClose={() => setOpen(null)} />}
     </div>
   );

@@ -89,7 +89,7 @@ function Row({
  * hand) or ticked (every mail of the view and search). */
 export type PickState = "none" | "some" | "all";
 
-function PickAllBox({ state, onChange }: { state: PickState; onChange: () => void }) {
+export function PickAllBox({ state, onChange }: { state: PickState; onChange: () => void }) {
   const box = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (box.current) box.current.indeterminate = state === "some";
