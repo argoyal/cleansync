@@ -39,7 +39,7 @@ Open **Mail → Rules**. The rules are for the mailbox picked in the account swi
 
 **The rule form:**
 - **Which mail is this for?** The description, in plain words. This is what the model reads.
-- **What it does:** Archive, Label (the Gmail label is made if it doesn't exist), Mark read, Star, or Offload. Offload stands alone. **Delete forever** is listed but can't be picked yet: it needs full Gmail access, which comes later in this release. A rules file from an older version that says `delete` is read as Offload.
+- **What it does:** Archive, Label (the Gmail label is made if it doesn't exist), Mark read, Star, or Offload. Offload stands alone. **Delete forever** deletes the mail from Gmail and CleanSync's copy. It needs **Allow permanent delete** on for the mailbox (Settings → Accounts), always suggests first (it can't be Automatic), and stands alone. Approving it asks you to type how many mails will be deleted forever. It can't be undone. Correcting a Delete forever rule from a mail's chip only suggests it again; it never deletes anything. A rules file from an older version that says `delete` is read as Offload.
 - **Fixed conditions** (optional): From, Not from, Subject contains, Has an unsubscribe link, Is a calendar invite, Has attachments, and Sent to me / CC / a list. All of them must hold.
 - **How these work with the description**, when there are fixed conditions:
   - *Only the fixed conditions:* no model is asked.
@@ -86,7 +86,7 @@ Mail that sorting is still deciding, and mail you moved back yourself, are skipp
 
 ## 5. Offload and Delete forever
 
-**Offload** (a rule action, or Offload on one mail in the reader) first checks CleanSync's copy of the mail, the same way an offload does. Then it moves the mail to Gmail's trash and marks it Offloaded. Gmail empties its trash on its own after 30 days, and CleanSync can't empty it sooner (see [mail backup](mail-backup.md)). The mail shows in **Offloaded**, beside mail offloaded by a filter or a pick; it isn't part of any offload batch. Undo on the rule's chip takes it out of Gmail's trash again; **Restore to Gmail** works too, and imports it again if Gmail no longer has it. **Delete forever** in Offloaded removes CleanSync's own copy for good; see [mail backup](mail-backup.md#delete-forever). If you take an offloaded mail out of Gmail's trash yourself, CleanSync sees it on its next check and moves it back to your normal mail.
+**Offload** (a rule action, or Offload on one mail in the reader) first checks CleanSync's copy of the mail, the same way an offload does. Then it moves the mail to Gmail's trash and marks it Offloaded. Gmail empties its trash on its own after 30 days, and CleanSync can't empty it sooner (see [mail backup](mail-backup.md)). The mail shows in **Offloaded**, beside mail offloaded by a filter or a pick; it isn't part of any offload batch. Undo on the rule's chip takes it out of Gmail's trash again; **Restore to Gmail** works too, and imports it again if Gmail no longer has it. With Allow permanent delete, a rule's Offload and Offload on one mail delete the mail from Gmail directly instead of moving it to the trash. Undo can't bring such a mail back; use **Restore to Gmail** in Offloaded. If the mailbox stops allowing permanent delete, Delete forever rules stop applying: their suggestions wait with "Turn on Allow permanent delete in Settings → Accounts." and the rule card says the same. **Delete forever** in Offloaded removes CleanSync's own copy for good; see [mail backup](mail-backup.md#delete-forever). If you take an offloaded mail out of Gmail's trash yourself, CleanSync sees it on its next check and moves it back to your normal mail.
 
 ## 6. What the model sees
 
@@ -125,6 +125,7 @@ An answer that can't be read, or that names a rule that isn't on the list, count
 - One rule per mail.
 - A small model gets some mail wrong. Start new rules in Suggest mode and switch them to Automatic once their suggestions look right.
 - A run of rules covers at most 20,000 mails at a time.
+- A Delete forever rule can't be Automatic.
 - The Delete-forever record in the Activity log keeps the mail's sender, subject and date.
 - Only new inbox mail is sorted automatically. Mail that arrives somewhere else (for example straight into a label by a Gmail filter) is not.
 

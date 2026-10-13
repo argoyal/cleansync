@@ -8,8 +8,9 @@ CleanSync uses your own Google OAuth client (see [Google OAuth setup](google-oau
 
 1. In the Google Cloud console, open **APIs & Services → Library**, find **Gmail API** and click **Enable**.
 2. Open **Google Auth Platform → Data access** (or **OAuth consent screen → Scopes**), click **Add or remove scopes**, and add `https://www.googleapis.com/auth/gmail.modify`. Save.
+3. Optional, for **Allow permanent delete**: add `https://mail.google.com/` the same way. Google calls it "Read, compose, send and permanently delete all your email from Gmail". CleanSync uses it only to delete mail from Gmail for good when you offload it or delete it forever, and only for mailboxes where you turn it on. It never sends mail.
 
-`gmail.modify` lets CleanSync read your mail, move offloaded mail to Gmail's trash, take it out again, and put mail back (import). It does not let CleanSync send mail. It also cannot empty Gmail's trash: that would need Google's full mailbox permission, which CleanSync deliberately does not ask for.
+`gmail.modify` lets CleanSync read your mail, move offloaded mail to Gmail's trash, take it out again, and put mail back (import). It does not let CleanSync send mail or empty Gmail's trash.
 
 ## 2. Reconnect with Gmail ticked
 
@@ -18,6 +19,16 @@ In CleanSync, open **Mail** in the rail and press **Set up mail backup** (or **R
 ## 3. Start
 
 CleanSync counts your mail and shows roughly how many mails and how much space ("about N mails, about X GB"; the size is what Gmail and Google Photos use together, as Google doesn't report Gmail alone). Press **Start**. The first backup takes a few hours for a big mailbox; it picks up where it stopped after a restart, a network problem, a missing disk or a paused budget. Nothing in Gmail changes.
+
+## Allow permanent delete
+
+Settings → Accounts shows **Allow permanent delete** for each mailbox with mail backup. It is off at first: offloads move mail to Gmail's trash, and the space comes back when Gmail empties its trash 30 days later.
+
+**Turn on** asks Google for the full Gmail permission for that mailbox. Once Google gives it, offloads delete mail from Gmail directly, so the space comes back at once, and **Delete forever** works on mail still in Gmail. CleanSync still checks its own copy of each mail before anything leaves Gmail.
+
+**Turn off** stops CleanSync from using the permission; Google keeps it until you remove CleanSync's access at myaccount.google.com/permissions (then reconnect the account).
+
+If Google stops allowing it, CleanSync turns the switch off by itself, says so in Settings → Accounts and in Activity, and goes back to Gmail's trash. Only **Turn on** turns it back on; reconnecting the account doesn't.
 
 ## What is kept, and where
 
@@ -38,9 +49,11 @@ Tick mails in the list, or tick **Pick all** at the top to pick every mail of th
 
 **Offload mail…** builds a filter (older than, from, to, label, larger than, has attachments), or starts from your current search, or from mails you picked, or from Pick all. The preview shows how many mails, how much space, the largest and oldest, and what it leaves out and why: mail newer than 30 days (Settings → Mail), mail not fully backed up, and mail already offloaded or deleted. Type the number to start.
 
-For each mail CleanSync first checks its copy here (there, same size, reads as a mail), then moves it to Gmail's trash, then checks it is there. A mail that fails a check stays in Gmail and is listed on the offload. One mail open in the reader has its own **Offload**, which checks the copy and moves that mail to Gmail's trash at once.
+CleanSync works through an offload in batches of up to 1,000 mails. For each batch it first checks every copy here (there, same size, same checksum, reads as a mail). Mail whose copy fails stays in Gmail and is listed on the offload. Then one Gmail call removes the rest of the batch: for good with Allow permanent delete, else to Gmail's trash. If Gmail refuses the batch, CleanSync goes one mail at a time, so one bad mail can't hold up the others. If Gmail doesn't answer (it is down, or your connection is), the offload waits and tries again after 1, 5, 15, then every 60 minutes, and carries on from where it was. **Stop** on the offload's page stops it before its next batch. After a restart an offload goes on by itself.
 
-**Offloaded mail sits in Gmail's trash. Gmail empties its trash on its own after 30 days; that's when the space comes back.** There is no button to empty it sooner, because that needs a wider Google permission than CleanSync asks for. If you need the space right away, empty Gmail's trash yourself in Gmail, but only after checking the offload is what you expect: mail removed from the trash is gone from Gmail for good, and your copy here is then the only one.
+One mail open in the reader has its own **Offload**, which checks the copy and moves that mail to Gmail's trash at once.
+
+**Without Allow permanent delete, offloaded mail sits in Gmail's trash.** Gmail empties its trash on its own after 30 days; that's when the space comes back. With it, the offload's page says "Removed from Gmail. The space is free now." CleanSync never empties Gmail's trash for offloads made before you turned it on. If you need that space right away, empty Gmail's trash yourself in Gmail, but only after checking the offload is what you expect: mail removed from the trash is gone from Gmail for good, and your copy here is then the only one.
 
 Offloads wait while the mail backup is still checking your mailbox (the first backup, or a full re-check): CleanSync says "Wait until the mail backup has finished checking your mailbox, then try again." Try again when the check is done.
 
@@ -48,13 +61,17 @@ Offloads wait while the mail backup is still checking your mailbox (the first ba
 
 **Restore to Gmail** works on one mail, a conversation, a search, a whole offload, or everything deleted in Gmail (Recovery → Mail). A mail still in Gmail's trash is taken out of it; a mail Gmail no longer has is imported from its stored `.eml` with its labels; a mail already in Gmail is left as it is. Before importing, CleanSync looks in Gmail for the mail by its Message-ID, so a restore asked again after Gmail's answer got lost doesn't import it twice; and if the mail backup sees that import first, it keeps it as the same mail, not a new one. The one exception is below.
 
+Mail removed from Gmail for good is imported again from its stored `.eml` and comes back to the Inbox; the summary says "imported again".
+
 ## Delete forever
 
 In Offloaded and Deleted in Gmail, **Delete forever** removes CleanSync's own copy: the `.eml` file, its search entry and its rule history. The mail is already out of Gmail, though mail offloaded in the last 30 days may still sit in Gmail's trash until Gmail empties it. Once it is gone from there too, nothing is left. You type the number of mails to confirm. Activity keeps a short record (sender, subject and date of up to 500 of them, and how many more). It refuses while a restore is running for that mailbox.
 
+With Allow permanent delete, **Delete forever…** also works on mail still in Gmail, in Gmail's views (on picked mail, Pick all, or a mail open in the reader). You type the number of mails first. CleanSync deletes the mail from Gmail first, in batches of up to 1,000, then its own copy. A mail Gmail doesn't delete keeps its copy and is listed. It runs in the background with progress and **Stop**. Without the permission the button is shown disabled.
+
 ## Cost
 
-The Gmail API is free today; Google plans to charge above 80 million units a day per Google Cloud project. CleanSync paces its calls and keeps to its own daily budget: 10 million units by default, at most 40 million (Settings → Google API, where you can see today's use). Drive calls are counted in the same total but are never held back. When the budget is used up, mail backup and offloads wait until midnight UTC; Drive syncing goes on.
+The Gmail API is free today; Google plans to charge above 80 million units a day per Google Cloud project. CleanSync paces its calls and keeps to its own daily budget: 10 million units by default, at most 40 million (Settings → Google API, where you can see today's use). An offload batch costs 50 units for up to 1,000 mails (Gmail's `batchDelete` or `batchModify`); one mail deleted for good costs 10. Drive calls are counted in the same total but are never held back. When the budget is used up, mail backup and offloads wait until midnight UTC; Drive syncing goes on.
 
 ## Limits to know about
 
@@ -63,6 +80,6 @@ The Gmail API is free today; Google plans to charge above 80 million units a day
 - A restore that is asked for but has not started yet is forgotten if CleanSync stops or the storage disk goes missing before it starts. The mails are safe and still show as offloaded; ask for the restore again.
 - CleanSync waits at most 60 seconds on each step of sending a mail to Gmail. A very large mail (tens of MB) on a slow upload connection may not get there in time: the restore stops with "CleanSync couldn't reach Gmail", and the mails not put back yet stay offloaded. Try again from a faster connection. Mail already sent is never imported twice.
 - Drafts, chats, Spam and Trash are not backed up.
-- Mail deleted in Gmail stays here, marked "Deleted in Gmail"; CleanSync never deletes its own copy of it. The only way a copy is removed is **Delete forever** in Offloaded or Deleted in Gmail, which you confirm by typing the count.
+- Mail deleted in Gmail stays here, marked "Deleted in Gmail"; CleanSync never deletes its own copy of it. The only ways a copy is removed are **Delete forever** (which you confirm by typing the count) and a **Delete forever** rule you approve.
 
 See also [troubleshooting](troubleshooting.md) and [known limitations](limitations.md).

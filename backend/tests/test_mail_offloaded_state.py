@@ -177,6 +177,8 @@ def test_thread_list_carries_the_rule_chip(auth_client, mailbox, db):
     assert t["decision"]["rule_name"] == "Newsletters" and t["decision"]["status"] == "suggested"
     m = auth_client.get(f"/api/mail/messages/{row.id}").json()
     assert m["decision"]["why"] == "a digest"
+    # The chip's Undo and "deleted forever" label depend on these two reaching the browser.
+    assert m["decision"]["undoable"] is True and m["decision"]["forever"] is False
 
 
 async def _offload_for_good_by_a_rule(box, app, subject):

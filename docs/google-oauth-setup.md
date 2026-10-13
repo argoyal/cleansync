@@ -14,7 +14,7 @@ CleanSync needs its own Google OAuth client to read and write your Drive and, if
    - Application type: **Web application**.
    - Authorized redirect URI: `<PUBLIC_URL>/api/oauth/callback`, for example `https://drivesync.example.com/api/oauth/callback`. It must match `PUBLIC_URL` exactly.
 5. Copy the client ID and secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` and restart CleanSync.
-6. For mail backup, also enable the Gmail API and add the `gmail.modify` scope: see [Setting up mail backup](mail-backup.md).
+6. For mail backup, also enable the Gmail API and add the `gmail.modify` scope; for **Allow permanent delete** (optional) also add `https://mail.google.com/`. See [Setting up mail backup](mail-backup.md).
 
 ## Branding page (needed to publish)
 

@@ -23,5 +23,7 @@ export default defineConfig({
     { name: "chromium", testMatch: "smoke.spec.ts", use: { ...devices["Desktop Chrome"] } },
     // After the smoke tests: the rules test changes the sample mailbox they count.
     { name: "rules", testMatch: "rules.spec.ts", dependencies: ["chromium"], use: { ...devices["Desktop Chrome"] } },
+    // After the rules test: it removes mail from the pretend Gmail for good, then restores it.
+    { name: "permanent-delete", testMatch: "permanent-delete.spec.ts", dependencies: ["rules"], use: { ...devices["Desktop Chrome"] } },
   ],
 });

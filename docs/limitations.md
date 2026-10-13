@@ -35,11 +35,12 @@ When a new version changes the list of files that never sync (for example, the v
 
 ## Mail
 
-- CleanSync backs up, offloads and sorts mail; it does not send mail, invitations or replies. The reader doesn't mark mail read or add labels by hand; that is done only by [mail rules](mail-rules.md). Offload moves mail to Gmail's trash and keeps CleanSync's copy in Offloaded. Delete forever works only on mail already out of Gmail (Offloaded, Deleted in Gmail) until full Gmail access arrives later in this release.
+- CleanSync backs up, offloads and sorts mail; it does not send mail, invitations or replies. The reader doesn't mark mail read or add labels by hand; that is done only by [mail rules](mail-rules.md). Offload keeps CleanSync's copy in Offloaded. Delete forever on mail still in Gmail needs Allow permanent delete.
 - Gmail only for now; Outlook comes later.
 - Spam, Trash, drafts and chats are not backed up.
 - Mail that cannot be downloaded from Gmail is never offloaded, and the offload preview does not count it among the mails it leaves out.
-- Offloaded mail goes to Gmail's trash and Gmail empties it after 30 days. CleanSync cannot empty it sooner: that needs Google's full mailbox permission, and CleanSync asks only for `gmail.modify`.
+- Without Allow permanent delete, offloaded mail goes to Gmail's trash and Gmail empties it after 30 days. With it, offloads delete mail from Gmail directly. CleanSync doesn't empty Gmail's trash for offloads made before it was turned on.
+- Turning Allow permanent delete off doesn't take the permission back at Google; remove CleanSync's access at myaccount.google.com/permissions for that.
 - Offloads wait while the mail backup is checking the mailbox.
 - A mail with no usable Message-ID header (missing, or with characters a Gmail search can't take) that is restored again after Gmail's answer got lost could end up twice in Gmail (rare). Other mail is never imported twice.
 - A restore that is queued but has not started yet is lost if CleanSync stops or the storage disk is missing at that moment. The mails stay safe (still offloaded); ask for the restore again.
@@ -47,11 +48,12 @@ When a new version changes the list of files that never sync (for example, the v
 - Restoring an old database copy: mail offloaded after that copy needs taking out of Gmail's trash within 30 days (see [backup and recovery](backup-recovery.md#mail)).
 - The size shown before the first backup is what Gmail and Google Photos use together; Google doesn't report Gmail alone.
 - Images inside a mail are shown up to 10 MB per mail; the mail frame has a fixed height and scrolls by itself.
-- If CleanSync stops right after moving a mail to Gmail's trash but before marking it offloaded, that mail shows as "Deleted in Gmail" after the next check; restore it from there.
+- If CleanSync stops in the middle of an offload, the offload goes on by itself after the restart and sends its last batch again; Gmail takes that quietly.
 
 ## Mail rules
 
 - One rule per mail.
+- A Delete forever rule can't be Automatic.
 - Pick all picks every mail of the view and search; Make a rule… uses at most 10 of them.
 - A small model gets some mail wrong, so start new rules in Suggest mode and switch them to Automatic once their suggestions look right.
 - A run of rules covers at most 20,000 mails at a time.

@@ -71,6 +71,8 @@ class DecisionChipOut(BaseModel):
     status: str
     how: str
     why: str
+    undoable: bool = True  # False once the mail was removed from Gmail for good
+    forever: bool = False  # the rule's action is Delete forever
 
 
 class ThreadOut(BaseModel):

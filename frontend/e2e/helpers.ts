@@ -72,14 +72,14 @@ export async function setUpMail(page: Page) {
   await expect(status).toBeVisible({ timeout: 120_000 });
 }
 
-/** Subjects of the mails the pretend Gmail holds in its trash. Needs E2E_CONTAINER (the container's
+/** Every mail the pretend Gmail holds, with its labels. Needs E2E_CONTAINER (the container's
  * name) to look inside, or E2E_FAKE_GMAIL (the mailbox file, for a CleanSync run without Docker);
- * without either this returns null and the test skips that check. */
-export function fakeGmailTrash(): string[] | null {
+ * without either this returns null and the test skips that check (in CI it throws). */
+export function fakeGmailMails(): { subject: string; labels: string[] }[] | null {
   const name = process.env.E2E_CONTAINER;
   const file = process.env.E2E_FAKE_GMAIL;
   if (!name && !file) {
-    // In CI a missing name would silently skip the trash checks, so fail instead.
+    // In CI a missing name would silently skip the Gmail checks, so fail instead.
     if (process.env.CI) throw new Error("E2E_CONTAINER must name the container in CI, or the trash checks are skipped");
     return null;
   }
@@ -89,17 +89,17 @@ export function fakeGmailTrash(): string[] | null {
         maxBuffer: 256 * 1024 * 1024,
       })
     : fs.readFileSync(file!, "utf8");
-  const data = JSON.parse(json) as {
-    messages: { labels: string[]; raw: string }[];
-  };
-  return data.messages
-    .filter((m) => m.labels.includes("TRASH"))
-    .map(
-      (m) =>
-        /^Subject: (.*)$/m
-          .exec(Buffer.from(m.raw, "base64").toString("utf8"))?.[1]
-          ?.trim() ?? "",
-    );
+  const data = JSON.parse(json) as { messages: { labels: string[]; raw: string }[] };
+  return data.messages.map((m) => ({
+    labels: m.labels,
+    subject: /^Subject: (.*)$/m.exec(Buffer.from(m.raw, "base64").toString("utf8"))?.[1]?.trim() ?? "",
+  }));
+}
+
+/** Subjects of the mails the pretend Gmail holds in its trash (null: see fakeGmailMails). */
+export function fakeGmailTrash(): string[] | null {
+  const mails = fakeGmailMails();
+  return mails && mails.filter((m) => m.labels.includes("TRASH")).map((m) => m.subject);
 }
 
 /** Deletes mail in the pretend Gmail by subject, as if the owner deleted it on their phone.
