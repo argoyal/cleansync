@@ -435,7 +435,7 @@ describe("the CleanSync views", () => {
   const OFF = {
     id: 7, account_id: 1, filter_text: "older_than:1y", state: "DONE", total: 3, done: 3, skipped: 0, not_done: 0,
     bytes: 3000, reason: null, created_at: "2026-10-10T09:00:00Z", finished_at: "2026-10-10T09:20:00Z",
-    trash_until: "2026-11-09", google_emptied: false,
+    kind: "offload", removed: 0, trashed: 3, trash_until: "2026-11-09", google_emptied: false,
   };
 
   it("opens Offloaded for an old Local archive link", async () => {

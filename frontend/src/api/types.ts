@@ -348,7 +348,17 @@ export type ActivityJob = {
 };
 
 export type MailCounts = { views: Record<string, number>; labels: { id: string; name: string; count: number }[] };
-export type DecisionChip = { id: number; rule_name: string; status: "suggested" | "applied" | "planned"; how: string; why: string };
+export type DecisionChip = {
+  id: number;
+  rule_name: string;
+  status: "suggested" | "applied" | "planned";
+  how: string;
+  why: string;
+  /** False when the mail left Gmail for good: Undo can't bring it back. */
+  undoable: boolean;
+  /** The rule's action is Delete forever. */
+  forever: boolean;
+};
 export type ThreadRow = {
   thread_id: string;
   count: number;
@@ -422,6 +432,12 @@ export type MailOffload = {
   /** The day Gmail empties these from its trash by itself (30 days after the offload). */
   trash_until: string; // YYYY-MM-DD
   google_emptied: boolean;
+  /** "delete_forever": mail deleted from Gmail and CleanSync (bulk offload spec §5). */
+  kind: "offload" | "delete_forever";
+  /** Removed from Gmail for good: the space is free now. */
+  removed: number;
+  /** In Gmail's trash until Gmail empties it. */
+  trashed: number;
 };
 export type MailOffloadDetail = MailOffload & {
   skipped_items: { message_id: number; subject: string; from_addr: string; date: string; reason: string }[];

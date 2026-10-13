@@ -4,9 +4,9 @@ import { ApiError, friendlyError } from "../api/client";
 import { useMailOffload, useMailOffloads } from "../api/queries";
 import { Bar, Button, Empty, Notice } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
-import { useRestoreMail } from "../hooks/useMailOffload";
+import { useRestoreMail, useStopOffload } from "../hooks/useMailOffload";
 import { formatBytes, formatWhen, percent } from "../lib/format";
-import { OFFLOAD_STATE_TEXT, trashLine } from "../lib/mail";
+import { OFFLOAD_STATE_TEXT, spaceLines } from "../lib/mail";
 
 export { OFFLOAD_STATE_TEXT };
 
@@ -21,6 +21,7 @@ export function MailOffloadPage() {
   const offId = /^[1-9][0-9]{0,15}$/.test(id ?? "") ? Number(id) : null;
   const off = useMailOffload(offId);
   const restore = useRestoreMail();
+  const stop = useStopOffload();
   const missing = offId === null || (off.error instanceof ApiError && off.error.status === 404);
   if (missing || off.isError)
     return (
@@ -52,11 +53,20 @@ export function MailOffloadPage() {
       {o.state === "FAILED" && o.not_done > 0 && <p>{o.not_done.toLocaleString()} weren't reached and stayed in Gmail.</p>}
       {o.done > 0 && (
         <div className="space-y-1">
-          <p className="text-ink-2">{trashLine(o)}</p>
-          <p className="max-w-3xl text-ink-2">{TRASH_NOTE}</p>
+          {spaceLines(o).map((line) => (
+            <p key={line} className="text-ink-2">
+              {line}
+            </p>
+          ))}
+          {o.trashed > 0 && <p className="max-w-3xl text-ink-2">{TRASH_NOTE}</p>}
         </div>
       )}
       <div className="flex flex-wrap gap-2">
+        {busy && (
+          <Button disabled={stop.isPending} onClick={() => stop.mutate(o.id)}>
+            Stop
+          </Button>
+        )}
         <Button disabled={busy || o.done === 0 || accountId === null || restore.isPending} onClick={() => accountId !== null && restore.mutate({ accountId, offloadId: o.id })}>
           Restore all to Gmail
         </Button>

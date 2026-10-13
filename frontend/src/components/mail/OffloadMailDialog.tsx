@@ -86,6 +86,7 @@ export function OffloadMailDialog({
   scope?: string | null;
 }) {
   const navigate = useNavigate();
+  const forGood = account.permanent_delete;
   const fixed = !("q" in start) || "view" in start; // picked mail, or a pick-all
   const labels = useMailCounts(account.id, !fixed).data?.labels ?? [];
   const [fields, setFields] = useState<FilterFields>(EMPTY_FIELDS);
@@ -165,8 +166,9 @@ export function OffloadMailDialog({
       }
     >
       <p className="text-ink-2">
-        Offloaded mail moves to Gmail's trash and stays readable here. Gmail empties its trash on its own after 30 days; that's when the space comes back. You can
-        restore it to Gmail at any time.
+        {forGood
+          ? "Offloaded mail is removed from Gmail for good and stays readable here. The space comes back at once. You can restore it to Gmail at any time."
+          : "Offloaded mail moves to Gmail's trash and stays readable here. Gmail empties its trash on its own after 30 days; that's when the space comes back. You can restore it to Gmail at any time."}
       </p>
       {fixed ? (
         <p>{"view" in start ? "Every mail of the list you picked them in." : "thread_ids" in start ? "The picked threads." : "The picked mails."}</p>
@@ -235,7 +237,8 @@ export function OffloadMailDialog({
       {p && (
         <div className="space-y-3 rounded-card border border-line p-3">
           <p className="font-semibold">
-            {p.count.toLocaleString()} {p.count === 1 ? "mail" : "mails"}, {formatBytes(p.bytes)}. The space is freed in Gmail once Gmail's trash is emptied.
+            {p.count.toLocaleString()} {p.count === 1 ? "mail" : "mails"}, {formatBytes(p.bytes)}.
+            {forGood ? " The space comes back in Gmail at once." : " The space is freed in Gmail once Gmail's trash is emptied."}
           </p>
           {p.excluded.length > 0 && (
             <ul aria-label="Left out" className="space-y-0.5 text-table text-ink-2">

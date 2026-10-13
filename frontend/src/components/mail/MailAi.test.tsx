@@ -51,7 +51,7 @@ describe("AI in mail", () => {
       "POST /api/rule-decisions/approve": { applied: 1 },
       "POST /api/rule-decisions/3/correct": { decision_id: 4 },
     });
-    renderApp(<RuleChip accountId={1} chip={{ id: 3, rule_name: "Newsletters", status: "suggested", how: "ai", why: "a weekly digest" }} />);
+    renderApp(<RuleChip accountId={1} chip={{ id: 3, rule_name: "Newsletters", status: "suggested", how: "ai", why: "a weekly digest", undoable: true, forever: false }} />);
     await userEvent.click(screen.getByRole("button", { name: /Newsletters · suggested/ }));
     expect(screen.getByText("a weekly digest")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
@@ -107,7 +107,7 @@ describe("AI in mail", () => {
 
   it("offers Approve only for a suggestion, and Undo only once applied", async () => {
     mockApi({});
-    const chip = { id: 3, rule_name: "Newsletters", how: "ai", why: "a weekly digest" };
+    const chip = { id: 3, rule_name: "Newsletters", how: "ai", why: "a weekly digest", undoable: true, forever: false };
     const planned = renderApp(<RuleChip accountId={1} chip={{ ...chip, status: "planned" }} />);
     await userEvent.click(screen.getByRole("button", { name: /Newsletters · planned/ }));
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();

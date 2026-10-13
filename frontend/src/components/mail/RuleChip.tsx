@@ -9,7 +9,7 @@ import { CorrectRuleMenu } from "./CorrectRuleMenu";
 const POPOVER_WIDTH = 288;
 
 /** "Newsletters · suggested": what a rule decided for this mail. Clicking it shows why, with
- * Approve, Correct… and (once the rule has acted) Undo. */
+ * Approve, Correct… and (once the rule has acted, and Gmail can still take it back) Undo. */
 export function RuleChip({
   accountId,
   chip,
@@ -34,7 +34,7 @@ export function RuleChip({
     return { x, y: (r?.bottom ?? 0) + 4 };
   };
   const done = { onSuccess: () => onChanged?.() };
-  const label = `${chip.rule_name} · ${chip.status}`;
+  const label = `${chip.rule_name} · ${chip.forever && chip.status === "applied" ? "deleted forever" : chip.status}`;
   return (
     <>
       <span ref={wrap} className="inline-flex min-w-0">
@@ -78,7 +78,7 @@ export function RuleChip({
               >
                 Correct…
               </Button>
-              {chip.status === "applied" && (
+              {chip.status === "applied" && chip.undoable && (
                 <Button
                   disabled={undo.isPending}
                   onClick={() => {

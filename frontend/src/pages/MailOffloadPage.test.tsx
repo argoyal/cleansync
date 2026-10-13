@@ -18,6 +18,9 @@ const OFF = {
   reason: null,
   created_at: "2026-10-10T09:00:00Z",
   finished_at: "2026-10-10T09:20:00Z",
+  kind: "offload",
+  removed: 0,
+  trashed: 120,
   trash_until: "2026-11-09",
   google_emptied: false,
   skipped_items: [{ message_id: 5, subject: "Old photos", from_addr: "friend@example.com", date: "2024-05-01T00:00:00Z", reason: "The copy on this server didn't check out (the file's contents changed), so it stayed in Gmail." }],
@@ -36,6 +39,19 @@ describe("an offload's page", () => {
     const skipped = screen.getByRole("list", { name: "Skipped mails" });
     expect(within(skipped).getByText("Old photos")).toBeInTheDocument();
     expect(within(skipped).getByText(/didn't check out/)).toBeInTheDocument();
+  });
+
+  it("says the space is free for mail removed for good, and offers Stop while it runs", async () => {
+    const { calls } = mockApi({
+      "GET /api/accounts": [ACCOUNT],
+      "GET /api/mail/offloads/5": { ...OFF, id: 5, state: "RUNNING", done: 2, removed: 2, trashed: 0, skipped_items: [] },
+      "POST /api/mail/offloads/5/stop": {},
+    });
+    open(5);
+    expect(await screen.findByText("Removed from Gmail. The space is free now.")).toBeInTheDocument();
+    expect(screen.queryByText(/Gmail empties its trash on its own/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/api/mail/offloads/5/stop")).toBe(true));
   });
 
   it("says when Gmail has emptied its trash, and offers no way to empty it", async () => {

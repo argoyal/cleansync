@@ -1,5 +1,6 @@
 import type { IconName } from "../components/Icon";
 import { formatDay } from "./format";
+import { mails } from "./ruleRuns";
 
 export type MailViewDef = { id: string; label: string; icon: IconName };
 
@@ -73,6 +74,16 @@ export const OFFLOAD_STATE_TEXT: Record<string, string> = {
 export function trashLine(o: { trash_until: string; google_emptied: boolean }): string {
   if (o.google_emptied) return "Gmail has emptied its trash.";
   return `In Gmail's trash until about ${formatDay(o.trash_until)}.`;
+}
+
+export const SPACE_FREE = "Removed from Gmail. The space is free now.";
+
+/** Bulk offload spec §7: where an offload's space comes back. Mail removed for good frees it
+ * now; mail in Gmail's trash when Gmail empties it. A mixed offload gets both, with counts. */
+export function spaceLines(o: { removed: number; trashed: number; trash_until: string; google_emptied: boolean }): string[] {
+  if (o.trashed === 0) return o.removed > 0 ? [SPACE_FREE] : [];
+  if (o.removed === 0) return [trashLine(o)];
+  return [`${mails(o.removed)}: ${SPACE_FREE}`, `${mails(o.trashed)}: ${trashLine(o)}`];
 }
 
 /** Whether the search box holds a real term: quotes and spaces alone ("" or "  ") are no search. */

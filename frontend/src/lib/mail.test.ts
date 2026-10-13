@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CLEANSYNC_VIEWS, GMAIL_VIEWS, hasSearch, labelDot, LABEL_DOTS, mailHref, mailView, viewKind, viewTitle } from "./mail";
+import { CLEANSYNC_VIEWS, GMAIL_VIEWS, hasSearch, labelDot, LABEL_DOTS, mailHref, mailView, SPACE_FREE, spaceLines, viewKind, viewTitle } from "./mail";
 
 describe("mail helpers", () => {
   it("names each view", () => {
@@ -45,5 +45,23 @@ describe("hasSearch", () => {
   it("is false for quotes and spaces alone, true for a real term", () => {
     for (const q of ["", "   ", '""', '  ""  ', '"" ""']) expect(hasSearch(q), q).toBe(false);
     for (const q of ["a", "from:x", '"a b"']) expect(hasSearch(q), q).toBe(true);
+  });
+});
+
+describe("spaceLines", () => {
+  const base = { trash_until: "2026-11-12", google_emptied: false };
+  it("says the space is free when everything left Gmail for good", () => {
+    expect(spaceLines({ ...base, removed: 3, trashed: 0 })).toEqual([SPACE_FREE]);
+  });
+  it("keeps the trash line when nothing was removed for good", () => {
+    expect(spaceLines({ ...base, removed: 0, trashed: 3 })).toEqual([expect.stringMatching(/^In Gmail's trash until about /)]);
+  });
+  it("shows both, with counts, for a mixed offload", () => {
+    const [free, trash] = spaceLines({ ...base, removed: 1200, trashed: 1 });
+    expect(free).toBe(`1,200 mails: ${SPACE_FREE}`);
+    expect(trash).toMatch(/^1 mail: In Gmail's trash until about /);
+  });
+  it("says nothing before any mail left", () => {
+    expect(spaceLines({ ...base, removed: 0, trashed: 0 })).toEqual([]);
   });
 });

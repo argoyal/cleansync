@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { useMailRecovery } from "../../api/queries";
 import { useRestoreMail } from "../../hooks/useMailOffload";
 import { formatBytes, formatWhen } from "../../lib/format";
-import { OFFLOAD_STATE_TEXT, trashLine } from "../../lib/mail";
+import { OFFLOAD_STATE_TEXT, spaceLines } from "../../lib/mail";
 import { Button, Dialog } from "../ui";
 
 /** Spec §3.4: Recovery also holds mail offloads and mail deleted in Gmail. */
@@ -33,7 +33,7 @@ export function MailRecovery({ accountId }: { accountId: number }) {
                 <span className="tabular text-ink-2">
                   {o.done.toLocaleString()} mails · {formatBytes(o.bytes)} · {OFFLOAD_STATE_TEXT[o.state] ?? o.state} · {formatWhen(o.created_at)}
                 </span>
-                {o.done > 0 && <span className="basis-full text-ink-2">{trashLine(o)}</span>}
+                {o.done > 0 && <span className="basis-full text-ink-2">{spaceLines(o).join(" ")}</span>}
               </li>
             ))}
           </ul>

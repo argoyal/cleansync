@@ -17,6 +17,17 @@ export const useStartOffload = () =>
       api<{ offload_id: number }>("/api/mail/offloads", { method: "POST", body: { ...body(b), confirm: b.confirm } }),
   });
 
+/** Stop an offload or a Delete forever job: a waiting one ends now, a running one before its next batch. */
+export function useStopOffload() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: (id: number) => api<unknown>(`/api/mail/offloads/${id}/stop`, { method: "POST" }),
+    onSuccess: (_d, id) => void qc.invalidateQueries({ queryKey: ["mail-offload", id] }),
+    onError: (e) => toast(friendlyError(e), { tone: "error" }),
+  });
+}
+
 /** Spec §5.5: restore never makes a second copy in Gmail, so it needs no typed confirmation.
  * `view` keeps a pick of threads to the mails of the view they were picked in. */
 export function useRestoreMail() {

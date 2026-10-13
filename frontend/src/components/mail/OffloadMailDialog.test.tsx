@@ -42,6 +42,14 @@ describe("the offload filter", () => {
 });
 
 describe("Offload mail…", () => {
+  it("tells a mailbox with permanent delete that the space comes back at once", () => {
+    mockApi({});
+    renderApp(<OffloadMailDialog account={{ ...ACCOUNT, permanent_delete: true }} start={{ q: "older_than:1y" }} onClose={() => {}} />);
+    const dialog = screen.getByRole("dialog", { name: "Offload mail" });
+    expect(dialog).toHaveTextContent("Offloaded mail is removed from Gmail for good and stays readable here.");
+    expect(dialog).not.toHaveTextContent("Gmail empties its trash on its own");
+  });
+
   it("previews, asks for the typed count, starts, and opens the offload", async () => {
     const { calls } = mockApi({
       "GET /api/accounts": [ACTIVE],
