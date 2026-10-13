@@ -108,8 +108,22 @@ describe("Delete forever on mail in Gmail", () => {
       },
     });
     await open();
-    expect(await screen.findByText("Stopped. Deleted 330 mails forever; the rest are still in Gmail.")).toBeInTheDocument();
-    expect(screen.queryByText(/Stopped by you/)).not.toBeInTheDocument();
+    expect(await screen.findByText("Stopped. Deleted 330 mails forever.")).toBeInTheDocument();
+    expect(screen.getByText("Stopped by you. What wasn't deleted yet stays in Gmail, with CleanSync's copy.")).toBeInTheDocument();
+    expect(screen.queryByText(/the rest are still in Gmail/)).not.toBeInTheDocument();
+  });
+
+  it("shows the server's own words when the last batch may already be out of Gmail, with no claim of its own", async () => {
+    const reason =
+      "Stopped by you. The last batch may already be out of Gmail. Those mails will show in Deleted in Gmail, and their copies are kept. The rest stays in Gmail.";
+    mockApi({
+      "POST /api/mail/delete-forever": { deleted: 0, left: 0, job_id: 7 },
+      "GET /api/mail/offloads/7": { ...JOB, state: "FAILED", done: 330, skipped: 0, stopped: true, reason },
+    });
+    await open();
+    expect(await screen.findByText("Stopped. Deleted 330 mails forever.")).toBeInTheDocument();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(screen.queryByText(/the rest are still in Gmail/)).not.toBeInTheDocument();
   });
 
   it("reads the stopped flag, not the wording of the reason", async () => {
@@ -118,7 +132,8 @@ describe("Delete forever on mail in Gmail", () => {
       "GET /api/mail/offloads/7": { ...JOB, state: "FAILED", done: 330, skipped: 0, stopped: true, reason: "You pressed Stop. The rest stays in Gmail." },
     });
     await open();
-    expect(await screen.findByText("Stopped. Deleted 330 mails forever; the rest are still in Gmail.")).toBeInTheDocument();
+    expect(await screen.findByText("Stopped. Deleted 330 mails forever.")).toBeInTheDocument();
+    expect(screen.getByText("You pressed Stop. The rest stays in Gmail.")).toBeInTheDocument();
   });
 
   it("shows a failure as a failure even when its reason begins with the same words", async () => {

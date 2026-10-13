@@ -2,7 +2,7 @@ import { type ReactNode, useId, useState } from "react";
 
 import { useAccounts } from "../../api/queries";
 import { friendlyError } from "../../api/client";
-import { actionKind, type Combine, Rule, RuleAction, RuleConditions, RuleDraft, RuleFields } from "../../api/rules";
+import { actionKind, type Combine, type Rule, type RuleAction, type RuleConditions, type RuleDraft, type RuleFields } from "../../api/rules";
 import { useSaveRule } from "../../hooks/useRules";
 import { FOREVER_OFF } from "../mail/DeleteForeverDialog";
 import { Button, Field, inputClass, Notice } from "../ui";

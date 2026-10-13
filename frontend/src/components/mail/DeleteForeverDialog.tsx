@@ -74,7 +74,10 @@ function ForeverJob({ jobId, count, onClose }: { jobId: number; count: number; o
           <p className="text-ink-2">You can close this. The deleting goes on.</p>
         </>
       ) : stopped ? (
-        <p>Stopped. Deleted {mails(job.done)} forever; the rest are still in Gmail.</p>
+        <>
+          <p>Stopped. Deleted {mails(job.done)} forever.</p>
+          {job.reason && <p>{job.reason}</p>}
+        </>
       ) : (
         <>
           <p>Deleted {mails(job.done)} forever.</p>
