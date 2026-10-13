@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RuleDraft } from "../../api/rules";
-import { json, mockApi, renderApp } from "../../test/utils";
+import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
 import { RuleForm } from "./RuleForm";
 
 const DRAFT: RuleDraft = {
@@ -56,8 +56,8 @@ describe("RuleForm", () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
   });
 
-  it("lists the actions in order, with Delete forever shown but not yet available", () => {
-    mockApi({});
+  it("lists the actions in order, with Delete forever off until the mailbox allows it", () => {
+    mockApi({ "GET /api/accounts": [ACCOUNT] });
     renderApp(<RuleForm accountId={1} initial={DRAFT} onSaved={() => {}} onCancel={() => {}} />);
     const what = screen.getByRole("group", { name: "What it does" });
     expect(within(what).getAllByRole("checkbox").map((c) => c.closest("label")?.textContent?.trim())).toEqual([
@@ -70,8 +70,28 @@ describe("RuleForm", () => {
     ]);
     const forever = within(what).getByRole("checkbox", { name: "Delete forever" });
     expect(forever).toBeDisabled();
-    expect(forever).toHaveAccessibleDescription("Needs full Gmail access (coming in this release)");
+    expect(forever).toHaveAccessibleDescription("Turn on Allow permanent delete in Settings → Accounts.");
     expect(within(what).queryByRole("checkbox", { name: "Delete" })).not.toBeInTheDocument();
+  });
+
+  it("offers Delete forever once the mailbox allows it, on its own and always Suggest first", async () => {
+    const { calls } = mockApi({ "GET /api/accounts": [{ ...ACCOUNT, permanent_delete: true }], "POST /api/rules": SAVED });
+    renderApp(<RuleForm accountId={1} initial={DRAFT} onSaved={() => {}} onCancel={() => {}} />);
+    const forever = await screen.findByRole("checkbox", { name: "Delete forever" });
+    await waitFor(() => expect(forever).toBeEnabled());
+    await userEvent.click(screen.getByRole("radio", { name: "Automatic" }));
+    await userEvent.click(forever);
+    expect(screen.getByRole("checkbox", { name: "Archive" })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: "Automatic" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "Automatic" })).toHaveAccessibleDescription("A Delete forever rule always suggests first.");
+    expect(screen.getByRole("radio", { name: /Suggest first/ })).toBeChecked();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Star" }));
+    expect(forever).not.toBeChecked();
+    await userEvent.click(forever);
+    await userEvent.click(screen.getByRole("button", { name: "Save rule" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === "POST" && c.path === "/api/rules")?.body).toMatchObject({ actions: [{ kind: "delete_forever" }], mode: "suggest" }),
+    );
   });
 
   it("hides how conditions combine until one is filled, and sends ai_only without any", async () => {
@@ -87,7 +107,7 @@ describe("RuleForm", () => {
     await userEvent.clear(screen.getByLabelText("Not from"));
     expect(screen.getByLabelText("Label name")).toHaveValue("News");
     await userEvent.click(screen.getByRole("button", { name: "Save rule" }));
-    await waitFor(() => expect(calls[0]?.body).toMatchObject({ conditions: {}, combine: "ai_only", actions: [{ kind: "label", label: "News" }] }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PUT")?.body).toMatchObject({ conditions: {}, combine: "ai_only", actions: [{ kind: "label", label: "News" }] }));
   });
 
   it("shows the server's refusal next to Save, and a slot for trying the rule", async () => {

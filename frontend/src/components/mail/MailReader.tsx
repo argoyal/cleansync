@@ -13,6 +13,7 @@ import { runOnText } from "../../lib/ruleRuns";
 import { OffloadBatches } from "../../pages/MailOffloadPage";
 import { useToast } from "../Toasts";
 import { Button } from "../ui";
+import { ApproveForeverDialog } from "./ApproveForeverDialog";
 import { DeleteForeverDialog, ForeverButton } from "./DeleteForeverDialog";
 import { MailHeaderActions } from "./MailActions";
 import { MailList, type PickState } from "./MailList";
@@ -65,6 +66,7 @@ export function MailReader({ account }: { account: Account }) {
   const [finding, setFinding] = useState(false); // reading which mails the picked threads hold
   const restore = useRestoreMail();
   const approve = useApprove();
+  const [askForever, setAskForever] = useState<{ ids: number[]; forever: number } | null>(null);
   const qc = useQueryClient();
   const toast = useToast();
   const pickAll: MailPickAll = { view, ...(label ? { label } : {}), q };
@@ -97,6 +99,13 @@ export function MailReader({ account }: { account: Account }) {
   };
   const pickedRows = rows.filter((t) => isPicked(t.thread_id));
   const suggestedIds = rows.flatMap((t) => (t.decision?.status === "suggested" ? [t.decision.id] : []));
+  const foreverIds = new Set(rows.flatMap((t) => (t.decision?.forever ? [t.decision.id] : [])));
+  // Delete forever suggestions need their count typed first (plan decision 16).
+  const approveIds = (ids: number[], done?: () => void) => {
+    const forever = ids.filter((id) => foreverIds.has(id)).length;
+    if (forever > 0) return setAskForever({ ids, forever });
+    approve.mutate({ accountId: account.id, ids }, { onSuccess: done });
+  };
   const pickedSuggestions = pickedRows.flatMap((t) => (t.decision?.status === "suggested" ? [t.decision.id] : []));
   const ruleFrom = pickedRows.map((t) => t.message_id).slice(0, RULE_FROM_AT_MOST);
   // Delete forever takes mails, not threads: read which mails of this view the picked threads hold.
@@ -127,7 +136,7 @@ export function MailReader({ account }: { account: Account }) {
           </span>
         )}
         {view === "suggested" && (
-          <Button tone="primary" disabled={suggestedIds.length === 0 || approve.isPending} onClick={() => approve.mutate({ accountId: account.id, ids: suggestedIds })}>
+          <Button tone="primary" disabled={suggestedIds.length === 0 || approve.isPending} onClick={() => approveIds(suggestedIds)}>
             Approve all
           </Button>
         )}
@@ -175,7 +184,7 @@ export function MailReader({ account }: { account: Account }) {
             <Button
               tone="primary"
               disabled={pickedSuggestions.length === 0 || approve.isPending}
-              onClick={() => approve.mutate({ accountId: account.id, ids: pickedSuggestions }, { onSuccess: clearPicks })}
+              onClick={() => approveIds(pickedSuggestions, clearPicks)}
             >
               Approve
             </Button>
@@ -196,6 +205,9 @@ export function MailReader({ account }: { account: Account }) {
           onText={all ? runOnText({ total: totals?.total, q, place: scope ?? "All mail" }) : runOnText({ threads: picked.size })}
           onClose={() => setPickedAction(null)}
         />
+      )}
+      {askForever && (
+        <ApproveForeverDialog accountId={account.id} ids={askForever.ids} forever={askForever.forever} onDone={clearPicks} onClose={() => setAskForever(null)} />
       )}
       {forever && (
         <DeleteForeverDialog

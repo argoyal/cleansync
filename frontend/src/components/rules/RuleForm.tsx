@@ -1,9 +1,13 @@
 import { type ReactNode, useId, useState } from "react";
 
+import { useAccounts } from "../../api/queries";
 import { friendlyError } from "../../api/client";
 import type { Combine, Rule, RuleAction, RuleConditions, RuleDraft, RuleFields } from "../../api/rules";
 import { useSaveRule } from "../../hooks/useRules";
+import { FOREVER_OFF } from "../mail/DeleteForeverDialog";
 import { Button, Field, inputClass, Notice } from "../ui";
+
+export const FOREVER_SUGGEST_ONLY = "A Delete forever rule always suggests first.";
 
 type Initial = RuleFields | (RuleDraft & { mode?: RuleFields["mode"]; enabled?: boolean });
 type Simple = "archive" | "mark_read" | "star";
@@ -79,6 +83,8 @@ export function RuleForm({
   const [labelOn, setLabelOn] = useState(firstLabel !== undefined);
   const [labelName, setLabelName] = useState(firstLabel && "label" in firstLabel ? firstLabel.label : "");
   const [off, setOff] = useState(initial.actions.some((a) => a.kind === "offload"));
+  const [forever, setForever] = useState(initial.actions.some((a) => a.kind === "delete_forever"));
+  const allowForever = useAccounts().data?.find((a) => a.id === accountId)?.permanent_delete ?? false;
   const [text, setText] = useState<Text>({
     senders_in: (c0.senders_in ?? []).join(", "),
     senders_not_in: (c0.senders_not_in ?? []).join(", "),
@@ -111,6 +117,17 @@ export function RuleForm({
     if (on) {
       setSimple(new Set());
       setLabelOn(false);
+      setForever(false);
+    }
+  };
+  // Delete forever stands alone too, and always suggests first (bulk offload spec §6).
+  const pickForever = (on: boolean) => {
+    setForever(on);
+    if (on) {
+      setSimple(new Set());
+      setLabelOn(false);
+      setOff(false);
+      setMode("suggest");
     }
   };
   const pickSimple = (kind: Simple, on: boolean) => {
@@ -118,16 +135,24 @@ export function RuleForm({
     if (on) next.add(kind);
     else next.delete(kind);
     setSimple(next);
-    if (on) setOff(false);
+    if (on) {
+      setOff(false);
+      setForever(false);
+    }
   };
   const pickLabel = (on: boolean) => {
     setLabelOn(on);
-    if (on) setOff(false);
+    if (on) {
+      setOff(false);
+      setForever(false);
+    }
   };
 
-  const actions: RuleAction[] = off
-    ? [{ kind: "offload" }]
-    : [...SIMPLE.filter(([k]) => simple.has(k)).map(([kind]) => ({ kind })), ...(labelOn ? [{ kind: "label" as const, label: labelName.trim() }] : [])];
+  const actions: RuleAction[] = forever
+    ? [{ kind: "delete_forever" }]
+    : off
+      ? [{ kind: "offload" }]
+      : [...SIMPLE.filter(([k]) => simple.has(k)).map(([kind]) => ({ kind })), ...(labelOn ? [{ kind: "label" as const, label: labelName.trim() }] : [])];
   const rule: RuleFields = {
     name: name.trim(),
     description: description.trim(),
@@ -178,9 +203,14 @@ export function RuleForm({
             <input type="checkbox" checked={off} aria-describedby={`${id}-off`} onChange={(e) => pickOffload(e.target.checked)} />
             Offload
           </label>
-          {/* Round 3 of 0.5.0 turns this on, with the full Gmail permission. */}
-          <label className="flex items-center gap-2 text-ink-2">
-            <input type="checkbox" checked={false} disabled aria-describedby={`${id}-forever`} onChange={() => undefined} />
+          <label className={`flex items-center gap-2 ${allowForever || forever ? "" : "text-ink-2"}`}>
+            <input
+              type="checkbox"
+              checked={forever}
+              disabled={!allowForever && !forever}
+              aria-describedby={`${id}-forever`}
+              onChange={(e) => pickForever(e.target.checked)}
+            />
             Delete forever
           </label>
         </div>
@@ -195,7 +225,7 @@ export function RuleForm({
           Offload checks CleanSync's copy, moves the mail out of Gmail and keeps the copy in Offloaded. You can restore it later.
         </p>
         <p id={`${id}-forever`} className="mt-1 text-meta text-ink-2">
-          Needs full Gmail access (coming in this release)
+          {allowForever ? "Delete forever removes the mail from Gmail and CleanSync's copy. Nothing is left to restore." : FOREVER_OFF}
         </p>
       </fieldset>
 
@@ -261,10 +291,22 @@ export function RuleForm({
             Suggest first (you approve)
           </label>
           <label className="flex items-center gap-2">
-            <input type="radio" name={`${id}-mode`} checked={mode === "automatic"} onChange={() => setMode("automatic")} />
+            <input
+              type="radio"
+              name={`${id}-mode`}
+              checked={mode === "automatic"}
+              disabled={forever}
+              aria-describedby={forever ? `${id}-suggest-only` : undefined}
+              onChange={() => setMode("automatic")}
+            />
             Automatic
           </label>
         </div>
+        {forever && (
+          <p id={`${id}-suggest-only`} className="mt-1 text-meta text-ink-2">
+            {FOREVER_SUGGEST_ONLY}
+          </p>
+        )}
       </fieldset>
 
       {tryPanel?.(rule)}

@@ -4,6 +4,7 @@ import type { DecisionChip } from "../../api/types";
 import { useDismiss } from "../../hooks/useDismiss";
 import { useApprove, useUndo } from "../../hooks/useRules";
 import { Button } from "../ui";
+import { ApproveForeverDialog } from "./ApproveForeverDialog";
 import { CorrectRuleMenu } from "./CorrectRuleMenu";
 
 const POPOVER_WIDTH = 288;
@@ -25,6 +26,7 @@ export function RuleChip({
   const [correctAt, setCorrectAt] = useState<{ x: number; y: number } | null>(
     null,
   );
+  const [asking, setAsking] = useState(false);
   const approve = useApprove();
   const undo = useUndo();
   useDismiss(wrap, () => setAt(null), at !== null, button);
@@ -64,6 +66,7 @@ export function RuleChip({
                   disabled={approve.isPending}
                   onClick={() => {
                     setAt(null);
+                    if (chip.forever) return setAsking(true);
                     approve.mutate({ accountId, ids: [chip.id] }, done);
                   }}
                 >
@@ -103,6 +106,7 @@ export function RuleChip({
           onDone={() => setCorrectAt(null)}
         />
       )}
+      {asking && <ApproveForeverDialog accountId={accountId} ids={[chip.id]} forever={1} onDone={onChanged} onClose={() => setAsking(false)} />}
     </>
   );
 }

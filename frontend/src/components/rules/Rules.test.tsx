@@ -19,6 +19,17 @@ describe("Rules section", () => {
     expect(screen.getByText(/4 mails in 7 days/)).toBeInTheDocument();
   });
 
+  it("says on the card why a Delete forever rule waits", async () => {
+    mockApi({
+      ...ACCOUNTS,
+      "GET /api/rules": [{ ...RULE, actions: [{ kind: "delete_forever" }], blocked: "Turn on Allow permanent delete in Settings → Accounts." }],
+      "GET /api/rules/sorting": SORTING,
+    });
+    renderApp(<MailRulesPage />, { withAccount: true });
+    expect(await screen.findByText("Turn on Allow permanent delete in Settings → Accounts.")).toBeInTheDocument();
+    expect(screen.getByText("Delete forever")).toBeInTheDocument();
+  });
+
   it("writes a rule from a sentence; nothing is saved until confirmed", async () => {
     const { calls } = mockApi({
       ...ACCOUNTS,

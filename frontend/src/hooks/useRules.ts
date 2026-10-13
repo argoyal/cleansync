@@ -103,7 +103,13 @@ export const useSetSorting = () =>
 
 // ---- decisions ----
 export const useApprove = () =>
-  useChange((b: Acc & { ids: number[] }) => post<ApproveResult>("/api/rule-decisions/approve", { account_id: b.accountId, ids: b.ids }));
+  useChange((b: Acc & { ids: number[]; confirm?: number }) =>
+    post<ApproveResult>("/api/rule-decisions/approve", {
+      account_id: b.accountId,
+      ids: b.ids,
+      ...(b.confirm !== undefined ? { confirm: b.confirm } : {}),
+    }),
+  );
 
 export const useReject = () =>
   useChange((b: Acc & { ids: number[] }) => post<{ rejected: number }>("/api/rule-decisions/reject", { account_id: b.accountId, ids: b.ids }));

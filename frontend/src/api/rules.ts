@@ -27,6 +27,8 @@ export type Rule = RuleFields & {
   position: number;
   version: number;
   decided_7d: number;
+  /** Why the rule waits (a Delete forever rule while its mailbox doesn't allow it). */
+  blocked?: string | null;
   senders: { id: number; sender: string; approvals: number; remembered: boolean }[];
 };
 export type RuleDraft = Omit<RuleFields, "mode" | "enabled"> & { notes: string[] };

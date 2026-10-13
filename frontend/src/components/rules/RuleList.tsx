@@ -5,7 +5,7 @@ import { describeAction, type Rule, ruleFields } from "../../api/rules";
 import { useDeleteRule, useForgetSender, useReorderRules, useSaveRule } from "../../hooks/useRules";
 import { runBlock } from "../../lib/ruleRuns";
 import { useToast } from "../Toasts";
-import { Button, Dialog } from "../ui";
+import { Button, Dialog, Notice } from "../ui";
 import { RuleForm } from "./RuleForm";
 import { TryIt } from "./TryIt";
 
@@ -147,6 +147,7 @@ export function RuleList({ rules, accountId, modelSet, onRun }: { rules: Rule[];
                   <div className="min-w-0 flex-1">
                     <p className="break-words">{rule.description || rule.name}</p>
                     <p className="text-table">{rule.actions.map(describeAction).join(", ")}</p>
+                    {rule.blocked && <Notice tone="warn">{rule.blocked}</Notice>}
                   </div>
                   <OnOff rule={rule} accountId={accountId} />
                 </div>
