@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { friendlyError } from "../../api/client";
-import type { Rule, RunStart } from "../../api/rules";
+import { type Rule, type RunStart, useSorting } from "../../api/rules";
 import type { Account } from "../../api/types";
 import { useDraftFromMail } from "../../hooks/useRules";
 import { mailView } from "../../lib/mail";
-import { olderMailScope } from "../../lib/ruleRuns";
+import { olderMailScope, runBlock } from "../../lib/ruleRuns";
 import { RuleForm } from "../rules/RuleForm";
 import { Button, Dialog, Notice } from "../ui";
 import { RunRulesDialog } from "./RunRulesDialog";
@@ -17,6 +17,7 @@ export function MakeRuleDialog({ account, messageIds, onClose }: { account: Acco
   const [params] = useSearchParams();
   const label = params.get("label") ?? "";
   const draft = useDraftFromMail();
+  const modelSet = useSorting(account.id).data?.model_set ?? true;
   const [saved, setSaved] = useState<Rule | null>(null);
   const [run, setRun] = useState<RunStart | null>(null);
   const asked = useRef(false);
@@ -32,6 +33,7 @@ export function MakeRuleDialog({ account, messageIds, onClose }: { account: Acco
 
   if (saved) {
     const scope = olderMailScope(draft.data?.conditions.senders_in ?? [], mailView(params.get("view")), label, params.get("q") ?? "");
+    const blocked = runBlock(saved, modelSet);
     return (
       <Dialog
         title="Rule saved"
@@ -39,13 +41,16 @@ export function MakeRuleDialog({ account, messageIds, onClose }: { account: Acco
         footer={
           <>
             <Button onClick={onClose}>Done</Button>
-            <Button tone="primary" data-autofocus onClick={() => setRun({ rule_ids: [saved.id], scope })}>
-              Run it on older mail…
-            </Button>
+            {!blocked && (
+              <Button tone="primary" data-autofocus onClick={() => setRun({ rule_ids: [saved.id], scope })}>
+                Run it on older mail…
+              </Button>
+            )}
           </>
         }
       >
         <p>“{saved.name}” now looks at new mail. It can also look at mail you already have.</p>
+        {blocked && <p className="mt-2 text-ink-2">{blocked}</p>}
       </Dialog>
     );
   }

@@ -1,6 +1,6 @@
 import pytest
 
-from app.models import MailMessage
+from app.models import MailMessage, RuleDecision
 from app.models.enums import JobState, MailPhase, MailState
 from app.services.mail.store import eml_path
 from tests.mail_helpers import every_row_has_its_file
@@ -170,3 +170,48 @@ async def test_mail_taken_out_of_spam_is_backed_up(box):
     assert state == JobState.SUCCESS and r.downloaded == 1
     assert _row(box, mid).state == MailState.IN_MAIL and _row(box, mid).labels == ["INBOX"]
     every_row_has_its_file(box)
+
+
+@pytest.mark.parametrize("recheck", [False, True])
+async def test_mail_taken_out_of_the_trash_by_hand_after_a_rule_offloaded_it_counts_as_moved_back(
+    box, recheck
+):
+    from app.services.rules.feedback import moved_back
+    from app.services.rules.jobs import RuleJobProblem, RuleJobs, RunScope
+    from app.services.rules.store import RuleIn, create_rule
+
+    ids = await _backed_up(box)
+    with box.sf() as db:
+        row = db.query(MailMessage).filter_by(provider_id=ids[0]).one()
+        rule = create_rule(
+            db,
+            box.acc.id,
+            RuleIn(name="Old", description="old", actions=[{"kind": "offload"}]),
+            "a",
+        )
+        db.add(
+            RuleDecision(
+                account_id=box.acc.id,
+                message_id=row.id,
+                rule_id=rule.id,
+                status="applied",
+                changes={"trash": True},
+            )
+        )
+        row.state, row.offload_id = MailState.OFFLOADED, None
+        db.commit()
+        mail_id, rule_id = row.id, rule.id
+    box.fake.set_labels(ids[0], ("TRASH",))  # the rule's own offload
+    await box.run()
+    with box.sf() as db:
+        assert not moved_back(db, mail_id)
+    box.fake.set_labels(ids[0], ("INBOX",))  # the owner takes it out of the trash by hand
+    if recheck:  # Gmail's history is too old, so the whole mailbox is listed again
+        box.fake.forget_history()
+    await box.run()
+    assert _row(box, ids[0]).state == MailState.IN_MAIL
+    with box.sf() as db:
+        assert moved_back(db, mail_id)
+    jobs = RuleJobs(box.sf, None, type("W", (), {"poke": lambda s: None})())
+    with pytest.raises(RuleJobProblem):
+        jobs.start_preview(box.acc.id, rule_ids=[rule_id], scope=RunScope(message_ids=[mail_id]))

@@ -74,7 +74,7 @@ The Mail status line shows how sorting is going: how many mails were sorted toda
 Sort new inbox mail only looks at new mail. To run rules on mail you already have:
 
 - **Run on a rule card** (Mail → Rules) runs that one rule over your **Inbox**: every mail in Gmail with the Inbox label. Each mail is checked against this rule alone (its remembered senders, its fixed conditions, then the model with this rule as the only choice). Your other rules, and their order, play no part. The button is greyed out while the rule is off, and when the rule needs the model and no Sorting model is set up; the reason shows next to it. For mail outside the Inbox, use a search.
-- **Run rules on a search or a pick.** In Gmail's views (Inbox, Starred, Important, Sent, Archived, All mail and your labels), **Run rules** shows above the list when the search box isn't empty, and on the bar when you have picked mail (by hand, or with **Pick all**). It runs on every mail of the search in that view, or on the picked mail. It isn't offered on a view with no search, or in Suggested, Offloaded or Deleted in Gmail. First tick the rules to run (only rules that are on are listed). Each mail gets at most one rule: the first ticked rule that fits, in the order of your rules.
+- **Run rules on a search or a pick.** In Gmail's views (Inbox, Starred, Important, Sent, Archived, All mail and your labels), **Run rules** shows above the list when the search box isn't empty, and on the bar when you have picked mail (by hand, or with **Pick all**). It runs on every mail of the search in that view, or on the picked mail. It isn't offered on a view with no search and nothing picked, or in Suggested, Offloaded or Deleted in Gmail. First tick the rules to run (only rules that are on are listed). Each mail gets at most one rule: the first ticked rule that fits, in the order of your rules.
 
 Then:
 
@@ -82,7 +82,7 @@ Then:
 2. **The list of matched mails.** It says what each rule would do and how many mails didn't fit, then lists the matched mails 50 at a time (**Show more** for the rest), each with its sender, subject, date and the reason. With several rules, each row shows its rule, and **Show** narrows the list to one rule. Every mail is picked at first (**Pick all**); untick the ones to leave alone. The button names the change and the count, for example **Archive 412 mails**, or **Apply 442 changes** when several rules or actions are involved. Pressing it is your approval, whatever each rule's mode is. If any picked mail would be offloaded, you first type the number of those mails.
 3. **Making the changes.** The changes are made one by one. You can close the window; it keeps going. **Stop** stops it. A mail that changed after it was decided (or whose rule you changed meanwhile) is left as it is and counted as skipped. The end shows how many were applied, skipped (with the reasons), failed, and left out by you. Mail you left out stays as it is.
 
-Mail that sorting is still deciding, and mail you moved back yourself, are skipped. Closing the window before you approve drops the run; nothing is changed. Only one run at a time per mailbox: starting a new one drops a run that is waiting for you, but while changes are being made you have to wait or press **Stop** first. One run covers at most 20,000 mails. Narrow the search for more.
+Mail that sorting is still deciding, and mail you moved back yourself, are skipped. Closing the window keeps the run: the Rules page shows it with an **Open** button, and nothing is changed until you approve. Only one run at a time per mailbox: starting a new one replaces a run that you haven't confirmed, but while changes are being made you have to wait or press **Stop** first. One run covers at most 20,000 mails. Narrow the search for more.
 
 ## 5. Offload and Delete forever
 
@@ -124,7 +124,7 @@ An answer that can't be read, or that names a rule that isn't on the list, count
 
 - One rule per mail.
 - A small model gets some mail wrong. Start new rules in Suggest mode and switch them to Automatic once their suggestions look right.
-- A run of rules on older mail covers at most 20,000 mails at a time.
+- A run of rules covers at most 20,000 mails at a time.
 - The Delete-forever record in the Activity log keeps the mail's sender, subject and date.
 - Only new inbox mail is sorted automatically. Mail that arrives somewhere else (for example straight into a label by a Gmail filter) is not.
 

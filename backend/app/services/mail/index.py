@@ -313,6 +313,8 @@ def apply_labels(
     else:
         # Back out of Trash or Spam (an offloaded mail too: it is in Gmail again), or a plain
         # label change.
+        if row.state == MailState.OFFLOADED:
+            note_restored(db, row)  # a rule that offloaded it won't offload it again
         row.state, row.offload_id = MailState.IN_MAIL, None
         set_flags(row, labels)
     note_label_change(db, row, before, set(labels), utcnow(), seen_at=seen_at)
@@ -364,6 +366,16 @@ def mark_seen_back_in_mail(db: Session, account_id: int) -> int:
     again was taken back out of Trash or Spam by the owner, so it is in Gmail again (as
     keeping up does). The listing gives no labels, so the stored ones stay.
     Relies on offloads being refused while the mail phase is RECHECK or INITIAL (Plan 4)."""
+    for row in db.scalars(
+        select(MailMessage).where(
+            MailMessage.account_id == account_id,
+            MailMessage.state == MailState.OFFLOADED,
+            MailMessage.provider_id.in_(
+                select(MailRecheckSeen.provider_id).where(MailRecheckSeen.account_id == account_id)
+            ),
+        )
+    ):
+        note_restored(db, row)  # a rule that offloaded it won't offload it again
     result = db.execute(
         text(
             "UPDATE mail_messages SET state = :in_mail, offload_id = NULL "

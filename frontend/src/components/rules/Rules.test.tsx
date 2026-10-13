@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { MailRulesPage } from "../../pages/MailRulesPage";
-import { ACCOUNT, mockApi, renderApp } from "../../test/utils";
+import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
 
 const SORTING = { enabled: false, waiting: 0, sorted_today: 0, suggested: 0, failing_since: null, last_error: null, warning: false, model_set: true };
 const RULE = { id: 1, name: "Receipts", description: "Receipts and invoices", conditions: {}, combine: "ai_only", actions: [{ kind: "label", label: "Receipts" }], mode: "suggest", enabled: true, position: 0, version: 1, decided_7d: 4, senders: [] };
@@ -89,6 +89,18 @@ describe("Rules section", () => {
     expect(await screen.findByText("Deciding… 3 of 12")).toBeInTheDocument();
     expect(calls.find((c) => c.method === "POST" && c.path === "/api/rule-jobs")?.body).toEqual({ account_id: 1, rule_ids: [1], inbox: true });
     expect(screen.queryByRole("button", { name: "Run rules on…" })).not.toBeInTheDocument();
+  });
+
+  it("closing a run that is deciding keeps it going, and the page shows it with Open", async () => {
+    const job = { job_id: 9, state: "PREVIEWING", total: 12, decided: 3, planned: 0, no_rule: 0, applied: 0, skipped: 0, failed: 0, reason: null, per_rule: [], view: "inbox", q: "", rule_ids: [1], filter_text: "Inbox", left_out: 0, skip_reasons: [] };
+    const { calls } = mockApi({ ...ACCOUNTS, "GET /api/rules": [RULE], "GET /api/rules/sorting": SORTING, "GET /api/rule-jobs/open": () => (calls.some((c) => c.method === "POST" && c.path === "/api/rule-jobs") ? json(200, job) : json(200, null)), "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": job, "POST /api/rule-jobs/9/stop": null });
+    renderApp(<MailRulesPage />, { withAccount: true });
+    await userEvent.click(await screen.findByRole("button", { name: "Run, Receipts" }));
+    await screen.findByText("Deciding… 3 of 12");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("A run of rules is going on (3 of 12 decided).")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/api/rule-jobs/9/stop")).toBe(false);
   });
 
   it("disables Run, with the reason, for a rule that is off or needs a model that isn't set", async () => {

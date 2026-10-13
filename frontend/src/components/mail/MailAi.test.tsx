@@ -84,12 +84,25 @@ describe("AI in mail", () => {
     });
     renderApp(<MakeRuleDialog account={ACCOUNT} messageIds={[11, 12]} onClose={() => {}} />, { route: "/mail?q=older_than%3A1y" });
     expect(await screen.findByDisplayValue("Shop receipts")).toBeInTheDocument();
-    expect(calls[0].body).toEqual({ account_id: ACCOUNT.id, message_ids: [11, 12] });
+    expect(calls.find((c) => c.path === "/api/rules/draft-from-mail")?.body).toEqual({ account_id: ACCOUNT.id, message_ids: [11, 12] });
     expect(screen.getByText(/only receipts/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save rule" }));
     await userEvent.click(await screen.findByRole("button", { name: "Run it on older mail…" }));
     expect(await screen.findByText("Deciding… 4 of 10")).toBeInTheDocument();
     expect(calls.find((c) => c.path === "/api/rule-jobs")?.body).toEqual({ account_id: ACCOUNT.id, rule_ids: [8], view: "all", q: "from:shop@example.com" });
+  });
+
+  it("doesn't offer to run a saved rule that needs a model when none is set up", async () => {
+    const draft = { name: "Shops", description: "Shop mail", conditions: { senders_in: ["a@example.com"] }, combine: "fixed_then_ai", actions: [{ kind: "archive" }], notes: [] };
+    mockApi({
+      "GET /api/rules/sorting": { enabled: false, waiting: 0, sorted_today: 0, suggested: 0, failing_since: null, last_error: null, warning: false, model_set: false },
+      "POST /api/rules/draft-from-mail": draft,
+      "POST /api/rules": { ...draft, id: 8, mode: "suggest", enabled: true, position: 0, version: 1, decided_7d: 0, senders: [] },
+    });
+    renderApp(<MakeRuleDialog account={ACCOUNT} messageIds={[11]} onClose={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Save rule" }));
+    expect(await screen.findByText("Set up a model in Settings → Models.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run it on older mail…" })).not.toBeInTheDocument();
   });
 
   it("offers Approve only for a suggestion, and Undo only once applied", async () => {
@@ -124,18 +137,15 @@ describe("AI in mail", () => {
     await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-jobs/9/stop")?.body).toEqual({ account_id: ACCOUNT.id }));
   });
 
-  it("closing a preview stops it, so it never blocks the next run; a running job keeps going", async () => {
+  it("closing a run that has an id leaves it going, so the Rules page can open it again", async () => {
     const previewed = { ...JOB, planned: 1 };
-    const { calls } = mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": previewed, "GET /api/rule-jobs/9/matches": [], "POST /api/rule-jobs/9/stop": null });
-    const closed = renderApp(<RunRulesDialog account={ACCOUNT} start={INBOX_RUN} onClose={() => {}} />);
-    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/rule-jobs/9/stop")?.body).toEqual({ account_id: ACCOUNT.id }));
-    closed.unmount();
-    const running = mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": { ...previewed, state: "RUNNING" }, "GET /api/rule-jobs/9/matches": [], "POST /api/rule-jobs/9/stop": null });
-    renderApp(<RunRulesDialog account={ACCOUNT} start={INBOX_RUN} onClose={() => {}} />);
-    expect(await screen.findByText("It keeps going if you close this.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(running.calls.some((c) => c.path === "/api/rule-jobs/9/stop")).toBe(false);
+    for (const state of ["PREVIEWING", "PREVIEWED", "RUNNING"]) {
+      const { calls } = mockApi({ "POST /api/rule-jobs": { job_id: 9 }, "GET /api/rule-jobs/9": { ...previewed, state }, "GET /api/rule-jobs/9/matches": [], "POST /api/rule-jobs/9/stop": null });
+      const r = renderApp(<RunRulesDialog account={ACCOUNT} start={INBOX_RUN} onClose={() => {}} />);
+      await userEvent.click(await screen.findByRole("button", { name: state === "RUNNING" ? "Close" : "Cancel" }));
+      expect(calls.some((c) => c.path === "/api/rule-jobs/9/stop"), state).toBe(false);
+      r.unmount();
+    }
   });
 
   it("shows why deciding is slow when the model is paused", async () => {

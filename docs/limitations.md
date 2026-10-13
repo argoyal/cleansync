@@ -54,7 +54,7 @@ When a new version changes the list of files that never sync (for example, the v
 - One rule per mail.
 - Pick all picks every mail of the view and search; Make a rule… uses at most 10 of them.
 - A small model gets some mail wrong, so start new rules in Suggest mode and switch them to Automatic once their suggestions look right.
-- A run of rules on older mail covers at most 20,000 mails at a time.
+- A run of rules covers at most 20,000 mails at a time.
 - Run on a rule card covers the Inbox only; for other mail, search and use Run rules.
 - The record a Delete forever leaves in the Activity log keeps the mail's sender, subject and date.
 - Only new inbox mail is sorted automatically; mail a Gmail filter sends straight to a label is not.

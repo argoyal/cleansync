@@ -362,3 +362,39 @@ def test_the_sample_mailbox_has_mail_the_marketing_starter_fits():
     for subject in lists:  # the pretend model picks Marketing for both, as the browser test needs
         asked = f"1. Marketing: {marketing}\n<<<EMAIL\nSubject: {subject}\n"
         assert fake_model._choose(asked)["rule"] == 1
+
+
+async def test_the_per_rule_counts_are_planned_mails_one_group_per_rule_in_the_rules_order(gbox):
+    news, shops = rule(gbox, "News"), rule(gbox, "Shops")
+    for i in range(3):
+        gbox.add(f"Shops {i}")
+    gbox.add("News one")
+    gbox.add("News two")
+    worker, jobs = jobs_for(gbox)
+    jid = await decided(
+        gbox, worker, jobs, [shops, news], RunScope(inbox=False, view="inbox", pick_all=True)
+    )
+    with gbox.sf() as db:
+        rows = list(
+            db.scalars(
+                select(RuleDecision).where(RuleDecision.job_id == jid).order_by(RuleDecision.id)
+            )
+        )
+        by_rule = {
+            n: [d for d in rows if d.rule_id == r] for n, r in (("shops", shops), ("news", news))
+        }
+        by_rule["shops"][0].status = DecisionStatus.REJECTED  # left behind by a start that failed
+        by_rule["news"][0].rule_name = "Old name"  # the rule was renamed while it ran
+        db.commit()
+    per = jobs.preview(gbox.acc.id, jid).per_rule
+    # News comes first in the rules' order although Shops has more mails; Shops counts only
+    # the planned ones; the renamed rule is one group under its current name.
+    assert [(g["rule"], g["count"]) for g in per] == [("News", 2), ("Shops", 2)]
+
+
+async def test_a_pick_all_on_a_quoted_empty_search_is_described_without_the_quotes(gbox):
+    news = rule(gbox, "News")
+    gbox.add("News one")
+    worker, jobs = jobs_for(gbox)
+    jid = await decided(gbox, worker, jobs, [news], RunScope(view="inbox", q='""', pick_all=True))
+    assert '""' not in jobs.preview(gbox.acc.id, jid).filter_text

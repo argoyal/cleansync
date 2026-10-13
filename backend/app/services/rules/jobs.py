@@ -118,6 +118,8 @@ def _search_of(scope: RunScope) -> str:
     """The search a run went through: "" for the Inbox and for a pick by hand."""
     if scope.inbox or scope.message_ids or scope.thread_ids:
         return ""
+    if parse_query(scope.q, now=utcnow()).is_empty():
+        return ""  # a quoted-empty search ('""') is no search
     return scope.q.strip()
 
 
@@ -293,34 +295,49 @@ class RuleJobs:
                 .group_by(RuleDecision.reason)
                 .order_by(func.count().desc())
             ).all()
-            groups: dict[tuple, dict] = defaultdict(lambda: {"count": 0, "examples": []})
+            groups: dict[int, dict] = defaultdict(lambda: {"count": 0, "examples": []})
             rows = db.execute(
                 select(
                     RuleDecision.rule_id,
                     RuleDecision.rule_name,
+                    Rule.position,
                     RuleDecision.actions,
                     RuleDecision.why,
                     MailMessage.subject,
                     MailMessage.from_addr,
                 )
                 .join(MailMessage, MailMessage.id == RuleDecision.message_id)
-                .where(RuleDecision.job_id == job_id, RuleDecision.rule_id.is_not(None))
+                .outerjoin(Rule, Rule.id == RuleDecision.rule_id)
+                .where(
+                    RuleDecision.job_id == job_id,
+                    RuleDecision.rule_id.is_not(None),
+                    RuleDecision.status == DecisionStatus.PLANNED,
+                )
                 .order_by(RuleDecision.id)
             ).all()
-            for rule_id, name, actions, why, subject, sender in rows:
-                g = groups[(rule_id, name)]
+            for rule_id, name, position, actions, why, subject, sender in rows:
+                g = groups[rule_id]
+                g["rule"], g["position"] = name, position if position is not None else 10**9
                 g["count"] += 1
                 g["actions"] = actions
                 if len(g["examples"]) < EXAMPLES:
                     g["examples"].append({"subject": subject, "sender": sender, "why": why})
-            ordered = sorted(groups.items(), key=lambda x: -x[1]["count"])
+            # The rules' own order; the name is the latest one a decision of the run carries.
+            ordered = sorted(groups.items(), key=lambda x: (x[1]["position"], x[0]))
             return JobPreview(
                 job_id=job.id,
                 state=job.state,
                 total=job.total,
                 decided=job.decided,
                 planned=counts.get(DecisionStatus.PLANNED, 0),
-                per_rule=[{"rule": n, "rule_id": rid, **g} for (rid, n), g in ordered],
+                per_rule=[
+                    {
+                        "rule": g["rule"],
+                        "rule_id": rid,
+                        **{k: v for k, v in g.items() if k not in ("rule", "position")},
+                    }
+                    for rid, g in ordered
+                ],
                 no_rule=counts.get(DecisionStatus.NO_RULE, 0),
                 applied=job.applied,
                 skipped=job.skipped,

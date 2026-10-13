@@ -148,9 +148,9 @@ export function RunRulesDialog({ account, start, jobId: existing, onClose }: Pro
   const changed = job ? job.applied + job.skipped + job.failed : 0;
   const stopJob = () => jobId !== null && stop.mutate({ accountId: account.id, jobId });
   const cancel = () => {
+    // A run that has an id keeps going (the Rules page shows it, with Open). Only a run closed
+    // before it got an id is stopped, once the start answers. A new run replaces one that wasn't confirmed.
     closed.current = true;
-    // Only a run that is making changes keeps going: a list left open would block the next run.
-    if (state === "PREVIEWING" || state === "PREVIEWED" || (jobId !== null && !job && existing === undefined)) stopJob();
     onClose();
   };
   const toggle = (m: RuleMatch) => {
