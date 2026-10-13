@@ -74,3 +74,8 @@ export function trashLine(o: { trash_until: string; google_emptied: boolean }): 
   if (o.google_emptied) return "Gmail has emptied its trash.";
   return `In Gmail's trash until about ${formatDay(o.trash_until)}.`;
 }
+
+/** Whether the search box holds a real term: quotes and spaces alone ("" or "  ") are no search. */
+export function hasSearch(q: string): boolean {
+  return q.replace(/["\s]/g, "") !== "";
+}

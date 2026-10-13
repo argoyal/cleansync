@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CLEANSYNC_VIEWS, GMAIL_VIEWS, labelDot, LABEL_DOTS, mailHref, mailView, viewKind, viewTitle } from "./mail";
+import { CLEANSYNC_VIEWS, GMAIL_VIEWS, hasSearch, labelDot, LABEL_DOTS, mailHref, mailView, viewKind, viewTitle } from "./mail";
 
 describe("mail helpers", () => {
   it("names each view", () => {
@@ -38,5 +38,12 @@ describe("mail helpers", () => {
     expect(mailView("archive")).toBe("offloaded");
     expect(mailView("inbox")).toBe("inbox");
     expect(mailHref({ view: "offloaded", tab: "batches" })).toBe("/mail?view=offloaded&tab=batches");
+  });
+});
+
+describe("hasSearch", () => {
+  it("is false for quotes and spaces alone, true for a real term", () => {
+    for (const q of ["", "   ", '""', '  ""  ', '"" ""']) expect(hasSearch(q), q).toBe(false);
+    for (const q of ["a", "from:x", '"a b"']) expect(hasSearch(q), q).toBe(true);
   });
 });

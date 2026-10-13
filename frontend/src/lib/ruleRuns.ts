@@ -1,5 +1,5 @@
 import { describeAction, type RuleAction, type RunScope } from "../api/rules";
-import { viewKind } from "./mail";
+import { hasSearch, viewKind } from "./mail";
 
 /** "1 mail", "1,284 mails". */
 export const mails = (n: number) => `${n.toLocaleString()} ${n === 1 ? "mail" : "mails"}`;
@@ -79,7 +79,7 @@ export function confirmLabel(kinds: Set<string>, n: number): string {
  * Offloaded, Deleted in Gmail, or All mail with no search or label) falls back to the Inbox. */
 export function olderMailScope(senders: string[], view: string, label: string, q: string): RunScope {
   if (senders.length === 1) return { view: "all", q: `from:${senders[0]}` };
-  if (viewKind(view) === "gmail" && (q.trim() !== "" || label !== "" || view !== "all")) return { view, ...(label ? { label } : {}), q, pick_all: true };
+  if (viewKind(view) === "gmail" && (hasSearch(q) || label !== "" || view !== "all")) return { view, ...(label ? { label } : {}), q, pick_all: true };
   return { inbox: true };
 }
 
@@ -95,5 +95,5 @@ export function runBlock(rule: { enabled: boolean; combine: string }, modelSet: 
 export function runOnText(on: { threads: number } | { total: number | undefined; q: string; place: string }): string {
   if ("threads" in on) return `Run on: ${on.threads.toLocaleString()} picked ${on.threads === 1 ? "thread" : "threads"}`;
   const n = on.total === undefined ? "the mails" : mails(on.total);
-  return on.q.trim() ? `Run on: ${n} matching ${on.q.trim()}` : `Run on: ${n} in ${on.place}`;
+  return hasSearch(on.q) ? `Run on: ${n} matching ${on.q.trim()}` : `Run on: ${n} in ${on.place}`;
 }

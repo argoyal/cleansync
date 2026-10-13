@@ -18,7 +18,7 @@ from app.core.clock import utcnow
 from app.models import MailMessage, Rule, RuleDecision, RuleJob, RuleTodo
 from app.models.enums import DecisionStatus, MailState, RuleJobState
 from app.services.mail.offload_plan import Pick, chunked, describe_pick
-from app.services.mail.search import GMAIL_VIEWS, SearchError, mail_conditions
+from app.services.mail.search import GMAIL_VIEWS, SearchError, mail_conditions, parse_query
 from app.services.rules.apply import WAIT_ERRORS, Applier
 from app.services.rules.worker import SortingWorker
 
@@ -107,7 +107,7 @@ def _scope_conditions(db: Session, account_id: int, scope: RunScope, now) -> lis
             MailMessage.thread_id.in_(scope.thread_ids),
             *mail_conditions(db, account_id, view=scope.view, label=scope.label, now=now),
         ]
-    if scope.pick_all or scope.q.strip():
+    if scope.pick_all or not parse_query(scope.q, now=now).is_empty():
         return mail_conditions(
             db, account_id, view=scope.view, label=scope.label, q=scope.q, now=now
         )

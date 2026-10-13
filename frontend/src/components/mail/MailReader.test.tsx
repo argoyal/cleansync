@@ -701,6 +701,10 @@ describe("Run rules on a search or a pick", () => {
       expect(screen.queryByRole("button", { name: "Run rules" }), route).not.toBeInTheDocument();
       r.unmount();
     }
+    const quoted = open("/mail?view=inbox&q=%22%22");
+    await screen.findByRole("checkbox", { name: "Pick One" });
+    expect(screen.queryByRole("button", { name: "Run rules" })).not.toBeInTheDocument();
+    quoted.unmount();
     open("/mail?view=inbox&q=from%3Ashop");
     expect(await screen.findByRole("button", { name: "Run rules" })).toBeInTheDocument();
   });

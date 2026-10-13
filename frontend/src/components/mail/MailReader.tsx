@@ -8,7 +8,7 @@ import type { Account, MailPickAll } from "../../api/types";
 import { useRestoreMail } from "../../hooks/useMailOffload";
 import { useApprove } from "../../hooks/useRules";
 import { formatBytes } from "../../lib/format";
-import { mailHref, mailView, viewKind, viewTitle } from "../../lib/mail";
+import { hasSearch, mailHref, mailView, viewKind, viewTitle } from "../../lib/mail";
 import { runOnText } from "../../lib/ruleRuns";
 import { OffloadBatches } from "../../pages/MailOffloadPage";
 import { useToast } from "../Toasts";
@@ -111,7 +111,7 @@ export function MailReader({ account }: { account: Account }) {
   };
   const restorePicked = () =>
     restore.mutate(all ? { accountId: account.id, start: pickAll } : { accountId: account.id, start: { thread_ids: [...picked] }, view }, { onSuccess: clearPicks });
-  const searching = q.trim() !== "";
+  const searching = hasSearch(q);
   // Pick all of All mail with no search and no label is the whole mailbox: Offload refuses it.
   const wholeMailbox = all && view === "all" && !label && !searching;
   const title = searching ? "Search results" : viewTitle(view, label ? (labelName ?? label) : null);

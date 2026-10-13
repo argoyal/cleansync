@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import type { Account, MailMessageInfo } from "../../api/types";
 import { useOffloadOne, useRestoreMail } from "../../hooks/useMailOffload";
-import { viewKind } from "../../lib/mail";
+import { hasSearch, viewKind } from "../../lib/mail";
 import { runOnText } from "../../lib/ruleRuns";
 import { Button, Dialog } from "../ui";
 import { DeleteForeverDialog } from "./DeleteForeverDialog";
@@ -36,7 +36,7 @@ export function MailHeaderActions({
   if (viewKind(view) !== "gmail") return null;
   return (
     <>
-      {q.trim() !== "" && !picking && <Button onClick={() => setRules(true)}>Run rules</Button>}
+      {hasSearch(q) && !picking && <Button onClick={() => setRules(true)}>Run rules</Button>}
       <Button tone="main" onClick={() => setOpen(true)}>
         Offload mail…
       </Button>

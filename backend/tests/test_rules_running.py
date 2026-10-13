@@ -211,6 +211,7 @@ async def test_a_start_needs_rules_and_a_search_or_a_pick(gbox, make_account):
         ([news, other], RunScope(inbox=True), "Run on the Inbox takes one rule."),
         ([news], RunScope(view="inbox"), "Search first, or pick some mail."),
         ([news], RunScope(view="all", q="   "), "Search first, or pick some mail."),
+        ([news], RunScope(view="all", q='""'), "Search first, or pick some mail."),
         ([news], RunScope(view="offloaded", q="news"), "Rules run on mail in Gmail's views only."),
         (
             [news],
