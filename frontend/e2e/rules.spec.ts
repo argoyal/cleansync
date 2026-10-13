@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { fakeGmailTrash, ready, setUpMail } from "./helpers";
+import { fakeGmailDelete, fakeGmailTrash, ready, setUpMail } from "./helpers";
 
 // Mail rules with the pretend model (backend/app/devtools/fake_model.py): it picks the rule whose
 // name is in the mail's subject. CleanSync's server calls it, so the address is as the server
@@ -15,7 +15,7 @@ async function rows(page: Page, view: string) {
   return list;
 }
 
-test("a rule written in a sentence previews, applies, undoes; Delete keeps a copy until Delete forever", async ({ page }) => {
+test("a rule written in a sentence previews, applies, undoes; a search offloads, restores and deletes forever", async ({ page }) => {
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   const problems: string[] = [];
@@ -74,28 +74,60 @@ test("a rule written in a sentence previews, applies, undoes; Delete keeps a cop
   await expect(chip).toBeHidden();
   await expect((await rows(page, "inbox")).getByRole("link", { name: /Invoice October/ })).toBeVisible();
 
-  // 5. Delete a mail: it goes to Gmail's trash, and CleanSync keeps it in the Local archive.
-  const inbox = await rows(page, "inbox");
-  await page.getByRole("checkbox", { name: "Pick Photos from the weekend" }).check();
-  await page.getByRole("region", { name: "Picked mail" }).getByRole("button", { name: "Delete", exact: true }).click();
-  await page.getByRole("dialog", { name: "Delete", exact: true }).getByRole("button", { name: "Move to trash" }).click();
-  await expect(page.getByText("Moved 1 mail to Gmail's trash.")).toBeVisible();
-  await expect(inbox.getByRole("link", { name: /Photos from the weekend/ })).toHaveCount(0);
-  const archive = await rows(page, "archive");
-  await expect(archive.getByRole("listitem")).toHaveCount(1);
-  await expect(archive.getByRole("link", { name: /Photos from the weekend/ })).toBeVisible();
+  // 5. Build a search with the form in the Inbox, pick all of it, and offload it.
+  await page.goto("/mail?view=inbox");
+  await page.getByRole("button", { name: "Search options" }).click();
+  const options = page.getByRole("region", { name: "Search options" });
+  await options.getByLabel("Has the words").fill("weekend");
+  await options.getByLabel("Has attachment").check();
+  await options.getByRole("button", { name: "Search" }).click();
+  await expect(page.getByRole("textbox", { name: "Search mail" })).toHaveValue("weekend has:attachment");
+  await expect(page).toHaveURL(/view=inbox/);
+  const found = page.getByRole("list", { name: "Mail" });
+  await expect(found.getByRole("listitem")).toHaveCount(1);
+  await expect(found.getByRole("link", { name: /Photos from the weekend/ })).toBeVisible();
+  await page.getByRole("checkbox", { name: "Pick all" }).check();
+  const picked = page.getByRole("region", { name: "Picked mail" });
+  await expect(picked.getByText("The 1 mail in this search is picked.")).toBeVisible();
+  await picked.getByRole("button", { name: "Offload", exact: true }).click();
+  const offload = page.getByRole("dialog", { name: "Offload mail" });
+  await offload.getByRole("button", { name: "Preview" }).click();
+  await offload.getByLabel("To start, type 1").fill("1");
+  await offload.getByRole("button", { name: "Start offload" }).click();
+  await expect(page.getByText(/^Offloaded 1 of 1 mails/)).toBeVisible({ timeout: 60_000 });
   expect(fakeGmailTrash() ?? ["Photos from the weekend"]).toContain("Photos from the weekend");
 
-  // 6. Delete it forever from the Local archive: CleanSync's copy goes; Gmail's trash is untouched.
-  await page.getByRole("checkbox", { name: "Pick Photos from the weekend" }).check();
-  await page.getByRole("region", { name: "Picked mail" }).getByRole("button", { name: "Delete forever…" }).click();
-  const forever = page.getByRole("dialog", { name: "Delete forever" });
-  await forever.getByLabel("Type 1 to delete forever").fill("1");
-  await forever.getByRole("button", { name: "Delete forever" }).click();
-  await expect(page.getByText("Deleted 1 mail forever.")).toBeVisible();
-  await rows(page, "archive");
-  await expect(page.getByText("No mail here.")).toBeVisible();
-  expect(fakeGmailTrash() ?? ["Photos from the weekend"]).toContain("Photos from the weekend");
+  // 6. It's in Offloaded now and gone from the Inbox; restore it from Offloaded.
+  await expect((await rows(page, "inbox")).getByRole("link", { name: /Photos from the weekend/ })).toHaveCount(0);
+  const offloaded = await rows(page, "offloaded");
+  await offloaded.getByRole("link", { name: /Photos from the weekend/ }).click();
+  await page.getByRole("region", { name: "Open mail" }).getByRole("button", { name: "Restore to Gmail" }).click();
+  await expect(page.getByText("Putting 1 mail back in Gmail. Sync activity shows when it's done.")).toBeVisible();
+  await expect
+    .poll(async () => (await rows(page, "inbox")).getByRole("link", { name: /Photos from the weekend/ }).count(), { timeout: 60_000 })
+    .toBe(1);
+
+  // 7. Delete a mail in Gmail itself: it shows in Deleted in Gmail, and Delete forever removes CleanSync's copy.
+  if (fakeGmailDelete("Old newsletter #1")) {
+    await page.goto("/mail?view=inbox");
+    await page.getByRole("button", { name: "Check now" }).click();
+    await expect
+      .poll(async () => (await rows(page, "deleted")).getByRole("link", { name: /Old newsletter #1/ }).count(), { timeout: 60_000 })
+      .toBe(1);
+    const search = page.getByRole("textbox", { name: "Search mail" });
+    await search.fill("newsletter");
+    await search.press("Enter");
+    await expect(page).toHaveURL(/view=deleted/);
+    await page.getByRole("checkbox", { name: "Pick all" }).check();
+    const bar = page.getByRole("region", { name: "Picked mail" });
+    await expect(bar.getByText("The 1 mail in this search is picked.")).toBeVisible();
+    await bar.getByRole("button", { name: "Delete forever…" }).click();
+    const forever = page.getByRole("dialog", { name: "Delete forever" });
+    await forever.getByLabel("Type 1 to delete forever").fill("1");
+    await forever.getByRole("button", { name: "Delete forever" }).click();
+    await expect(page.getByText("Deleted 1 mail forever.")).toBeVisible();
+    await expect(page.getByText("No mail here.")).toBeVisible();
+  }
 
   expect(problems, problems.join("\n")).toEqual([]);
 });

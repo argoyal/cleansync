@@ -101,3 +101,20 @@ export function fakeGmailTrash(): string[] | null {
           ?.trim() ?? "",
     );
 }
+
+/** Deletes mail in the pretend Gmail by subject, as if the owner deleted it on their phone.
+ * Like fakeGmailTrash it needs E2E_CONTAINER or E2E_FAKE_GMAIL (with E2E_FAKE_GMAIL the
+ * backend's own Python runs it, from ../backend); without either it returns false and the
+ * test skips that part. */
+export function fakeGmailDelete(subject: string): boolean {
+  const name = process.env.E2E_CONTAINER;
+  const file = process.env.E2E_FAKE_GMAIL;
+  if (!name && !file) {
+    if (process.env.CI) throw new Error("E2E_CONTAINER must name the container in CI, or the Deleted in Gmail step is skipped");
+    return false;
+  }
+  const args = ["-m", "app.devtools.fake_gmail", "delete", "--file", name ? "/drivesync/app/data/fake-gmail/alice@example.com.json" : file!, "--subject", subject];
+  if (name) execFileSync("docker", ["exec", name, "python", ...args]);
+  else execFileSync("uv", ["run", "python", ...args], { cwd: process.env.E2E_BACKEND_DIR ?? "../backend" });
+  return true;
+}

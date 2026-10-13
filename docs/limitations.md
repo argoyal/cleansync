@@ -35,7 +35,7 @@ When a new version changes the list of files that never sync (for example, the v
 
 ## Mail
 
-- CleanSync backs up, offloads and sorts mail; it does not send mail, invitations or replies. The reader doesn't mark mail read or add labels by hand; that is done only by [mail rules](mail-rules.md). Delete moves mail to Gmail's trash and keeps CleanSync's copy in the Local archive.
+- CleanSync backs up, offloads and sorts mail; it does not send mail, invitations or replies. The reader doesn't mark mail read or add labels by hand; that is done only by [mail rules](mail-rules.md). Offload moves mail to Gmail's trash and keeps CleanSync's copy in Offloaded. Delete forever works only on mail already out of Gmail (Offloaded, Deleted in Gmail) until full Gmail access arrives later in this release.
 - Gmail only for now; Outlook comes later.
 - Spam, Trash, drafts and chats are not backed up.
 - Mail that cannot be downloaded from Gmail is never offloaded, and the offload preview does not count it among the mails it leaves out.
@@ -52,6 +52,7 @@ When a new version changes the list of files that never sync (for example, the v
 ## Mail rules
 
 - One rule per mail.
+- Pick all picks every mail of the view and search; Make a rule… uses at most 10 of them.
 - A small model gets some mail wrong, so start new rules in Suggest mode and switch them to Automatic once their suggestions look right.
 - A run of rules on older mail covers at most 20,000 mails at a time.
 - The record a Delete forever leaves in the Activity log keeps the mail's sender, subject and date.

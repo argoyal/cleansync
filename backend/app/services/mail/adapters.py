@@ -32,7 +32,7 @@ class MailAdapters:
     def for_account(self, account: Account) -> MailAdapter:
         if is_pretend(account, self.allow_pretend):
             fake = self._fakes.get(account.email)
-            if fake is None:
+            if fake is None or fake.changed_on_disk():
                 fake = FakeGmail.load(self.fake_path(account.email), email=account.email)
                 self._fakes[account.email] = fake
             google = GoogleClient(

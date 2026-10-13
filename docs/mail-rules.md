@@ -1,6 +1,6 @@
 # Mail rules
 
-Mail rules sort your Gmail for you. You write each rule in your own words ("newsletters I never read: archive them"), and CleanSync asks an AI model of your choice which rule fits each new inbox mail. It can then archive the mail, add a label, mark it read, star it, or delete it (to Gmail's trash). Rules belong to one mailbox. CleanSync still never sends mail.
+Mail rules sort your Gmail for you. You write each rule in your own words ("newsletters I never read: archive them"), and CleanSync asks an AI model of your choice which rule fits each new inbox mail. It can then archive the mail, add a label, mark it read, star it, or offload it (out of Gmail, with CleanSync's copy kept). Rules belong to one mailbox. CleanSync still never sends mail.
 
 You choose the model: one running on your own machine (Ollama, LM Studio, llama.cpp, vLLM), your own LiteLLM gateway, or a hosted one such as OpenRouter's free models. No cloud AI service is needed.
 
@@ -39,7 +39,7 @@ Open **Mail → Rules**. The rules are for the mailbox picked in the account swi
 
 **The rule form:**
 - **Which mail is this for?** The description, in plain words. This is what the model reads.
-- **What it does:** Archive, Mark read, Star, Label (the Gmail label is made if it doesn't exist), or Delete. Delete stands alone.
+- **What it does:** Archive, Label (the Gmail label is made if it doesn't exist), Mark read, Star, or Offload. Offload stands alone. **Delete forever** is listed but can't be picked yet: it needs full Gmail access, which comes later in this release. A rules file from an older version that says `delete` is read as Offload.
 - **Fixed conditions** (optional): From, Not from, Subject contains, Has an unsubscribe link, Is a calendar invite, Has attachments, and Sent to me / CC / a list. All of them must hold.
 - **How these work with the description**, when there are fixed conditions:
   - *Only the fixed conditions:* no model is asked.
@@ -81,17 +81,9 @@ Closing the dialog before you type the number drops the preview; nothing is chan
 
 Only one run at a time per mailbox. Starting a new one drops a preview that is still open, but while changes are being made you have to wait or press **Stop** first. One run covers at most 20,000 mails. Narrow the search for more.
 
-## 5. Delete and the Local archive
+## 5. Offload and Delete forever
 
-**Delete** (a rule action, or by hand from the reader or a selection) first checks CleanSync's copy of the mail, the same way an offload does. Then it moves the mail to Gmail's trash. Gmail empties its trash on its own after 30 days, and CleanSync can't empty it sooner (see [mail backup](mail-backup.md)).
-
-CleanSync keeps its copy in the **Local archive**, a view in the Mail panel. Archived mail is kept apart: it doesn't show in the other views, their counts or the mail search. The Local archive has its own list and search.
-
-From the Local archive you can:
-- **Restore to Gmail:** the mail comes out of Gmail's trash, or is imported again if Gmail no longer has it.
-- **Delete forever…:** type the number of mails, and CleanSync removes its own copy (the `.eml` file, its search entry and its rule history). This can't be undone. If Gmail no longer has the mail either, it exists nowhere. A short record (sender, subject, date of up to 500 of the mails, and how many more) is kept in the Activity log. Delete forever refuses while a restore is running for that mailbox; try again when it's done.
-
-If you take a deleted mail out of Gmail's trash yourself, CleanSync sees it on its next check and moves it back to your normal mail.
+**Offload** (a rule action, or Offload on one mail in the reader) first checks CleanSync's copy of the mail, the same way an offload does. Then it moves the mail to Gmail's trash and marks it Offloaded. Gmail empties its trash on its own after 30 days, and CleanSync can't empty it sooner (see [mail backup](mail-backup.md)). The mail shows in **Offloaded**, beside mail offloaded by a filter or a pick; it isn't part of any offload batch. Undo on the rule's chip takes it out of Gmail's trash again; **Restore to Gmail** works too, and imports it again if Gmail no longer has it. **Delete forever** in Offloaded removes CleanSync's own copy for good; see [mail backup](mail-backup.md#delete-forever). If you take an offloaded mail out of Gmail's trash yourself, CleanSync sees it on its next check and moves it back to your normal mail.
 
 ## 6. What the model sees
 

@@ -6,6 +6,7 @@ next calls to an endpoint, a revoked login, history that is too old. No real acc
 quota. Plug it into the real GmailAdapter with transport().
 """
 
+import argparse
 import base64
 import email.utils
 import json
@@ -73,6 +74,7 @@ class FakeGmail:
     # Ids every rfc822msgid search also answers: real Gmail's search is not an exact match.
     loose_matches: list[str] = field(default_factory=list)
     _next: int = 0x18A0000000000000
+    _saved: tuple[int, int] | None = None  # the file as this object last wrote or read it
 
     # ---- building a mailbox ------------------------------------------------------------
     def _new_id(self) -> str:
@@ -144,6 +146,18 @@ class FakeGmail:
         self.revoked = True
 
     # ---- saving --------------------------------------------------------------------------
+    def disk_stamp(self) -> tuple[int, int] | None:
+        """When and how big the saved file is now, or None without one."""
+        try:
+            st = self.path.stat() if self.path is not None else None
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size) if st is not None else None
+
+    def changed_on_disk(self) -> bool:
+        """Something else (the delete command) changed the file since this object saved it."""
+        return self.path is not None and self.disk_stamp() != self._saved
+
     def save(self) -> None:
         if self.path is None:
             return
@@ -163,6 +177,7 @@ class FakeGmail:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")
         os.replace(tmp, self.path)
+        self._saved = self.disk_stamp()
 
     @classmethod
     def load(cls, path: Path, email: str = "alice@example.com") -> "FakeGmail":
@@ -179,6 +194,7 @@ class FakeGmail:
         for m in data["messages"]:
             m["raw"] = base64.b64decode(m["raw"])
             fake.messages[m["id"]] = FakeMessage(**m)
+        fake._saved = fake.disk_stamp()
         return fake
 
     # ---- answering -----------------------------------------------------------------------
@@ -622,3 +638,28 @@ def sample_mailbox(fake: FakeGmail, now: datetime) -> None:
         when=days(3),
     )
     add(make_mail("Unfinished", sender=me, when=days(1)), labels=("DRAFT",), when=days(1))
+
+
+def _subject(raw: bytes) -> str:
+    return str(email.message_from_bytes(raw).get("Subject") or "").strip()
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Development and the browser test only: change the pretend mailbox from outside, as the
+    owner would in Gmail. `delete --file F --subject S` deletes every mail with subject S."""
+    parser = argparse.ArgumentParser(prog="python -m app.devtools.fake_gmail")
+    commands = parser.add_subparsers(dest="command", required=True)
+    delete = commands.add_parser("delete", help="delete mail by subject, as if deleted in Gmail")
+    delete.add_argument("--file", required=True, type=Path)
+    delete.add_argument("--subject", required=True)
+    args = parser.parse_args(argv)
+    fake = FakeGmail.load(args.file)
+    gone = [m.id for m in fake.messages.values() if _subject(m.raw) == args.subject]
+    for mid in gone:
+        fake.remove(mid)
+    print(f"deleted {len(gone)}")
+    return 0 if gone else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
