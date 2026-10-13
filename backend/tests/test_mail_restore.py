@@ -2,16 +2,20 @@ import re
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 from sqlalchemy import text
 
 from app.devtools.fake_gmail import make_mail
-from app.models import MailJob, MailOffload, MailOffloadItem
+from app.models import MailJob, MailOffload, MailOffloadItem, RuleDecision
 from app.models.enums import MailItemResult, MailPhase, MailState
 from app.services.google.quota import ApiBudget
 from app.services.mail.index import sync_state
 from app.services.mail.offload import RESTARTED_RESTORE_MSG, RESTORE_SLOW_MSG
 from app.services.mail.store import eml_path
 from app.services.queue import MISSING_DISK_MSG
+from app.services.rules.feedback import moved_back
+from app.services.rules.jobs import RuleJobProblem, RuleJobs, RunScope
+from app.services.rules.store import RuleIn, create_rule
 from tests.mail_helpers import fake_adapter
 from tests.offload_helpers import NOW
 from tests.test_mail_api import OneAdapter
@@ -70,6 +74,43 @@ async def test_restore_never_creates_a_duplicate(auth_client, offload_box, db):
     assert box.row("Old photos").provider_id == new_id
     items = db.query(MailOffloadItem).all()
     assert {i.result for i in items} == {MailItemResult.RESTORED}
+
+
+async def test_mail_restored_from_offloaded_is_not_offloaded_again_by_a_rule(
+    auth_client, offload_box, db
+):
+    box = offload_box
+    await _offloaded(auth_client, box)
+    row, archived = box.row("Old statement"), box.row("Old photos")
+    rule = create_rule(
+        db,
+        box.acc.id,
+        RuleIn(name="Old", description="old mail", actions=[{"kind": "offload"}]),
+        "a",
+    )
+    # Old statement was offloaded by the rule; Old photos only archived (and offloaded by hand).
+    for mail, changes in ((row, {"trash": True}), (archived, {"remove": ["INBOX"]})):
+        db.add(
+            RuleDecision(
+                account_id=box.acc.id,
+                message_id=mail.id,
+                rule_id=rule.id,
+                status="applied",
+                changes=changes,
+            )
+        )
+    db.commit()
+    _restore(auth_client, box, message_ids=[row.id, archived.id])
+    await box.run_queued()
+    db.expire_all()
+    assert moved_back(db, row.id)  # new-mail sorting skips it
+    assert not moved_back(db, archived.id)
+    jobs = RuleJobs(box.app.state.session_factory, None, type("W", (), {"poke": lambda s: None})())
+    scope = RunScope(message_ids=[row.id])
+    with pytest.raises(RuleJobProblem, match="No mail in Gmail matches this search"):
+        jobs.start_preview(box.acc.id, rule_ids=[rule.id], scope=scope)
+    scope = RunScope(message_ids=[archived.id])
+    assert jobs.start_preview(box.acc.id, rule_ids=[rule.id], scope=scope)
 
 
 async def test_restore_by_import_puts_back_the_labels_that_still_exist(auth_client, offload_box):

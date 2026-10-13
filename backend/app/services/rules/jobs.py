@@ -1,6 +1,7 @@
-"""Run rules on older mail (AI rules spec §3): decide every mail of a search locally (the
-preview: nothing changes in Gmail), then, after the owner types the count, apply them.
-Typing the count is the approval, whatever each rule's mode."""
+"""Running rules by hand (running rules spec): a run decides the mail it covers with its own
+rules, using only CleanSync's copy (nothing changes in Gmail). Then the owner approves from the
+match list and the picked changes are made. Approving counts as the approval, whatever each
+rule's mode is."""
 
 import asyncio
 import contextlib
@@ -9,11 +10,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.orm import Session
 
 from app.core.clock import utcnow
 from app.models import MailMessage, Rule, RuleDecision, RuleJob, RuleTodo
 from app.models.enums import DecisionStatus, MailState, RuleJobState
-from app.services.mail.search import SearchError, mail_conditions
+from app.services.mail.offload_plan import Pick, describe_pick
+from app.services.mail.search import GMAIL_VIEWS, SearchError, mail_conditions
 from app.services.rules.apply import WAIT_ERRORS, Applier
 from app.services.rules.worker import SortingWorker
 
@@ -27,10 +30,90 @@ STOPPED_MSG = "The run was stopped."
 RUN_CHANGED_MSG = "A run of rules changed this mail."
 RULE_CHANGED_MSG = "Its rule changed since the preview, so it was left as it is."
 OPEN_STATES = (RuleJobState.PREVIEWING, RuleJobState.PREVIEWED, RuleJobState.RUNNING)
+NO_RULES_MSG = "Pick at least one rule."
+ONE_RULE_MSG = "Run on the Inbox takes one rule."
+RULE_GONE_MSG = "That rule no longer exists."
+RULE_OFF_MSG = "Turn the rule on to run it."
+NO_SCOPE_MSG = "Search first, or pick some mail."
+VIEW_MSG = "Rules run on mail in Gmail's views only."
+NO_MAIL_MSG = "No mail in Gmail matches this search."
+EMPTY_INBOX_MSG = "No mail in the Inbox to run this rule on."
+# Gmail's views a run can cover (spec §4). Suggested is a list of suggestions, not of mail.
+RUN_VIEWS = GMAIL_VIEWS - {"suggested"}
 
 
 class RuleJobProblem(ValueError):
     pass
+
+
+@dataclass
+class RunScope:
+    """What a run covers (running rules spec §8): the Inbox (a rule card's Run), a search or a
+    pick-all as the view, label and search, or mails or threads picked by hand. Picked threads
+    count only their mails in `view` (and `label`)."""
+
+    inbox: bool = False
+    view: str = "all"
+    label: str | None = None
+    q: str = ""
+    pick_all: bool = False
+    message_ids: list[int] | None = None
+    thread_ids: list[str] | None = None
+
+
+def _check_rules(db: Session, account_id: int, rule_ids: list[int]) -> None:
+    found = {
+        r.id: r
+        for r in db.scalars(
+            select(Rule).where(Rule.account_id == account_id, Rule.id.in_(rule_ids))
+        )
+    }
+    for rid in rule_ids:
+        if rid not in found:
+            raise RuleJobProblem(RULE_GONE_MSG)
+        if not found[rid].enabled:
+            raise RuleJobProblem(RULE_OFF_MSG)
+
+
+def _scope_conditions(db: Session, account_id: int, scope: RunScope, now) -> list:
+    """Conditions for the mail a run covers, beyond "this mailbox, in Gmail"."""
+    if scope.inbox:
+        return mail_conditions(db, account_id, view="inbox", now=now)
+    if scope.message_ids:
+        return [MailMessage.id.in_(scope.message_ids[: MAX_JOB + 1])]
+    if scope.view not in RUN_VIEWS:
+        raise RuleJobProblem(VIEW_MSG)
+    if scope.thread_ids:
+        return [
+            MailMessage.thread_id.in_(scope.thread_ids),
+            *mail_conditions(db, account_id, view=scope.view, label=scope.label, now=now),
+        ]
+    if scope.pick_all or scope.q.strip():
+        return mail_conditions(
+            db, account_id, view=scope.view, label=scope.label, q=scope.q, now=now
+        )
+    raise RuleJobProblem(NO_SCOPE_MSG)
+
+
+def _search_of(scope: RunScope) -> str:
+    """The search a run went through: "" for the Inbox and for a pick by hand."""
+    if scope.inbox or scope.message_ids or scope.thread_ids:
+        return ""
+    return scope.q.strip()
+
+
+def _describe(db: Session, account_id: int, scope: RunScope, n: int) -> str:
+    """What the run covers, in words: "Inbox", "Inbox · from:shop", "3 picked mails"."""
+    if scope.inbox:
+        return describe_pick(db, account_id, Pick(view="inbox"), n)
+    pick = Pick(
+        q=_search_of(scope),
+        message_ids=scope.message_ids,
+        thread_ids=scope.thread_ids,
+        view=scope.view,
+        label=scope.label,
+    )
+    return describe_pick(db, account_id, pick, n) or "All mail"
 
 
 @dataclass
@@ -46,6 +129,10 @@ class JobPreview:
     skipped: int
     failed: int
     reason: str | None
+    rule_ids: list[int]
+    view: str
+    q: str
+    filter_text: str
 
 
 class RuleJobs:
@@ -62,26 +149,25 @@ class RuleJobs:
             raise RuleJobProblem("That run isn't here any more.")
         return job
 
-    def start_preview(
-        self,
-        account_id: int,
-        *,
-        q: str = "",
-        view: str = "inbox",
-        message_ids: list[int] | None = None,
-    ) -> int:
+    def start_preview(self, account_id: int, *, rule_ids: list[int], scope: RunScope) -> int:
+        """Queue every mail the scope covers, to be decided with `rule_ids` only."""
         now = self.clock()
+        rule_ids = list(dict.fromkeys(rule_ids))
+        if not rule_ids:
+            raise RuleJobProblem(NO_RULES_MSG)
+        if scope.inbox and len(rule_ids) != 1:
+            raise RuleJobProblem(ONE_RULE_MSG)
         with self.sf() as db:
+            _check_rules(db, account_id, rule_ids)
+            try:
+                conds = _scope_conditions(db, account_id, scope, now)
+            except SearchError as e:
+                raise RuleJobProblem(str(e)) from None
             base = select(MailMessage.id).where(
-                MailMessage.account_id == account_id, MailMessage.state == MailState.IN_MAIL
+                MailMessage.account_id == account_id,
+                MailMessage.state == MailState.IN_MAIL,
+                *conds,
             )
-            if message_ids:
-                base = base.where(MailMessage.id.in_(message_ids[: MAX_JOB + 1]))
-            else:
-                try:
-                    base = base.where(*mail_conditions(db, account_id, view=view, q=q, now=now))
-                except SearchError as e:
-                    raise RuleJobProblem(str(e)) from None
             open_jobs = list(
                 db.scalars(
                     select(RuleJob).where(
@@ -96,7 +182,7 @@ class RuleJobs:
             # A preview nobody went on with (its dialog was closed) gives way to the new one.
             for j in open_jobs:
                 self._stop_in(db, j)
-            found = list(db.scalars(base.limit(MAX_JOB + 1)))
+            found = list(db.scalars(base.order_by(MailMessage.id).limit(MAX_JOB + 1)))
             if len(found) > MAX_JOB:
                 raise RuleJobProblem(
                     f"That's more than {MAX_JOB:,} mails. Please narrow the search."
@@ -116,8 +202,15 @@ class RuleJobs:
             )
             ids = [i for i in found if i not in moved and i not in queued]
             if not ids:
-                raise RuleJobProblem("No mail in Gmail matches this search.")
-            job = RuleJob(account_id=account_id, filter_text=q or view, total=len(ids))
+                raise RuleJobProblem(EMPTY_INBOX_MSG if scope.inbox else NO_MAIL_MSG)
+            job = RuleJob(
+                account_id=account_id,
+                filter_text=_describe(db, account_id, scope, len(ids)),
+                total=len(ids),
+                rule_ids=rule_ids,
+                view="inbox" if scope.inbox else scope.view,
+                q=_search_of(scope),
+            )
             db.add(job)
             db.flush()
             for mid in ids:
@@ -150,9 +243,10 @@ class RuleJobs:
                     .group_by(RuleDecision.status)
                 ).all()
             )
-            groups: dict[str, dict] = defaultdict(lambda: {"count": 0, "examples": []})
+            groups: dict[tuple, dict] = defaultdict(lambda: {"count": 0, "examples": []})
             rows = db.execute(
                 select(
+                    RuleDecision.rule_id,
                     RuleDecision.rule_name,
                     RuleDecision.actions,
                     RuleDecision.why,
@@ -163,8 +257,8 @@ class RuleJobs:
                 .where(RuleDecision.job_id == job_id, RuleDecision.rule_id.is_not(None))
                 .order_by(RuleDecision.id)
             ).all()
-            for name, actions, why, subject, sender in rows:
-                g = groups[name]
+            for rule_id, name, actions, why, subject, sender in rows:
+                g = groups[(rule_id, name)]
                 g["count"] += 1
                 g["actions"] = actions
                 if len(g["examples"]) < EXAMPLES:
@@ -176,12 +270,16 @@ class RuleJobs:
                 total=job.total,
                 decided=job.decided,
                 planned=counts.get(DecisionStatus.PLANNED, 0),
-                per_rule=[{"rule": n, **g} for n, g in ordered],
+                per_rule=[{"rule": n, "rule_id": rid, **g} for (rid, n), g in ordered],
                 no_rule=counts.get(DecisionStatus.NO_RULE, 0),
                 applied=job.applied,
                 skipped=job.skipped,
                 failed=failed or 0,
                 reason=job.reason,
+                rule_ids=list(job.rule_ids or []),
+                view=job.view,
+                q=job.q,
+                filter_text=job.filter_text,
             )
 
     def run(self, account_id: int, job_id: int, confirm: int) -> None:

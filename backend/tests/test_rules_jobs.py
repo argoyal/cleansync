@@ -4,10 +4,10 @@ import threading
 import pytest
 from sqlalchemy import select, update
 
-from app.models import MailMessage, RuleDecision, RuleJob, RuleTodo
+from app.models import MailMessage, Rule, RuleDecision, RuleJob, RuleTodo
 from app.models.enums import DecisionStatus, RuleJobState
 from app.services.ai.client import AiUnreachable
-from app.services.rules.jobs import RuleJobProblem, RuleJobs
+from app.services.rules.jobs import RuleJobProblem, RuleJobs, RunScope
 from app.services.rules.match import Choice
 from app.services.rules.store import RuleIn, create_rule, update_rule
 from app.services.rules.worker import SortingWorker
@@ -27,8 +27,23 @@ def setup(gbox):
     return worker, RuleJobs(gbox.sf, gbox.applier, worker)
 
 
-async def preview(gbox, worker, jobs, **kw):
-    jid = jobs.start_preview(gbox.acc.id, **kw)
+INBOX = RunScope(inbox=True)
+
+
+def news_rule(gbox) -> int:
+    """The News rule's id, made the first time a test needs it."""
+    with gbox.sf() as db:
+        rid = db.scalar(select(Rule.id).where(Rule.account_id == gbox.acc.id, Rule.name == "News"))
+        return rid if rid is not None else create_rule(db, gbox.acc.id, ARCHIVE, "a").id
+
+
+def on_inbox(gbox, jobs) -> int:
+    """A rule card's Run of News over the Inbox."""
+    return jobs.start_preview(gbox.acc.id, rule_ids=[news_rule(gbox)], scope=INBOX)
+
+
+async def preview(gbox, worker, jobs, scope=INBOX):
+    jid = jobs.start_preview(gbox.acc.id, rule_ids=[news_rule(gbox)], scope=scope)
     while await worker.run_once(gbox.acc.id):
         pass
     return jid, jobs.preview(gbox.acc.id, jid)
@@ -39,7 +54,7 @@ async def test_preview_then_run_applies_with_the_typed_count(gbox):
         create_rule(db, gbox.acc.id, ARCHIVE, "a")
     rows = [gbox.add(f"D{i}") for i in range(3)]
     worker, jobs = setup(gbox)
-    jid, p = await preview(gbox, worker, jobs, q="", view="inbox")
+    jid, p = await preview(gbox, worker, jobs)
     assert p.state == RuleJobState.PREVIEWED and p.planned == 3
     assert p.per_rule[0]["rule"] == "News" and p.per_rule[0]["count"] == 3
     assert all("INBOX" in gbox.fake.messages[r.provider_id].labels for r in rows)  # nothing yet
@@ -57,7 +72,7 @@ async def test_mail_changed_since_preview_is_skipped_and_listed(gbox):
     a = gbox.add("A")
     gbox.add("B")
     worker, jobs = setup(gbox)
-    jid, _ = await preview(gbox, worker, jobs, view="inbox")
+    jid, _ = await preview(gbox, worker, jobs)
     with gbox.sf() as db:
         db.get(MailMessage, a.id).labels = ["INBOX", "STARRED"]  # the owner starred it
         db.commit()
@@ -76,7 +91,7 @@ async def test_edited_rule_since_preview_is_skipped(gbox):
         rid = rule.id
     a = gbox.add("A")
     worker, jobs = setup(gbox)
-    jid, _ = await preview(gbox, worker, jobs, view="inbox")
+    jid, _ = await preview(gbox, worker, jobs)
     with gbox.sf() as db:
         update_rule(
             db,
@@ -98,11 +113,11 @@ async def test_edited_rule_since_preview_is_skipped(gbox):
 async def test_nothing_to_do_and_too_much_are_refused(gbox, monkeypatch):
     worker, jobs = setup(gbox)
     with pytest.raises(RuleJobProblem, match="No mail"):
-        jobs.start_preview(gbox.acc.id, view="inbox")
+        on_inbox(gbox, jobs)
     gbox.add("x")
     monkeypatch.setattr("app.services.rules.jobs.MAX_JOB", 0)
     with pytest.raises(RuleJobProblem, match="narrow"):
-        jobs.start_preview(gbox.acc.id, view="inbox")
+        on_inbox(gbox, jobs)
 
 
 async def test_stop_drops_remaining_work(gbox):
@@ -110,7 +125,7 @@ async def test_stop_drops_remaining_work(gbox):
         create_rule(db, gbox.acc.id, ARCHIVE, "a")
     gbox.add("x")
     worker, jobs = setup(gbox)
-    jid = jobs.start_preview(gbox.acc.id, view="inbox")
+    jid = on_inbox(gbox, jobs)
     jobs.stop(gbox.acc.id, jid)
     assert await worker.run_once(gbox.acc.id) == 0
     assert jobs.preview(gbox.acc.id, jid).state == RuleJobState.STOPPED
@@ -124,7 +139,7 @@ async def test_run_waits_when_gmail_is_unreachable_then_goes_on(gbox, monkeypatc
         create_rule(db, gbox.acc.id, ARCHIVE, "a")
     r = gbox.add("A")
     worker, jobs = setup(gbox)
-    jid, _ = await preview(gbox, worker, jobs, view="inbox")
+    jid, _ = await preview(gbox, worker, jobs)
     real, calls = gbox.applier.apply, []
 
     async def flaky(did):
@@ -149,9 +164,9 @@ async def test_a_new_preview_stops_an_unfinished_preview(gbox):
         create_rule(db, gbox.acc.id, ARCHIVE, "a")
     gbox.add("x")
     worker, jobs = setup(gbox)
-    old, p = await preview(gbox, worker, jobs, view="inbox")
+    old, p = await preview(gbox, worker, jobs)
     assert p.state == RuleJobState.PREVIEWED and p.planned == 1
-    new = jobs.start_preview(gbox.acc.id, view="inbox")
+    new = on_inbox(gbox, jobs)
     old_p = jobs.preview(gbox.acc.id, old)
     assert old_p.state == RuleJobState.STOPPED and old_p.planned == 0 and old_p.skipped == 1
     assert jobs.preview(gbox.acc.id, new).state == RuleJobState.PREVIEWING
@@ -163,8 +178,8 @@ async def test_a_new_preview_stops_an_unfinished_preview(gbox):
 async def test_a_new_preview_stops_a_job_still_deciding(gbox):
     gbox.add("x")
     worker, jobs = setup(gbox)
-    old = jobs.start_preview(gbox.acc.id, view="inbox")
-    new = jobs.start_preview(gbox.acc.id, view="inbox")
+    old = on_inbox(gbox, jobs)
+    new = on_inbox(gbox, jobs)
     assert jobs.preview(gbox.acc.id, old).state == RuleJobState.STOPPED
     with gbox.sf() as db:
         todo_jobs = set(db.scalars(select(RuleTodo.job_id)))
@@ -176,12 +191,12 @@ async def test_second_preview_is_refused_while_a_job_is_running(gbox):
 
     gbox.add("x")
     worker, jobs = setup(gbox)
-    jid = jobs.start_preview(gbox.acc.id, view="inbox")
+    jid = on_inbox(gbox, jobs)
     with gbox.sf() as db:
         db.get(RuleJob, jid).state = RuleJobState.RUNNING
         db.commit()
     with pytest.raises(RuleJobProblem, match="isn't finished"):
-        jobs.start_preview(gbox.acc.id, view="inbox")
+        on_inbox(gbox, jobs)
 
 
 async def test_planned_change_shows_a_chip_only_while_its_job_is_open(gbox):
@@ -191,7 +206,7 @@ async def test_planned_change_shows_a_chip_only_while_its_job_is_open(gbox):
         create_rule(db, gbox.acc.id, ARCHIVE, "a")
     m = gbox.add("x")
     worker, jobs = setup(gbox)
-    jid, _ = await preview(gbox, worker, jobs, view="inbox")
+    jid, _ = await preview(gbox, worker, jobs)
     with gbox.sf() as db:
         assert decision_chips(db, [m.id])[m.id]["status"] == "planned"
         db.execute(update(RuleJob).where(RuleJob.id == jid).values(state=RuleJobState.STOPPED))
@@ -209,7 +224,7 @@ async def test_mail_already_waiting_as_new_mail_is_left_out_of_the_job(gbox):
         db.add(RuleTodo(account_id=gbox.acc.id, message_id=old.id))
         db.commit()
     worker, jobs = setup(gbox)
-    jid = jobs.start_preview(gbox.acc.id, view="inbox")
+    jid = on_inbox(gbox, jobs)
     assert jobs.preview(gbox.acc.id, jid).total == 1
     with gbox.sf() as db:
         assert db.get(RuleTodo, (gbox.acc.id, old.id)).job_id is None
@@ -225,7 +240,9 @@ async def test_worker_takes_new_mail_before_job_mail(gbox):
     new, old = gbox.add("new"), gbox.add("old")
     worker, jobs = setup(gbox)
     worker.batch = 1
-    jid = jobs.start_preview(gbox.acc.id, message_ids=[old.id])
+    jid = jobs.start_preview(
+        gbox.acc.id, rule_ids=[news_rule(gbox)], scope=RunScope(message_ids=[old.id])
+    )
     with gbox.sf() as db:
         set_sorting(db, gbox.acc.id, True)
         db.add(RuleTodo(account_id=gbox.acc.id, message_id=new.id, added_at=jobs.clock()))
@@ -242,7 +259,7 @@ async def _ready(gbox, n=2):
         rid = rule.id
     rows = [gbox.add(f"M{i}") for i in range(n)]
     worker, jobs = setup(gbox)
-    jid, _ = await preview(gbox, worker, jobs, view="inbox")
+    jid, _ = await preview(gbox, worker, jobs)
     return rid, rows, jobs, jid
 
 
@@ -394,10 +411,10 @@ async def test_a_new_run_keeps_the_mail_the_worker_was_deciding_for_the_old_prev
         session_factory=gbox.sf, layout=gbox.layout, chooser=lambda: Held(), applier=gbox.applier
     )
     jobs = RuleJobs(gbox.sf, gbox.applier, worker)
-    old = jobs.start_preview(gbox.acc.id, view="inbox")
+    old = on_inbox(gbox, jobs)
     deciding = asyncio.ensure_future(worker.run_once(gbox.acc.id))
     await entered.wait()
-    new = jobs.start_preview(gbox.acc.id, view="inbox")  # the old preview's dialog was closed
+    new = on_inbox(gbox, jobs)  # the old preview's dialog was closed
     release.set()
     await deciding
     assert _decisions_of(gbox, old) == []  # nothing is written for the stopped job
@@ -419,13 +436,13 @@ async def test_a_give_up_for_the_old_preview_leaves_the_new_runs_mail_alone(gbox
         create_rule(db, gbox.acc.id, ARCHIVE, "a")
     m = gbox.add("M")
     worker, jobs = setup(gbox)
-    old = jobs.start_preview(gbox.acc.id, view="inbox")
+    old = on_inbox(gbox, jobs)
     _one_try_left(gbox, m.id)
     real, started = worker_mod.mail_for_model, []
 
     def unreadable_once(*a, **kw):
         if not started:  # while the copy is being read, a new run takes the mail over
-            started.append(jobs.start_preview(gbox.acc.id, view="inbox"))
+            started.append(on_inbox(gbox, jobs))
             _one_try_left(gbox, m.id)
             raise CopyUnreadable("gone")
         return real(*a, **kw)
@@ -455,7 +472,7 @@ async def test_an_unreachable_model_for_the_old_preview_leaves_the_new_runs_mail
 
     class DownAfterNewRun:
         async def choose(self, rules, mail, hints):
-            started.append(jobs.start_preview(gbox.acc.id, view="inbox"))
+            started.append(on_inbox(gbox, jobs))
             raise AiUnreachable("down")
 
     worker = SortingWorker(
@@ -465,7 +482,7 @@ async def test_an_unreachable_model_for_the_old_preview_leaves_the_new_runs_mail
         applier=gbox.applier,
     )
     jobs = RuleJobs(gbox.sf, gbox.applier, worker)
-    old = jobs.start_preview(gbox.acc.id, view="inbox")
+    old = on_inbox(gbox, jobs)
     await worker.run_once(gbox.acc.id)
     (new,) = started
     assert _decisions_of(gbox, old) == [] and _decisions_of(gbox, new) == []
@@ -484,7 +501,7 @@ async def test_an_error_for_the_old_preview_does_not_give_up_the_new_runs_mail(g
 
     class BoomAfterNewRun:
         async def choose(self, rules, mail, hints):
-            started.append(jobs.start_preview(gbox.acc.id, view="inbox"))
+            started.append(on_inbox(gbox, jobs))
             _one_try_left(gbox, m.id)
             raise RuntimeError("boom")
 
@@ -495,7 +512,7 @@ async def test_an_error_for_the_old_preview_does_not_give_up_the_new_runs_mail(g
         applier=gbox.applier,
     )
     jobs = RuleJobs(gbox.sf, gbox.applier, worker)
-    old = jobs.start_preview(gbox.acc.id, view="inbox")
+    old = on_inbox(gbox, jobs)
     _one_try_left(gbox, m.id)
     await worker.run_once(gbox.acc.id)
     (new,) = started
@@ -517,11 +534,11 @@ async def test_a_new_run_started_between_the_check_and_the_write_keeps_its_mail(
         create_rule(db, gbox.acc.id, ARCHIVE, "a")
     m = gbox.add("M")
     worker, jobs = setup(gbox)
-    old = jobs.start_preview(gbox.acc.id, view="inbox")
+    old = on_inbox(gbox, jobs)
     seen = {}
 
     def start_new_run():
-        seen["new"] = jobs.start_preview(gbox.acc.id, view="inbox")
+        seen["new"] = on_inbox(gbox, jobs)
         seen["old_decided"] = _job_state(gbox, old)[0]
 
     def before_first_flush(session, flush_context, instances):

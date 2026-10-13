@@ -51,7 +51,7 @@ from app.services.rules.decisions import (
     hints_for,
     remembered_senders,
 )
-from app.services.rules.jobs import RuleJobProblem
+from app.services.rules.jobs import RuleJobProblem, RunScope
 from app.services.rules.mailview import CopyUnreadable, mail_for_model
 from app.services.rules.match import Conditions, RuleView
 from app.services.rules.worker import set_sorting
@@ -603,7 +603,17 @@ def start_job(
     account_or_404(db, body.account_id)
     try:
         jid = request.app.state.rule_jobs.start_preview(
-            body.account_id, q=body.q, view=body.view, message_ids=body.message_ids
+            body.account_id,
+            rule_ids=body.rule_ids,
+            scope=RunScope(
+                inbox=body.inbox,
+                view=body.view,
+                label=body.label or None,
+                q=body.q,
+                pick_all=body.pick_all,
+                message_ids=body.message_ids,
+                thread_ids=body.thread_ids,
+            ),
         )
     except PROBLEMS as e:
         raise _problem(e) from e

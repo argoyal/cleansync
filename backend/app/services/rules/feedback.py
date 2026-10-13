@@ -8,7 +8,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.clock import as_utc
+from app.core.clock import as_utc, utcnow
 from app.models import MailMessage, RuleDecision
 from app.models.enums import DecisionStatus
 
@@ -44,6 +44,18 @@ def note_label_change(
         for d in decisions:
             if d.status == DecisionStatus.SUGGESTED:
                 d.status, d.reason = DecisionStatus.WITHDRAWN, MOVED_YOURSELF
+
+
+def note_restored(db: Session, row: MailMessage, now: datetime | None = None) -> None:
+    """The owner restored this mail from Offloaded: a rule that offloaded it is not to
+    offload it again, so its decision counts as "moved back by you" (not committed)."""
+    for d in db.scalars(select(RuleDecision).where(RuleDecision.message_id == row.id)):
+        if (
+            d.status == DecisionStatus.APPLIED
+            and d.moved_back_at is None
+            and (d.changes or {}).get("trash")
+        ):
+            d.moved_back_at = now or utcnow()
 
 
 def moved_back(db: Session, message_id: int) -> bool:

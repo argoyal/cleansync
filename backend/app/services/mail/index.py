@@ -19,7 +19,7 @@ from app.models import (
 from app.models.enums import MailItemResult, MailPhase, MailState
 from app.services.mail.adapter import MailMeta, ProviderLabel
 from app.services.mail.store import ParsedMail
-from app.services.rules.feedback import note_label_change
+from app.services.rules.feedback import note_label_change, note_restored
 
 CHUNK = 500
 FAIL_SHOWN_AFTER = 3
@@ -127,7 +127,8 @@ def add_message(
 
 
 def mark_restored(db: Session, row: MailMessage) -> None:
-    """The mail is in Gmail again: its offload's page shows it restored. Not committed."""
+    """The mail is in Gmail again: its offload's page shows it restored, and a rule that offloaded
+    it won't offload it again. Not committed."""
     if row.offload_id is not None:
         item = db.scalar(
             select(MailOffloadItem).where(
@@ -138,6 +139,7 @@ def mark_restored(db: Session, row: MailMessage) -> None:
         if item is not None:
             item.result = MailItemResult.RESTORED
     row.state, row.offload_id, row.import_started_at = MailState.IN_MAIL, None, None
+    note_restored(db, row)
 
 
 def adopt_restored_copy(

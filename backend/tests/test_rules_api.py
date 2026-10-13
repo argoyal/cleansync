@@ -21,6 +21,15 @@ def acc(make_account, db):
 RULE = {"name": "Newsletters", "description": "Digests", "actions": [{"kind": "archive"}]}
 
 
+def _rule_id(auth_client, acc) -> int:
+    return auth_client.post("/api/rules", json={"account_id": acc.id, **RULE}).json()["id"]
+
+
+def _on_inbox(acc, rid) -> dict:
+    """The body of a rule card's Run: one rule over the Inbox."""
+    return {"account_id": acc.id, "rule_ids": [rid], "inbox": True}
+
+
 def test_rule_crud_is_per_mailbox(auth_client, acc, make_account):
     r = auth_client.post("/api/rules", json={"account_id": acc.id, **RULE})
     assert r.status_code == 201 and r.json()["mode"] == "suggest"
@@ -112,10 +121,11 @@ def test_rule_job_start_and_refusals(auth_client, acc, db, layout):
     from app.devtools.fake_gmail import make_mail
     from tests.rules_helpers import keep
 
-    r = auth_client.post("/api/rule-jobs", json={"account_id": acc.id, "q": "", "view": "inbox"})
+    rid = _rule_id(auth_client, acc)
+    r = auth_client.post("/api/rule-jobs", json=_on_inbox(acc, rid))
     assert r.status_code == 400 and "No mail" in r.json()["detail"]
     keep(db, layout, acc, make_mail("Old one"))
-    r = auth_client.post("/api/rule-jobs", json={"account_id": acc.id, "q": "", "view": "inbox"})
+    r = auth_client.post("/api/rule-jobs", json=_on_inbox(acc, rid))
     assert r.status_code == 202
     jid = r.json()["job_id"]
     assert db.scalars(select(RuleTodo)).all()
@@ -134,9 +144,8 @@ def test_a_previewed_job_runs_and_stops_from_the_api(auth_client, acc, db, layou
     from tests.rules_helpers import keep
 
     keep(db, layout, acc, make_mail("Old one"))
-    jid = auth_client.post(
-        "/api/rule-jobs", json={"account_id": acc.id, "q": "", "view": "inbox"}
-    ).json()["job_id"]
+    rid = _rule_id(auth_client, acc)
+    jid = auth_client.post("/api/rule-jobs", json=_on_inbox(acc, rid)).json()["job_id"]
     db.execute(delete(RuleTodo))
     db.get(RuleJob, jid).state = RuleJobState.PREVIEWED  # nothing planned: confirm 0
     db.commit()
@@ -150,6 +159,30 @@ def test_a_previewed_job_runs_and_stops_from_the_api(auth_client, acc, db, layou
     assert p["state"] == "DONE"
     r = auth_client.post(f"/api/rule-jobs/{jid}/stop", json={"account_id": acc.id})
     assert r.status_code == 204, r.text
+
+
+def test_starting_a_run_needs_rules_and_a_search_or_a_pick(auth_client, acc, db, layout):
+    from app.devtools.fake_gmail import make_mail
+    from tests.rules_helpers import keep
+
+    keep(db, layout, acc, make_mail("Weekly digest"))
+    rid = _rule_id(auth_client, acc)
+    B = {"account_id": acc.id}
+    r = auth_client.post("/api/rule-jobs", json={**B, "rule_ids": [rid], "view": "inbox"})
+    assert r.status_code == 400 and r.json()["detail"] == "Search first, or pick some mail."
+    r = auth_client.post("/api/rule-jobs", json={**B, "view": "inbox", "q": "digest"})
+    assert r.status_code == 400 and r.json()["detail"] == "Pick at least one rule."
+    body = {**B, "rule_ids": [rid], "view": "inbox", "q": "digest"}
+    r = auth_client.post("/api/rule-jobs", json=body)
+    assert r.status_code == 202
+    p = auth_client.get(f"/api/rule-jobs/{r.json()['job_id']}", params=B).json()
+    assert (p["rule_ids"], p["view"], p["q"], p["filter_text"], p["total"]) == (
+        [rid],
+        "inbox",
+        "digest",
+        "Inbox · digest",
+        1,
+    )
 
 
 def test_correct_waits_become_503_and_changes_are_published(auth_client, acc, app, monkeypatch):
@@ -263,9 +296,7 @@ def test_another_mailbox_cannot_touch_this_ones_objects(auth_client, acc, make_a
     )
     db.add_all([sender, dec])
     db.commit()
-    jid = auth_client.post(
-        "/api/rule-jobs", json={"account_id": acc.id, "q": "", "view": "inbox"}
-    ).json()["job_id"]
+    jid = auth_client.post("/api/rule-jobs", json=_on_inbox(acc, rid)).json()["job_id"]
     sid, did = sender.id, dec.id
     B = {"account_id": b.id}
 
@@ -362,7 +393,9 @@ def test_the_open_run_of_rules_can_be_found_again(auth_client, acc, db, layout):
     r = auth_client.get("/api/rule-jobs/open", params=B)
     assert r.status_code == 200 and r.json() is None
     keep(db, layout, acc, make_mail("Old one"))
-    jid = auth_client.post("/api/rule-jobs", json={**B, "q": "", "view": "inbox"}).json()["job_id"]
+    jid = auth_client.post(
+        "/api/rule-jobs", json=_on_inbox(acc, _rule_id(auth_client, acc))
+    ).json()["job_id"]
     p = auth_client.get("/api/rule-jobs/open", params=B).json()
     assert p["job_id"] == jid and p["state"] == "PREVIEWING" and p["total"] == 1
     auth_client.post(f"/api/rule-jobs/{jid}/stop", json=B)
@@ -403,9 +436,8 @@ def test_rule_job_preview_carries_the_pause(auth_client, app, acc, db, layout):
 
     _, pause = _pause_sorting_connection(app)
     keep(db, layout, acc, make_mail("Old one"))
-    jid = auth_client.post(
-        "/api/rule-jobs", json={"account_id": acc.id, "q": "", "view": "inbox"}
-    ).json()["job_id"]
+    rid = _rule_id(auth_client, acc)
+    jid = auth_client.post("/api/rule-jobs", json=_on_inbox(acc, rid)).json()["job_id"]
     pause()
     p = auth_client.get(f"/api/rule-jobs/{jid}", params={"account_id": acc.id}).json()
     assert p["paused"]["kind"] == "limited"

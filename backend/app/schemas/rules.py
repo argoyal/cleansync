@@ -128,9 +128,18 @@ class CorrectBody(AccountBody):
 
 
 class JobStartBody(AccountBody):
+    """Running rules spec §8: the rules, and one of the Inbox (`inbox`, one rule), a search
+    (`view`, `label`, a non-empty `q`), a pick-all (the same with `pick_all`), or a pick by
+    hand (`message_ids`, or `thread_ids` with `view` and `label`)."""
+
+    rule_ids: list[int] = Field(default_factory=list, max_length=100)
+    inbox: bool = False
+    view: str = Field("all", max_length=32)
+    label: str | None = Field(None, max_length=128)
     q: str = Field("", max_length=1000)
-    view: str = "inbox"
+    pick_all: bool = False
     message_ids: list[int] | None = Field(None, max_length=20000)
+    thread_ids: list[str] | None = Field(None, max_length=5000)
 
 
 class JobRunBody(AccountBody):
@@ -149,4 +158,8 @@ class JobPreviewOut(BaseModel):
     skipped: int
     failed: int
     reason: str | None
+    rule_ids: list[int] = []
+    view: str = ""
+    q: str = ""
+    filter_text: str = ""
     paused: PauseOut | None = None
