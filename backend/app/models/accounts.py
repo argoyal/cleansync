@@ -1,6 +1,15 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.clock import utcnow
@@ -19,6 +28,11 @@ class Account(Base):
     )
     # The permissions Google granted at the last sign-in, space-separated (its "scope" answer).
     scopes: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Allow permanent delete (bulk offload spec §3): the owner's switch. It counts only while
+    # the scopes hold the full Gmail permission (app.services.accounts.permanent).
+    permanent_delete: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Why it went off by itself (Google took the permission back); cleared by Turn on/off.
+    permanent_delete_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     quota_total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     quota_used: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     quota_trash: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

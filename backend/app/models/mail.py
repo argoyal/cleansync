@@ -16,7 +16,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.clock import utcnow
 from app.models.base import Base
-from app.models.enums import JobState, MailItemResult, MailOffloadState, MailPhase, MailState
+from app.models.enums import (
+    JobState,
+    MailItemResult,
+    MailOffloadKind,
+    MailOffloadState,
+    MailPhase,
+    MailState,
+)
 
 
 class MailMessage(Base):
@@ -160,7 +167,8 @@ class MailRecheckSeen(Base):
 
 
 class MailOffload(Base):
-    """One offload (spec 5.3): a filter or a picked list, run in batches."""
+    """One offload (spec 5.3), or one Delete forever of mail in Gmail (bulk offload spec §5): a
+    filter or a picked list, run in batches."""
 
     __tablename__ = "mail_offloads"
     __table_args__ = {"sqlite_autoincrement": True}
@@ -175,6 +183,11 @@ class MailOffload(Base):
     skipped: Mapped[int] = mapped_column(Integer, default=0)
     bytes: Mapped[int] = mapped_column(BigInteger, default=0)  # Gmail's sizes of what left
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    kind: Mapped[str] = mapped_column(
+        String(20), default=MailOffloadKind.OFFLOAD, server_default="offload"
+    )
+    removed: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # for good
+    stop_asked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

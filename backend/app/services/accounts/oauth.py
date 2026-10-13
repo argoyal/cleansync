@@ -16,6 +16,9 @@ ABOUT_URL = "https://www.googleapis.com/drive/v3/about"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 # Read, label and trash mail; Plan 4's restore imports and "empty trash" deletes with it too.
 GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+# Read, send and permanently delete all mail (bulk offload spec §3). Asked for only when
+# the owner turns on Allow permanent delete for a mailbox.
+FULL_MAIL_SCOPE = "https://mail.google.com/"
 SCOPES = f"{DRIVE_SCOPE} {GMAIL_SCOPE}"
 
 

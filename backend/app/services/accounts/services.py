@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.clock import utcnow
 from app.models import Account, AccountService
 from app.models.enums import ServiceKind, ServiceState
-from app.services.accounts.oauth import GMAIL_SCOPE
+from app.services.accounts.oauth import FULL_MAIL_SCOPE, GMAIL_SCOPE
 
 # A new Google account: every sign-in includes Drive, so Files works straight away; Mail
 # waits for the owner to set it up.
@@ -64,5 +64,6 @@ def mail_needs_reconnect(db: Session, account_id: int, note: str, *, permission_
     if permission_gone:
         acc = db.get(Account, account_id)
         if acc is not None:
-            acc.scopes = " ".join(s for s in acc.scopes.split() if s != GMAIL_SCOPE)
+            gone = {GMAIL_SCOPE, FULL_MAIL_SCOPE}  # without mail, no permanent delete either
+            acc.scopes = " ".join(s for s in acc.scopes.split() if s not in gone)
     set_service_state(db, account_id, ServiceKind.MAIL, ServiceState.NEEDS_RECONNECT, note)

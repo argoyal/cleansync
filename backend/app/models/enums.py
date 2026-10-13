@@ -118,6 +118,12 @@ class MailJobKind(StrEnum):
     RECHECK = "RECHECK"
     OFFLOAD = "OFFLOAD"
     RESTORE = "RESTORE"
+    DELETE_FOREVER = "DELETE_FOREVER"  # mail in Gmail, gone everywhere
+
+
+class MailOffloadKind(StrEnum):
+    OFFLOAD = "offload"  # out of Gmail, copy kept
+    DELETE_FOREVER = "delete_forever"  # out of Gmail and CleanSync (bulk offload spec §5)
 
 
 class MailOffloadState(StrEnum):
