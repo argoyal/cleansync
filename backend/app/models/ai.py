@@ -19,6 +19,15 @@ class AiConnection(Base):
     header_names: Mapped[list[str]] = mapped_column(JSON, default=list)
     # model name -> the answer mode that worked last ("json_schema" | "json_object" | "text")
     modes: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    # Model limits spec §6: when the daily limit resets, and the saved pause (none: not paused).
+    resets_at: Mapped[str] = mapped_column(String(5), default="00:00", server_default="00:00")
+    resets_tz: Mapped[str] = mapped_column(Text, default="UTC", server_default="UTC")
+    paused_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pause_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    pause_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pause_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    down_streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

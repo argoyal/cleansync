@@ -66,6 +66,19 @@ def enqueue_new(db: Session, account_id: int, row: MailMessage) -> None:
     db.merge(RuleTodo(account_id=account_id, message_id=row.id, next_try_at=utcnow()))
 
 
+def wake_waiting(db: Session, now) -> int:
+    """Resume now (model limits spec §9): every to-do row waiting for later is due now."""
+    return (
+        db.execute(
+            update(RuleTodo)
+            .where(RuleTodo.next_try_at > now)
+            .values(next_try_at=now)
+            .execution_options(synchronize_session=False)
+        ).rowcount
+        or 0
+    )
+
+
 class SortingWorker:
     def __init__(
         self,

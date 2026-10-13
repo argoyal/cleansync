@@ -7,14 +7,17 @@ import os
 import secrets as pysecrets
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.clock import as_utc, utcnow
 from app.models import AiConnection, AiTask
 from app.models.enums import AiTaskName
+from app.services.ai.limits import DOWN, Pause, check_reset
 
 
 class _Keep:
@@ -42,6 +45,7 @@ class AiTarget:
     model: str
     temperature: float
     timeout_s: float
+    skip_pause: bool = False  # Test: call even while paused
 
 
 def clean_base_url(url: str) -> str:
@@ -55,6 +59,8 @@ def clean_base_url(url: str) -> str:
         raise ConnectionError_(
             "Don't put a user name or password in the address. Use the API key field."
         )
+    if url.lower().endswith("/chat/completions"):
+        url = url[: -len("/chat/completions")].rstrip("/")
     return url
 
 
@@ -77,6 +83,14 @@ def _write_private(path: Path, text: str) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
+
+
+def _clear(conn: AiConnection) -> bool:
+    had = conn.pause_kind is not None or (conn.down_streak or 0) > 0
+    conn.paused_until = conn.pause_kind = conn.pause_reason = None
+    conn.pause_detail = conn.paused_at = None
+    conn.down_streak = 0
+    return had
 
 
 class AiSettings:
@@ -136,10 +150,21 @@ class AiSettings:
         base_url: str,
         api_key: str | None = None,
         headers: dict[str, str] | None = None,
+        resets_at: str = "00:00",
+        resets_tz: str = "UTC",
     ) -> AiConnection:
         url = clean_base_url(base_url)
+        try:
+            check_reset(resets_at, resets_tz)
+        except ValueError as e:
+            raise ConnectionError_(str(e)) from None
         with self.sf() as db:
-            conn = AiConnection(name=(name or "").strip() or urlsplit(url).netloc, base_url=url)
+            conn = AiConnection(
+                name=(name or "").strip() or urlsplit(url).netloc,
+                base_url=url,
+                resets_at=resets_at,
+                resets_tz=resets_tz,
+            )
             db.add(conn)
             db.flush()
             conn.has_key = self._save_key(conn.id, api_key)
@@ -162,6 +187,7 @@ class AiSettings:
         api_key: "str | None | Keep" = KEEP,
         headers: "dict[str, str] | Keep" = KEEP,
     ) -> AiConnection:
+        server_changed = False
         with self.sf() as db:
             conn = self._get(db, conn_id)
             if name is not None and name.strip():
@@ -174,11 +200,16 @@ class AiSettings:
                         api_key = None if isinstance(api_key, _Keep) else api_key
                         headers = {} if isinstance(headers, _Keep) else headers
                     conn.base_url = url
+                    server_changed = True
                     conn.modes = {}  # another server: learn its answer modes again
             if not isinstance(api_key, _Keep):
                 conn.has_key = self._save_key(conn.id, api_key)
+                server_changed = True
             if not isinstance(headers, _Keep):
                 conn.header_names = self._save_headers(conn.id, headers)
+                server_changed = True
+            if server_changed:
+                _clear(conn)  # new address, key or headers: the old pause no longer applies
             db.commit()
             return conn
 
@@ -208,6 +239,8 @@ class AiSettings:
                 self._get(db, connection_id)
             row = db.get(AiTask, str(task)) or AiTask(task=str(task))
             row.connection_id = connection_id
+            if connection_id is not None:
+                _clear(db.get(AiConnection, connection_id))
             row.model = (model or "").strip()
             row.temperature = min(max(float(temperature), 0.0), 2.0)
             row.timeout_s = min(max(int(timeout_s), 5), 600)
@@ -265,6 +298,84 @@ class AiSettings:
                 return
             conn.modes = {**(conn.modes or {}), model: mode}  # a new dict: JSON change seen
             db.commit()
+
+    # ---- pauses (model limits spec §6-7): saved here, never only in memory --------------
+    def pause_of(self, connection_id: int, now: datetime | None = None) -> Pause | None:
+        now = now or utcnow()
+        with self.sf() as db:
+            c = db.get(AiConnection, connection_id)
+            if c is None or c.pause_kind is None:
+                return None
+            until = as_utc(c.paused_until) if c.paused_until else None
+            if until is not None and until <= now:
+                return None
+            return Pause(
+                c.pause_kind,
+                until,
+                c.pause_reason or "",
+                c.pause_detail,
+                as_utc(c.paused_at) if c.paused_at else now,
+            )
+
+    def limits_of(self, connection_id: int) -> tuple[str, str, int]:
+        with self.sf() as db:
+            c = db.get(AiConnection, connection_id)
+            if c is None:
+                return "00:00", "UTC", 0
+            return c.resets_at or "00:00", c.resets_tz or "UTC", c.down_streak or 0
+
+    def set_pause(
+        self,
+        connection_id: int,
+        kind: str,
+        until: datetime | None,
+        reason: str,
+        detail: str | None,
+        now: datetime,
+    ) -> Pause:
+        with self.sf() as db:
+            c = db.get(AiConnection, connection_id)
+            if c is not None:
+                c.pause_kind, c.paused_until, c.pause_reason = kind, until, reason
+                c.pause_detail, c.paused_at = detail, now
+                if kind == DOWN:
+                    c.down_streak = (c.down_streak or 0) + 1
+                db.commit()
+        return Pause(kind, until, reason, detail, now)
+
+    def clear_pause(self, connection_id: int) -> bool:
+        with self.sf() as db:
+            c = db.get(AiConnection, connection_id)
+            if c is None or not _clear(c):
+                return False
+            db.commit()
+            return True
+
+    def secrets_of(self, connection_id: int) -> list[str]:
+        key = self._read_key(connection_id)
+        return [*([key] if key else []), *self._read_headers(connection_id).values()]
+
+    def set_resets(self, connection_id: int, resets_at: str, resets_tz: str) -> AiConnection:
+        try:
+            check_reset(resets_at, resets_tz)
+        except ValueError as e:
+            raise ConnectionError_(str(e)) from None
+        with self.sf() as db:
+            conn = self._get(db, connection_id)
+            conn.resets_at, conn.resets_tz = resets_at, resets_tz
+            db.commit()
+            return conn
+
+    def pause_for_task(self, task: AiTaskName) -> tuple[int, str, Pause] | None:
+        t = self.target(task)
+        if t is None:
+            return None
+        p = self.pause_of(t.connection_id)
+        if p is None:
+            return None
+        with self.sf() as db:
+            c = db.get(AiConnection, t.connection_id)
+            return (t.connection_id, c.name if c else "", p)
 
     def load_secrets(self) -> None:
         for conn in self.connections():

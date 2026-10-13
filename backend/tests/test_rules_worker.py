@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from app.core.clock import utcnow
+from app.core.clock import as_utc, utcnow
 from app.models import MailMessage, RuleAccount, RuleDecision, RuleJob, RuleTodo
 from app.models.enums import DecisionStatus, MailState, RuleJobState, RuleMode
 from app.services.ai.client import AiUnreachable
@@ -13,7 +13,14 @@ from app.services.mail.store import eml_path
 from app.services.rules.apply import BUDGET_WAIT
 from app.services.rules.match import Choice
 from app.services.rules.store import RuleIn, create_rule
-from app.services.rules.worker import GAVE_UP, SortingWorker, enqueue_new, retry_after, set_sorting
+from app.services.rules.worker import (
+    GAVE_UP,
+    SortingWorker,
+    enqueue_new,
+    retry_after,
+    set_sorting,
+    wake_waiting,
+)
 
 
 class Pick:
@@ -503,3 +510,15 @@ async def test_an_error_before_the_mail_is_read_counts_a_try_and_is_given_up(gbo
     (d,) = decisions(gbox)
     assert d.status == DecisionStatus.FAILED and d.reason == GAVE_UP and d.job_id == jid
     assert todos(gbox) == [] and _job(gbox, jid) == (1, 1, RuleJobState.PREVIEWED)
+
+
+def test_wake_waiting_makes_later_rows_due(gbox):
+    a, b = gbox.add("One"), gbox.add("Two")
+    queue(gbox, a, b)
+    now = utcnow()
+    with gbox.sf() as db:
+        db.get(RuleTodo, (gbox.acc.id, a.id)).next_try_at = now + timedelta(hours=5)
+        db.commit()
+        assert wake_waiting(db, now) == 1
+        db.commit()
+    assert all(as_utc(t.next_try_at) <= now + timedelta(seconds=1) for t in todos(gbox))
