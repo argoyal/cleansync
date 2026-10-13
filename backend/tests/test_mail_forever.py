@@ -135,7 +135,7 @@ def test_the_endpoint(auth_client, app, db, layout, make_account):
     assert r.status_code == 400 and "A restore is running" in r.json()["detail"]
     app.state.mail.queue.waiting = lambda aid: []
     body = {"account_id": acc.id, "view": "deleted", "message_ids": [row.id], "confirm": 1}
-    assert auth_client.post(url, json=body).json() == {"deleted": 1, "left": 0}
+    assert auth_client.post(url, json=body).json() == {"deleted": 1, "left": 0, "job_id": None}
     old = auth_client.post(
         "/api/mail/archive/delete-forever",
         json={"account_id": acc.id, "message_ids": [row.id], "confirm": 1},

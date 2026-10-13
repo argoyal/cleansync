@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -41,6 +42,33 @@ class ForeverResult:
 
 def _mails(n: int) -> str:
     return f"{n:,} {'mail' if n == 1 else 'mails'}"
+
+
+def mail_record(rows: list[MailMessage]) -> list[dict]:
+    """What Activity keeps of mail deleted forever: sender, subject and date, at most 500."""
+    return [
+        {"from": r.from_addr, "subject": r.subject, "date": r.date.isoformat()}
+        for r in rows[:MAX_RECORDED]
+    ]
+
+
+def remove_copies(db: Session, layout: Layout, email: str, rows: list[MailMessage]) -> list[Path]:
+    """Removes the rows and their search entries, not committed. Their decisions, to-do and
+    offload items go with them (ON DELETE CASCADE). Returns the files, to unlink only after
+    the commit: a leftover file is harmless, a row without one isn't."""
+    paths = [eml_path(layout, email, r.file_path) for r in rows]
+    delete_search_rows(db, [r.id for r in rows], commit=False)
+    for r in rows:
+        db.delete(r)
+    return paths
+
+
+def unlink_quietly(paths: list[Path]) -> None:
+    for p in paths:
+        try:
+            p.unlink(missing_ok=True)
+        except OSError as e:
+            log.warning("could not remove %s: %s", p.name, e)
 
 
 def forever_targets(
@@ -108,14 +136,8 @@ def delete_forever(
         raise ForeverProblem(NONE_HERE_MSG.format(name=name))
     if confirm != len(rows):
         raise ForeverProblem(f"The number you typed doesn't match the {_mails(len(rows))} picked.")
-    record = [
-        {"from": r.from_addr, "subject": r.subject, "date": r.date.isoformat()}
-        for r in rows[:MAX_RECORDED]
-    ]
-    paths = [eml_path(layout, email, r.file_path) for r in rows]
-    delete_search_rows(db, [r.id for r in rows], commit=False)  # one commit: rows, search, record
-    for r in rows:
-        db.delete(r)  # its decisions, to-do and offload items go with it (ON DELETE CASCADE)
+    record = mail_record(rows)
+    paths = remove_copies(db, layout, email, rows)  # one commit: rows, search, record
     record_event(
         db,
         bus,
@@ -124,9 +146,5 @@ def delete_forever(
         account_id=account_id,
         data={"mails": record, "more": max(0, len(rows) - MAX_RECORDED)},
     )  # commits
-    for p in paths:  # after the commit: a leftover file is harmless, a row without one isn't
-        try:
-            p.unlink(missing_ok=True)
-        except OSError as e:
-            log.warning("could not remove %s: %s", p.name, e)
+    unlink_quietly(paths)
     return ForeverResult(len(rows), left)

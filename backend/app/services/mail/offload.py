@@ -25,13 +25,18 @@ from app.models.enums import (
     JobState,
     MailItemResult,
     MailJobKind,
+    MailOffloadKind,
     MailOffloadState,
     MailPhase,
     MailState,
     ServiceKind,
     ServiceState,
 )
-from app.services.accounts.permanent import allows_permanent_delete, permission_lost
+from app.services.accounts.permanent import (
+    NOT_ALLOWED_MSG,
+    allows_permanent_delete,
+    permission_lost,
+)
 from app.services.accounts.services import service_state
 from app.services.app_settings import get_setting
 from app.services.events.bus import record_event
@@ -50,6 +55,12 @@ from app.services.mail.adapter import (
     ProviderState,
 )
 from app.services.mail.backup import Paused
+from app.services.mail.forever import (
+    MAX_RECORDED,
+    mail_record,
+    remove_copies,
+    unlink_quietly,
+)
 from app.services.mail.gmail import search_message_id
 from app.services.mail.index import delete_search_rows, mark_restored, set_flags, sync_state
 from app.services.mail.jobs import finish_mail_job, job_log, start_mail_job, update_mail_job
@@ -58,7 +69,9 @@ from app.services.mail.offload_plan import (
     STOPPED_MSG,
     OffloadPreview,
     Pick,
+    candidates,
     chunked,
+    describe_pick,
     plan_offload,
     rows_where_in,
 )
@@ -102,6 +115,13 @@ OFFLOAD_SLOW_MSG = (
 OFFLOAD_REFUSED_MSG = (
     "Gmail refused {n} mails in a row ({error}). " + REST_STAYED + " Start a new offload to go on."
 )
+FOREVER = MailOffloadKind.DELETE_FOREVER
+FOREVER_REST = "What wasn't deleted yet stays in Gmail, with CleanSync's copy."
+FOREVER_NOT_ALLOWED_MSG = f"{NOT_ALLOWED_MSG} {REST_STAYED}"
+SKIP_NOT_DELETED_KEPT = (
+    "Gmail didn't delete it ({error}), so it stayed in Gmail. The copy here is kept."
+)
+NONE_IN_GMAIL_MSG = "None of these mails are in Gmail."
 REFUSED_IN_A_ROW = 5  # this many refusals in a row are Gmail's trouble, not those mails'
 # Restore (spec 5.5).
 NOTHING_TO_RESTORE_MSG = "Nothing here needs restoring: these mails are in Gmail."
@@ -163,7 +183,10 @@ def offload_out(db: Session, off: MailOffload, now: datetime) -> dict:
 
 
 def summary(off: MailOffload) -> str:
-    text = f"Offloaded {off.done:,} of {off.total:,} mails ({human_size(off.bytes)})"
+    if off.kind == FOREVER:
+        text = f"Deleted {off.done:,} of {off.total:,} mails forever"
+    else:
+        text = f"Offloaded {off.done:,} of {off.total:,} mails ({human_size(off.bytes)})"
     return text + (f"; {off.skipped:,} skipped" if off.skipped else "")
 
 
@@ -334,6 +357,57 @@ class MailOffloads:
         self._changed(account_id, off_id)
         return off_id
 
+    async def start_delete_forever(
+        self, account_id: int, pick: Pick, confirm: int
+    ) -> tuple[int, int]:
+        """Bulk offload spec §5: Delete forever on mail in Gmail, as a background job. Only
+        for a mailbox that allows permanent delete; the typed count must match. No minimum
+        age. Returns the job's id, and how many picked mails were left (not in Gmail)."""
+        await self._ready(account_id)  # the disk, the login, Mail set up, no full listing
+        with self.sf() as db:
+            if not allows_permanent_delete(db, account_id):
+                raise MailError(NOT_ALLOWED_MSG, 400)
+            try:
+                rows = candidates(db, account_id, pick, self.clock())
+            except SearchError as e:
+                raise MailError(str(e), 400) from e
+            mine = sorted(
+                (r for r in rows if r.state == MailState.IN_MAIL),
+                key=lambda r: (as_utc(r.date), r.id),
+            )
+            left = len(rows) - len(mine) if (pick.message_ids or pick.thread_ids) else 0
+            if not mine:
+                raise MailError(NONE_IN_GMAIL_MSG, 400)
+            if confirm != len(mine):
+                raise MailError(
+                    f"The number you typed doesn't match the {_mails(len(mine))} picked.", 400
+                )
+            name = describe_pick(db, account_id, pick, len(mine))
+            off = MailOffload(
+                account_id=account_id,
+                kind=FOREVER,
+                filter_text=name,
+                state=MailOffloadState.WAITING,
+                total=len(mine),
+            )
+            db.add(off)
+            db.flush()
+            db.add_all(MailOffloadItem(offload_id=off.id, message_id=r.id) for r in mine)
+            db.commit()
+            off_id = off.id
+            record_event(
+                db,
+                self.bus,
+                kind="mail_delete_forever_started",
+                message=f"Delete forever of {_mails(len(mine))} asked for ({name})",
+                account_id=account_id,
+                data={"mail_offload_id": off_id},
+            )
+        # The same queue action as an offload: it waits behind the mailbox's other mail jobs.
+        self.mail.queue.request(account_id, "offload", {"offload_id": off_id}, trigger="MANUAL")
+        self._changed(account_id, off_id)
+        return off_id, left
+
     def resume_waiting(self) -> None:
         """Each minute: offloads paused by the budget or a rate limit (or not yet run) go on
         when they can. The budget pause lasts until the next UTC day (spec 7)."""
@@ -372,7 +446,9 @@ class MailOffloads:
             if off.state == MailOffloadState.WAITING:
                 off.state, off.reason, off.finished_at = (
                     MailOffloadState.FAILED,
-                    STOPPED_MSG,
+                    STOPPED_MSG.replace(REST_STAYED, FOREVER_REST)
+                    if off.kind == FOREVER
+                    else STOPPED_MSG,
                     self.clock(),
                 )
                 self._no_answer.pop(off_id, None)
@@ -546,6 +622,96 @@ class MailOffloads:
         self._mark_offloaded(off_id, [(i, m) for i, m, _ in ready], removed=permanent)
         job_log(log_path, f"{'removed' if permanent else 'trashed'} {len(ids)} mails")
 
+    def _forget(self, acc: Account, off_id: int, gone: list[tuple[int, int, str]]) -> None:
+        """Gmail removed these: CleanSync's copies go too, with one Activity record."""
+        if not gone:
+            return
+        with self.sf() as db:
+            rows = [r for _, mid, _ in gone if (r := db.get(MailMessage, mid)) is not None]
+            off = db.get(MailOffload, off_id)
+            off.done += len(rows)
+            off.removed += len(rows)
+            off.bytes += sum(r.size for r in rows)
+            record = mail_record(rows)
+            paths = remove_copies(db, self.layout, acc.email, rows)  # their items go too
+            record_event(
+                db,
+                self.bus,
+                kind="mail_deleted_forever",
+                message=f"Deleted {_mails(len(rows))} forever from Gmail",
+                account_id=acc.id,
+                data={
+                    "mails": record,
+                    "more": max(0, len(rows) - MAX_RECORDED),
+                    "mail_offload_id": off_id,
+                },
+            )  # commits
+        unlink_quietly(paths)
+
+    def _lost_forever(self, account_id: int) -> None:
+        self._permission_lost(account_id)
+        raise _Refusing(FOREVER_NOT_ALLOWED_MSG)
+
+    async def _forever_batch(
+        self, acc: Account, adapter, off_id: int, item_ids: list[int], log_path
+    ) -> None:
+        """Bulk offload spec §5: Gmail first, in one call; then CleanSync's copy of each mail
+        Gmail removed. A mail Gmail didn't remove keeps its copy and is listed."""
+        if not self._permanent(acc.id):
+            raise _Refusing(FOREVER_NOT_ALLOWED_MSG)
+        ready: list[tuple[int, int, str]] = []
+        left: list[int] = []
+        with self.sf() as db:
+            for item_id in item_ids:
+                row = db.get(MailMessage, db.get(MailOffloadItem, item_id).message_id)
+                # DELETED: sent before a pause or a restart and not recorded; sent again.
+                if row.state in (MailState.IN_MAIL, MailState.DELETED):
+                    ready.append((item_id, row.id, row.provider_id))
+                else:
+                    left.append(item_id)
+        for item_id in left:
+            self._skip(off_id, item_id, SKIP_NOT_IN_GMAIL, log_path)
+        if not ready:
+            return
+        try:
+            await self._batch_call(adapter, [pid for _, _, pid in ready], True)
+            gone = ready
+        except PermanentDeleteRefused:
+            return self._lost_forever(acc.id)
+        except (MailAuthError, MailSetupProblem, MailUnreachable):
+            raise
+        except MailApiError as e:
+            job_log(log_path, f"Gmail refused the batch ({e}); one mail at a time instead")
+            gone = await self._forever_one_by_one(acc, adapter, off_id, ready, log_path)
+        self._forget(acc, off_id, gone)
+        job_log(log_path, f"deleted {len(gone)} mails forever")
+
+    async def _forever_one_by_one(
+        self, acc: Account, adapter, off_id: int, ready: list[tuple[int, int, str]], log_path
+    ) -> list[tuple[int, int, str]]:
+        gone, refused = [], []
+        for item_id, msg_id, pid in ready:
+            try:
+                await adapter.delete(pid)
+            except MailNotFound:
+                pass  # Gmail no longer has it: only the copy is left to remove
+            except PermanentDeleteRefused:
+                self._forget(acc, off_id, gone)  # what Gmail already removed
+                return self._lost_forever(acc.id)
+            except (MailAuthError, MailSetupProblem, MailUnreachable):
+                self._forget(acc, off_id, gone)
+                raise
+            except MailApiError as e:
+                self._skip(off_id, item_id, SKIP_NOT_DELETED_KEPT.format(error=e), log_path)
+                refused.append(str(e))
+                if len(refused) >= REFUSED_IN_A_ROW:
+                    self._forget(acc, off_id, gone)
+                    raise _Refusing(OFFLOAD_REFUSED_MSG.format(n=len(refused), error=e)) from e
+                continue
+            refused = []
+            gone.append((item_id, msg_id, pid))
+        return gone
+
     # ---- the job -------------------------------------------------------------------------
     def _fail_before_start(self, off_id: int, account_id: int, email: str, reason: str) -> None:
         with self.sf() as db:
@@ -570,7 +736,7 @@ class MailOffloads:
             acc = db.get(Account, account_id)
             if off is None or acc is None or off.state != MailOffloadState.WAITING:
                 return
-            email = acc.email
+            email, kind = acc.email, off.kind
             # A backup that is listing the whole mailbox needs Gmail to hold still (Plan 2's
             # mark_seen_back_in_mail): wait for it, the minute tick asks again.
             phase = sync_state(db, account_id).phase
@@ -594,12 +760,14 @@ class MailOffloads:
         job = None
         state, reason = MailOffloadState.DONE, None
         try:
+            job_kind = MailJobKind.DELETE_FOREVER if kind == FOREVER else MailJobKind.OFFLOAD
             with self.sf() as db:
                 total = db.get(MailOffload, off_id).total
                 job = start_mail_job(
-                    db, self.layout, self.bus, account_id, MailJobKind.OFFLOAD, trigger, total
+                    db, self.layout, self.bus, account_id, job_kind, trigger, total
                 )
             adapter = self.mail.adapter_for(acc)
+            do_batch = self._forever_batch if kind == FOREVER else self._offload_batch
             while True:
                 with self.sf() as db:
                     items = list(
@@ -620,7 +788,7 @@ class MailOffloads:
                     raise _Refusing(STOPPED_MSG)
                 if await self.mail.stopped():  # before every batch (spec 3.4)
                     raise Paused(self.mail.stop_message() or MISSING_DISK_MSG)
-                await self._offload_batch(acc, adapter, off_id, items, job.log_path)
+                await do_batch(acc, adapter, off_id, items, job.log_path)
                 with self.sf() as db:
                     off = db.get(MailOffload, off_id)
                     update_mail_job(db, job.id, done=off.done, bytes_=off.bytes)
@@ -660,6 +828,8 @@ class MailOffloads:
     def _finish(self, account_id: int, email: str, off_id: int, job, state, reason) -> None:
         with self.sf() as db:
             off = db.get(MailOffload, off_id)
+            if off.kind == FOREVER and reason:
+                reason = reason.replace(REST_STAYED, FOREVER_REST)
             if state == MailOffloadState.DONE and off.skipped:
                 state = MailOffloadState.DONE_WITH_SKIPS
             off.state, off.reason = state, reason
@@ -683,7 +853,7 @@ class MailOffloads:
                 self.bus,
                 kind="mail_offload",
                 level=level,
-                message=f"Mail offload for {email}: {message}",
+                message=f"{'Delete forever' if off.kind == FOREVER else 'Mail offload'} for {email}: {message}",
                 account_id=account_id,
                 data={"mail_offload_id": off_id},
             )
