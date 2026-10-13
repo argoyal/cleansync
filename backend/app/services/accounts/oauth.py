@@ -20,6 +20,7 @@ GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 # the owner turns on Allow permanent delete for a mailbox.
 FULL_MAIL_SCOPE = "https://mail.google.com/"
 SCOPES = f"{DRIVE_SCOPE} {GMAIL_SCOPE}"
+PERMANENT_PURPOSE = "permanent_delete"  # a sign-in for Turn on (bulk offload spec §3)
 
 
 def granted_scopes(token_answer: dict) -> str:
@@ -44,7 +45,7 @@ class PendingAuth:
     verifier: str
     created: float
     reconnect_account_id: int | None
-    purpose: str = "connect"  # "connect" (add or reconnect) or "mail" (set up Mail)
+    purpose: str = "connect"  # "connect", "mail" (set up Mail) or "permanent_delete"
 
 
 class OAuthStates:
@@ -82,7 +83,9 @@ class OAuthStates:
         return pending
 
 
-def build_auth_url(client_id: str, redirect_uri: str, state: str, challenge: str) -> str:
+def build_auth_url(
+    client_id: str, redirect_uri: str, state: str, challenge: str, scope: str = SCOPES
+) -> str:
     return (
         AUTH_URL
         + "?"
@@ -91,7 +94,7 @@ def build_auth_url(client_id: str, redirect_uri: str, state: str, challenge: str
                 "client_id": client_id,
                 "redirect_uri": redirect_uri,
                 "response_type": "code",
-                "scope": SCOPES,
+                "scope": scope,
                 "access_type": "offline",
                 "prompt": "consent",
                 "include_granted_scopes": "true",

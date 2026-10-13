@@ -15,6 +15,8 @@ class AccountOut(BaseModel):
     last_checked_at: UtcDatetime | None
     services: dict[str, str] = {}
     mail_permission: bool = False
+    permanent_delete: bool = False  # on means: the switch is on and Google allows it
+    permanent_delete_note: str | None = None
 
 
 class MailSetupOut(BaseModel):
@@ -23,3 +25,7 @@ class MailSetupOut(BaseModel):
 
 class AuthUrlOut(BaseModel):
     auth_url: str
+
+
+class PermanentDeleteIn(BaseModel):
+    on: bool

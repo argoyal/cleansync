@@ -54,16 +54,20 @@ BATCH_MAX = 1000
 PERMANENT_REFUSED_MSG = "Google no longer lets CleanSync delete mail from this Gmail for good."
 
 
-def api_turned_off(resp: httpx.Response) -> bool:
-    """Google's answer when the Gmail API is not turned on for the Cloud project: the
-    reason sits in `errors` (accessNotConfigured) or in `details` (SERVICE_DISABLED)."""
+def all_error_reasons(resp: httpx.Response) -> set[str]:
+    """Every reason in a Google error answer. Google puts it in `errors` (accessNotConfigured,
+    insufficientPermissions) or in `details` (SERVICE_DISABLED, ACCESS_TOKEN_SCOPE_INSUFFICIENT)."""
     reasons = set(error_reasons(resp))
     try:
         details = resp.json()["error"].get("details") or []
     except (ValueError, KeyError, TypeError, AttributeError):
         details = []
-    reasons |= {str(d.get("reason")) for d in details if isinstance(d, dict)}
-    return bool(reasons & API_OFF_REASONS)
+    return reasons | {str(d.get("reason")) for d in details if isinstance(d, dict)}
+
+
+def api_turned_off(resp: httpx.Response) -> bool:
+    """Google's answer when the Gmail API is not turned on for the Cloud project."""
+    return bool(all_error_reasons(resp) & API_OFF_REASONS)
 
 
 # A Message-ID safe to put in a Gmail search. Refused (such mail is imported without a
@@ -188,7 +192,7 @@ class GmailAdapter:
         assert resp is not None
         if resp.status_code == 401:
             raise MailAuthError(AUTH_MSG, login=True)
-        if resp.status_code == 403 and error_reasons(resp) & SCOPE_REASONS:
+        if resp.status_code == 403 and all_error_reasons(resp) & SCOPE_REASONS:
             raise MailAuthError(SCOPE_MSG, login=False)
         if resp.status_code == 403 and api_turned_off(resp):
             raise MailSetupProblem(API_OFF_MSG, 403)

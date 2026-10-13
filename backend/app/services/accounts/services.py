@@ -66,4 +66,7 @@ def mail_needs_reconnect(db: Session, account_id: int, note: str, *, permission_
         if acc is not None:
             gone = {GMAIL_SCOPE, FULL_MAIL_SCOPE}  # without mail, no permanent delete either
             acc.scopes = " ".join(s for s in acc.scopes.split() if s not in gone)
+            # Off for good: a later sign-in that happens to carry the full scope must not
+            # turn it back on. Only the explicit Turn on does.
+            acc.permanent_delete = False
     set_service_state(db, account_id, ServiceKind.MAIL, ServiceState.NEEDS_RECONNECT, note)

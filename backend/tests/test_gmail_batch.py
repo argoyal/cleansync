@@ -116,3 +116,17 @@ async def test_the_requests_have_gmails_shape_and_cost(session_factory):
     assert one.called
     assert bd.calls[0].request.headers["Authorization"] == "Bearer ya29.test"
     assert budget.used_today() == 50 + 50 + 10
+
+
+@pytest.mark.parametrize("where", ["errors", "details"])
+async def test_insufficient_scope_is_seen_whether_the_reason_is_in_errors_or_details(where):
+    reason = "ACCESS_TOKEN_SCOPE_INSUFFICIENT"
+    error = {"code": 403, "message": "Insufficient Permission", "status": "PERMISSION_DENIED"}
+    error["errors" if where == "errors" else "details"] = [{"reason": reason}]
+    transport = httpx.MockTransport(lambda req: httpx.Response(403, json={"error": error}))
+    google = GoogleClient(
+        budget=None, pacer=None, http_factory=lambda: httpx.AsyncClient(transport=transport)
+    )
+    gmail = GmailAdapter(google, StaticTokens("ya29.fake"), "gd_alice")
+    with pytest.raises(PermanentDeleteRefused):
+        await gmail.batch_delete(["abc123"])

@@ -15,7 +15,9 @@ from app.models.enums import AccountStatus, ServiceKind, ServiceState
 from app.paths import Layout, email_dirname
 from app.services.accounts.oauth import (
     DRIVE_SCOPE,
+    FULL_MAIL_SCOPE,
     GMAIL_SCOPE,
+    PERMANENT_PURPOSE,
     SCOPES,
     OAuthError,
     OAuthStates,
@@ -26,7 +28,13 @@ from app.services.accounts.oauth import (
     has_scope,
     to_rclone_token,
 )
-from app.services.accounts.services import ensure_services, get_service, set_service_state
+from app.services.accounts.permanent import permission_lost
+from app.services.accounts.services import (
+    ensure_services,
+    get_service,
+    service_state,
+    set_service_state,
+)
 from app.services.events.bus import EventBus, record_event
 from app.services.rclone.commands import (
     RcloneEnv,
@@ -136,8 +144,13 @@ class AccountService:
                 "GOOGLE_CLIENT_SECRET (see docs/google-oauth-setup.md)."
             )
         state, challenge = self.states.new(reconnect_account_id, purpose)
+        scope = f"{SCOPES} {FULL_MAIL_SCOPE}" if purpose == PERMANENT_PURPOSE else SCOPES
         return build_auth_url(
-            self.settings.google_client_id, self.settings.oauth_redirect_uri, state, challenge
+            self.settings.google_client_id,
+            self.settings.oauth_redirect_uri,
+            state,
+            challenge,
+            scope,
         )
 
     def start_mail_setup(self, account_id: int) -> str | None:
@@ -168,6 +181,38 @@ class AccountService:
                 self._follow_mail_permission(db, acc, "mail")
                 return None
         return self.start_connect(account_id, purpose="mail")
+
+    def start_permanent_delete(self, account_id: int) -> str | None:
+        """Turn on Allow permanent delete (bulk offload spec §3). Google is asked for the full
+        Gmail permission only when it hasn't granted it yet; a pretend local account gets it
+        without Google. None: it is on now."""
+        with self.session_factory() as db:
+            acc = db.get(Account, account_id)
+            if acc is None:
+                raise LookupError("account not found")
+            if acc.status != AccountStatus.CONNECTED:
+                raise AccountError("Connect this Google account again first (Settings, Accounts).")
+            if service_state(db, acc.id, ServiceKind.MAIL) == ServiceState.NOT_SET_UP:
+                raise AccountError("Set up mail backup for this account first.")
+            if is_pretend(acc, self.settings.allow_local_accounts):
+                acc.scopes = " ".join(sorted(set(acc.scopes.split()) | {FULL_MAIL_SCOPE}))
+            if has_scope(acc.scopes, FULL_MAIL_SCOPE):
+                acc.permanent_delete, acc.permanent_delete_note = True, None
+                db.commit()
+                self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
+                return None
+        return self.start_connect(account_id, purpose=PERMANENT_PURPOSE)
+
+    def _follow_permanent_delete(self, db: Session, acc: Account, purpose: str) -> None:
+        """After any sign-in: Turn on's sign-in that granted the scope turns the switch on;
+        a sign-in without it, while the switch was on, means Google took it back. Any other
+        sign-in never turns it on."""
+        if has_scope(acc.scopes, FULL_MAIL_SCOPE):
+            if purpose == PERMANENT_PURPOSE:
+                acc.permanent_delete, acc.permanent_delete_note = True, None
+                db.commit()
+        elif acc.permanent_delete:
+            permission_lost(db, self.bus, acc.id)
 
     def _follow_mail_permission(self, db: Session, acc: Account, purpose: str) -> None:
         """Mail's state after a sign-in, from what Google granted (see the plan's rulings)."""
@@ -269,6 +314,7 @@ class AccountService:
             db.commit()
             ensure_services(db, acc)
             self._follow_mail_permission(db, acc, pending.purpose)
+            self._follow_permanent_delete(db, acc, pending.purpose)
             self.layout.account_dir(email).mkdir(parents=True, exist_ok=True)
             record_event(
                 db,

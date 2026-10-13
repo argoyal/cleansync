@@ -62,3 +62,12 @@ def test_losing_the_mail_permission_loses_the_full_one_too(db, make_account):
     mail_needs_reconnect(db, acc.id, "gone", permission_gone=True)
     db.refresh(acc)
     assert acc.scopes == DRIVE_SCOPE and permanent_delete_on(acc) is False
+
+
+def test_losing_the_mail_permission_clears_the_switch_too(db, make_account):
+    acc = _acc(db, make_account, f"{DRIVE_SCOPE} {GMAIL_SCOPE} {FULL_MAIL_SCOPE}")
+    acc.permanent_delete = True
+    db.commit()
+    mail_needs_reconnect(db, acc.id, "gone", permission_gone=True)
+    db.refresh(acc)
+    assert acc.permanent_delete is False
