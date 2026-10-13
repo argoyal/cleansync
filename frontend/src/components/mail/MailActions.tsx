@@ -53,8 +53,8 @@ export function MailHeaderActions({
   );
 }
 
-/** Offload one mail open in the reader (mail panel spec §8): checked, moved to Gmail's trash,
- * kept here in Offloaded. A plain confirm, as Delete had. */
+/** Offload one mail open in the reader (mail panel spec §8): checked, moved to Gmail's trash
+ * (or deleted from Gmail for good, when the mailbox allows it), kept here in Offloaded. A plain confirm, as Delete had. */
 export function OffloadOneDialog({ account, messageId, onClose }: { account: Account; messageId: number; onClose: () => void }) {
   const offload = useOffloadOne();
   return (
@@ -72,7 +72,11 @@ export function OffloadOneDialog({ account, messageId, onClose }: { account: Acc
         </>
       }
     >
-      <p>CleanSync checks its copy, moves the mail to Gmail's trash and keeps the copy here, in Offloaded. You can restore it to Gmail at any time.</p>
+      <p>
+        {account.permanent_delete
+          ? "CleanSync checks its copy, deletes the mail from Gmail for good and keeps the copy here, in Offloaded. This can't be undone in Gmail, but you can restore it to Gmail at any time."
+          : "CleanSync checks its copy, moves the mail to Gmail's trash and keeps the copy here, in Offloaded. You can restore it to Gmail at any time."}
+      </p>
     </Dialog>
   );
 }

@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
 
+import { friendlyError } from "../../api/client";
 import { useMailOffload } from "../../api/queries";
 import type { Account } from "../../api/types";
 import { useStopOffload } from "../../hooks/useMailOffload";
@@ -37,8 +38,18 @@ export function ForeverButton({ account, disabled = false, onClick }: { account:
 
 /** The job's progress, then what it did (bulk offload spec §5). */
 function ForeverJob({ jobId, count, onClose }: { jobId: number; count: number; onClose: () => void }) {
-  const job = useMailOffload(jobId).data;
+  const status = useMailOffload(jobId);
+  const job = status.data;
   const stop = useStopOffload();
+  if (status.isError && !job) {
+    return (
+      <Dialog title="Delete forever" onClose={onClose} footer={<Button onClick={onClose}>Close</Button>}>
+        <Notice tone="err">{friendlyError(status.error)}</Notice>
+      </Dialog>
+    );
+  }
+  // Stopped by the owner: a choice, not a failure (the server words it "Stopped by you. …").
+  const stopped = job?.state === "FAILED" && !!job.reason?.startsWith("Stopped by you");
   const busy = !job || job.state === "WAITING" || job.state === "RUNNING";
   return (
     <Dialog
@@ -63,6 +74,8 @@ function ForeverJob({ jobId, count, onClose }: { jobId: number; count: number; o
           <Bar label="Mails deleted" value={percent(job ? job.done + job.skipped : 0, count)} tone="run" />
           <p className="text-ink-2">You can close this. The deleting goes on.</p>
         </>
+      ) : stopped ? (
+        <p>Stopped. Deleted {mails(job.done)} forever; the rest are still in Gmail.</p>
       ) : (
         <>
           <p>Deleted {mails(job.done)} forever.</p>
@@ -111,7 +124,7 @@ export function DeleteForeverDialog({
       {
         onSuccess: ({ deleted, job_id }) => {
           onDone?.();
-          if (job_id !== null) return setJobId(job_id); // mail in Gmail: a background job
+          if (job_id != null) return setJobId(job_id); // mail in Gmail: a background job
           toast(`Deleted ${mails(deleted)} forever.`);
           onClose();
         },

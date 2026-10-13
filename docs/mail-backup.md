@@ -51,7 +51,7 @@ Tick mails in the list, or tick **Pick all** at the top to pick every mail of th
 
 CleanSync works through an offload in batches of up to 1,000 mails. For each batch it first checks every copy here (there, same size, same checksum, reads as a mail). Mail whose copy fails stays in Gmail and is listed on the offload. Then one Gmail call removes the rest of the batch: for good with Allow permanent delete, else to Gmail's trash. If Gmail refuses the batch, CleanSync goes one mail at a time, so one bad mail can't hold up the others. If Gmail doesn't answer (it is down, or your connection is), the offload waits and tries again after 1, 5, 15, then every 60 minutes, and carries on from where it was. **Stop** on the offload's page stops it before its next batch. After a restart an offload goes on by itself.
 
-One mail open in the reader has its own **Offload**, which checks the copy and moves that mail to Gmail's trash at once.
+One mail open in the reader has its own **Offload**, which checks the copy and moves that mail to Gmail's trash at once. With Allow permanent delete on, it deletes the mail from Gmail for good instead, and the dialog says so.
 
 **Without Allow permanent delete, offloaded mail sits in Gmail's trash.** Gmail empties its trash on its own after 30 days; that's when the space comes back. With it, the offload's page says "Removed from Gmail. The space is free now." CleanSync never empties Gmail's trash for offloads made before you turned it on. If you need that space right away, empty Gmail's trash yourself in Gmail, but only after checking the offload is what you expect: mail removed from the trash is gone from Gmail for good, and your copy here is then the only one.
 

@@ -65,6 +65,8 @@ from app.services.mail.gmail import search_message_id
 from app.services.mail.index import delete_search_rows, mark_restored, set_flags, sync_state
 from app.services.mail.jobs import finish_mail_job, job_log, start_mail_job, update_mail_job
 from app.services.mail.offload_plan import (
+    FOREVER_REST,
+    FOREVER_STOPPED_MSG,
     GMAIL_TRASH_DAYS,
     STOPPED_MSG,
     OffloadPreview,
@@ -116,7 +118,21 @@ OFFLOAD_REFUSED_MSG = (
     "Gmail refused {n} mails in a row ({error}). " + REST_STAYED + " Start a new offload to go on."
 )
 FOREVER = MailOffloadKind.DELETE_FOREVER
-FOREVER_REST = "What wasn't deleted yet stays in Gmail, with CleanSync's copy."
+FOREVER_TROUBLE_MSG = (
+    "CleanSync couldn't reach Gmail ({error}). "
+    + FOREVER_REST
+    + " Start a new Delete forever to go on."
+)
+FOREVER_REFUSED_MSG = (
+    "Gmail refused {n} mails in a row ({error}). "
+    + FOREVER_REST
+    + " Start a new Delete forever to go on."
+)
+FOREVER_SLOW_MSG = (
+    "Gmail asked CleanSync to slow down. The Delete forever goes on by itself in a minute or so."
+)
+SKIP_FOREVER_ITEM_GONE = "The mail was deleted forever while this was waiting."
+SKIP_FOREVER_NOT_IN_GMAIL = "It was no longer in Gmail, so CleanSync's copy is kept."
 FOREVER_NOT_ALLOWED_MSG = f"{NOT_ALLOWED_MSG} {REST_STAYED}"
 SKIP_NOT_DELETED_KEPT = (
     "Gmail didn't delete it ({error}), so it stayed in Gmail. The copy here is kept."
@@ -446,9 +462,7 @@ class MailOffloads:
             if off.state == MailOffloadState.WAITING:
                 off.state, off.reason, off.finished_at = (
                     MailOffloadState.FAILED,
-                    STOPPED_MSG.replace(REST_STAYED, FOREVER_REST)
-                    if off.kind == FOREVER
-                    else STOPPED_MSG,
+                    FOREVER_STOPPED_MSG if off.kind == FOREVER else STOPPED_MSG,
                     self.clock(),
                 )
                 self._no_answer.pop(off_id, None)
@@ -661,16 +675,27 @@ class MailOffloads:
             raise _Refusing(FOREVER_NOT_ALLOWED_MSG)
         ready: list[tuple[int, int, str]] = []
         left: list[int] = []
+        gone_items = 0
         with self.sf() as db:
             for item_id in item_ids:
-                row = db.get(MailMessage, db.get(MailOffloadItem, item_id).message_id)
+                item = db.get(MailOffloadItem, item_id)
+                if item is None:  # a rule approval or another Delete forever took it meanwhile
+                    gone_items += 1
+                    job_log(log_path, f"skipped mail {item_id}: {SKIP_FOREVER_ITEM_GONE}")
+                    continue
+                row = db.get(MailMessage, item.message_id)
+                if row is None or row.account_id != acc.id:
+                    left.append(item_id)
                 # DELETED: sent before a pause or a restart and not recorded; sent again.
-                if row.state in (MailState.IN_MAIL, MailState.DELETED):
+                elif row.state in (MailState.IN_MAIL, MailState.DELETED):
                     ready.append((item_id, row.id, row.provider_id))
                 else:
                     left.append(item_id)
+            if gone_items:
+                db.get(MailOffload, off_id).skipped += gone_items
+                db.commit()
         for item_id in left:
-            self._skip(off_id, item_id, SKIP_NOT_IN_GMAIL, log_path)
+            self._skip(off_id, item_id, SKIP_FOREVER_NOT_IN_GMAIL, log_path)
         if not ready:
             return
         try:
@@ -698,15 +723,15 @@ class MailOffloads:
             except PermanentDeleteRefused:
                 self._forget(acc, off_id, gone)  # what Gmail already removed
                 return self._lost_forever(acc.id)
-            except (MailAuthError, MailSetupProblem, MailUnreachable):
-                self._forget(acc, off_id, gone)
+            except (MailAuthError, MailSetupProblem, MailUnreachable, BudgetReached, RateLimited):
+                self._forget(acc, off_id, gone)  # what Gmail already removed, counted now
                 raise
             except MailApiError as e:
                 self._skip(off_id, item_id, SKIP_NOT_DELETED_KEPT.format(error=e), log_path)
                 refused.append(str(e))
                 if len(refused) >= REFUSED_IN_A_ROW:
                     self._forget(acc, off_id, gone)
-                    raise _Refusing(OFFLOAD_REFUSED_MSG.format(n=len(refused), error=e)) from e
+                    raise _Refusing(FOREVER_REFUSED_MSG.format(n=len(refused), error=e)) from e
                 continue
             refused = []
             gone.append((item_id, msg_id, pid))
@@ -716,6 +741,9 @@ class MailOffloads:
     def _fail_before_start(self, off_id: int, account_id: int, email: str, reason: str) -> None:
         with self.sf() as db:
             off = db.get(MailOffload, off_id)
+            forever = off.kind == FOREVER
+            if forever:
+                reason = reason.replace(REST_STAYED, FOREVER_REST)
             off.state, off.reason, off.finished_at = MailOffloadState.FAILED, reason, self.clock()
             db.commit()
             record_event(
@@ -723,7 +751,7 @@ class MailOffloads:
                 self.bus,
                 kind="mail_offload",
                 level="error",
-                message=f"Mail offload for {email}: {reason}",
+                message=f"{'Delete forever' if forever else 'Mail offload'} for {email}: {reason}",
                 account_id=account_id,
                 data={"mail_offload_id": off_id},
             )
@@ -785,7 +813,7 @@ class MailOffloads:
                 if not items:
                     break
                 if stop:
-                    raise _Refusing(STOPPED_MSG)
+                    raise _Refusing(FOREVER_STOPPED_MSG if kind == FOREVER else STOPPED_MSG)
                 if await self.mail.stopped():  # before every batch (spec 3.4)
                     raise Paused(self.mail.stop_message() or MISSING_DISK_MSG)
                 await do_batch(acc, adapter, off_id, items, job.log_path)
@@ -796,7 +824,11 @@ class MailOffloads:
         except BudgetReached as e:
             state, reason = MailOffloadState.WAITING, str(e)  # goes on the next UTC day
         except RateLimited:
-            state, reason = MailOffloadState.WAITING, OFFLOAD_SLOW_MSG  # the next minute
+            # the next minute
+            state, reason = (
+                MailOffloadState.WAITING,
+                (FOREVER_SLOW_MSG if kind == FOREVER else OFFLOAD_SLOW_MSG),
+            )
         except MailUnreachable:
             # Gmail may have done the call without answering: the next run checks the copies
             # again and sends the batch again (Gmail ignores mail it no longer has).
@@ -810,10 +842,19 @@ class MailOffloads:
         except MailSetupProblem as e:
             state, reason = MailOffloadState.FAILED, f"{e} {REST_STAYED}"  # says what to fix
         except MailApiError as e:
-            state, reason = MailOffloadState.FAILED, OFFLOAD_TROUBLE_MSG.format(error=e)
+            trouble = FOREVER_TROUBLE_MSG if kind == FOREVER else OFFLOAD_TROUBLE_MSG
+            state, reason = MailOffloadState.FAILED, trouble.format(error=e)
         except Exception as e:
             log.exception("mail offload %s failed", off_id)
             state, reason = MailOffloadState.FAILED, f"Something went wrong: {e}"
+        if state == MailOffloadState.WAITING:
+            # Stop was asked and then the run paused (budget, rate limit, no answer): it ends
+            # stopped, it doesn't wait to be run again.
+            with self.sf() as db:
+                stop_asked = db.get(MailOffload, off_id).stop_asked
+            if stop_asked:
+                state = MailOffloadState.FAILED
+                reason = FOREVER_STOPPED_MSG if kind == FOREVER else STOPPED_MSG
         try:
             self._finish(account_id, email, off_id, job, state, reason)
         except Exception:

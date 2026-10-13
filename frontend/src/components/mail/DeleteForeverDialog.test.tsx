@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { ACCOUNT, mockApi, renderApp } from "../../test/utils";
+import { ACCOUNT, json, mockApi, renderApp } from "../../test/utils";
 import { DeleteForeverDialog, ForeverButton } from "./DeleteForeverDialog";
 
 const JOB = {
@@ -76,5 +76,46 @@ describe("Delete forever on mail in Gmail", () => {
     await userEvent.click(within(screen.getByRole("dialog", { name: "Delete forever" })).getByRole("button", { name: "Delete forever" }));
     expect(await screen.findByText("Deleted 1,283 mails forever.")).toBeInTheDocument();
     expect(screen.getByText("1 mail wasn't deleted and stays in Gmail, with CleanSync's copy.")).toBeInTheDocument();
+  });
+  const open = async () => {
+    renderApp(<DeleteForeverDialog account={{ ...ACCOUNT, permanent_delete: true }} start={{ view: "all", message_ids: [9] }} count={1} onClose={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Type 1 to delete forever"), "1");
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Delete forever" })).getByRole("button", { name: "Delete forever" }));
+  };
+
+  it("shows the error, with Close, when the job can't be read", async () => {
+    mockApi({
+      "POST /api/mail/delete-forever": { deleted: 0, left: 0, job_id: 7 },
+      "GET /api/mail/offloads/7": json(404, { detail: "That offload doesn't exist." }),
+    });
+    await open();
+    expect(await screen.findByText("That offload doesn't exist.")).toBeInTheDocument();
+    expect(screen.queryByText(/Deleting…/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+  });
+
+  it("reads a job the owner stopped as a calm note, not an error", async () => {
+    mockApi({
+      "POST /api/mail/delete-forever": { deleted: 0, left: 0, job_id: 7 },
+      "GET /api/mail/offloads/7": {
+        ...JOB,
+        state: "FAILED",
+        done: 330,
+        skipped: 0,
+        reason: "Stopped by you. What wasn't deleted yet stays in Gmail, with CleanSync's copy.",
+      },
+    });
+    await open();
+    expect(await screen.findByText("Stopped. Deleted 330 mails forever; the rest are still in Gmail.")).toBeInTheDocument();
+    expect(screen.queryByText(/Stopped by you/)).not.toBeInTheDocument();
+  });
+
+  it("treats a missing job_id like null: the copy was removed at once", async () => {
+    mockApi({ "POST /api/mail/delete-forever": { deleted: 2, left: 0 } });
+    const onClose = vi.fn();
+    renderApp(<DeleteForeverDialog account={ACCOUNT} start={{ view: "offloaded", message_ids: [1, 2] }} count={2} onClose={onClose} />);
+    await userEvent.type(screen.getByLabelText("Type 2 to delete forever"), "2");
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Delete forever" })).getByRole("button", { name: "Delete forever" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });

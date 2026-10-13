@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, load_only
 
 from app.core.clock import as_utc, utcnow
 from app.models import Account, MailJob, MailLabel, MailMessage, MailOffload
-from app.models.enums import JobState, MailJobKind, MailOffloadState, MailState
+from app.models.enums import JobState, MailJobKind, MailOffloadKind, MailOffloadState, MailState
 from app.paths import Layout
 from app.services.mail.search import SearchError, mail_conditions, parse_query
 from app.services.mail.store import eml_path
@@ -17,6 +17,10 @@ from app.services.mail.store import eml_path
 GMAIL_TRASH_DAYS = 30  # Gmail empties its trash after this many days (spec 5.4)
 RESTARTED_OFFLOAD_MSG = "CleanSync restarted during this offload. It goes on by itself."
 STOPPED_MSG = "Stopped by you. What wasn't offloaded yet stayed in Gmail."
+# Delete forever jobs have their own words (they never "offload").
+FOREVER_REST = "What wasn't deleted yet stays in Gmail, with CleanSync's copy."
+FOREVER_RESTARTED_MSG = "CleanSync restarted during this Delete forever. It goes on by itself."
+FOREVER_STOPPED_MSG = f"Stopped by you. {FOREVER_REST}"
 
 
 def recover_mail_offloads(db: Session) -> int:
@@ -30,10 +34,13 @@ def recover_mail_offloads(db: Session) -> int:
     )
     now = utcnow()
     for off in rows:
+        forever = off.kind == MailOffloadKind.DELETE_FOREVER
         if off.stop_asked:
-            off.state, off.reason, off.finished_at = MailOffloadState.FAILED, STOPPED_MSG, now
+            off.state, off.finished_at = MailOffloadState.FAILED, now
+            off.reason = FOREVER_STOPPED_MSG if forever else STOPPED_MSG
         else:
-            off.state, off.reason = MailOffloadState.WAITING, RESTARTED_OFFLOAD_MSG
+            off.state = MailOffloadState.WAITING
+            off.reason = FOREVER_RESTARTED_MSG if forever else RESTARTED_OFFLOAD_MSG
         # One mail job runs at a time per account: its running offload job is this one's.
         for job in db.scalars(
             select(MailJob).where(

@@ -119,6 +119,17 @@ describe("AI in mail", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
   });
 
+  it("hides Undo when the change can't be undone, and says an applied Delete forever chip deleted forever", async () => {
+    mockApi({});
+    const chip = { id: 3, rule_name: "Newsletters", how: "ai", why: "a weekly digest", undoable: false, forever: false };
+    const first = renderApp(<RuleChip accountId={1} chip={{ ...chip, status: "applied" }} />);
+    await userEvent.click(screen.getByRole("button", { name: /Newsletters · applied/ }));
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    first.unmount();
+    renderApp(<RuleChip accountId={1} chip={{ ...chip, status: "applied", forever: true }} />);
+    expect(screen.getByRole("button", { name: /Newsletters · deleted forever/ })).toBeInTheDocument();
+  });
+
   it("stops the job when the dialog was closed before the job had started", async () => {
     let answer: (r: Response) => void = () => {};
     const { calls } = mockApi({
