@@ -138,31 +138,32 @@ describe("Mail → Unsubscribe", () => {
     expect(totals?.url.searchParams.get("q")).toBe("from:news@shop.example");
   });
 
-  it("refuses to offload the mail of more than 50 senders at once", async () => {
-    const many = Array.from({ length: 51 }, (_, i) => ({ ...SENDER, address: `s${i}@lists.example`, name: `Sender ${i}` }));
-    setUp({ "GET /api/mail/unsubscribe/senders": page(many) });
+  it("offers Offload and Delete forever on the bar only for one sender picked by hand", async () => {
+    setUp({}, { ...MAILBOX, permanent_delete: true });
     renderApp(<MailUnsubscribePage />, { withAccount: true });
-    await screen.findByText("Sender 0");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Pick news@shop.example" }));
+    const bar = screen.getByRole("region", { name: "Picked senders" });
+    expect(within(bar).getByRole("button", { name: "Offload their mail" })).toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "Delete forever their mail" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Pick deals@store.example" }));
+    expect(within(bar).queryByRole("button", { name: "Offload their mail" })).not.toBeInTheDocument();
+    expect(within(bar).queryByRole("button", { name: "Delete forever their mail" })).not.toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "Unsubscribe" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("checkbox", { name: "Pick all" }));
-    await userEvent.click(screen.getByRole("button", { name: "Offload their mail" }));
-    expect(await screen.findByText("Pick at most 50 senders for this.")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(bar).toHaveTextContent("All 2 senders picked");
+    expect(within(bar).queryByRole("button", { name: "Offload their mail" })).not.toBeInTheDocument();
+    expect(within(bar).queryByRole("button", { name: "Delete forever their mail" })).not.toBeInTheDocument();
   });
 
-  it("offloads two senders' mail with one search", async () => {
+  it("offloads one sender's mail with a from: search the dialog shows", async () => {
     const { calls } = setUp({ "POST /api/mail/offloads/preview": { filter_text: "", count: 0, bytes: 0, oldest: [], largest: [], excluded: [] } });
     renderApp(<MailUnsubscribePage />, { withAccount: true });
     await userEvent.click(await screen.findByRole("checkbox", { name: "Pick news@shop.example" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Pick deals@store.example" }));
     await userEvent.click(screen.getByRole("button", { name: "Offload their mail" }));
     const dialog = await screen.findByRole("dialog", { name: "Offload mail" });
+    expect(within(dialog).getByLabelText("Filter")).toHaveValue("from:news@shop.example");
     await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }));
-    await waitFor(() =>
-      expect(calls.find((c) => c.path === "/api/mail/offloads/preview")?.body).toMatchObject({
-        view: "all",
-        q: "from:(news@shop.example OR deals@store.example)",
-      }),
-    );
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/offloads/preview")?.body).toMatchObject({ q: "from:news@shop.example" }));
   });
 
   it("Open their mail goes to a search for the sender", async () => {

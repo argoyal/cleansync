@@ -78,10 +78,9 @@ export function itemLink(item: UnsubscribeJobItem): { href: string; mail: boolea
   return null;
 }
 
-/** The mail search for these senders' mail (spec §6): one `from:`, or `from:(a OR b OR …)`. */
-export function sendersSearch(addresses: string[]): string {
-  return addresses.length === 1 ? `from:${addresses[0]}` : `from:(${addresses.join(" OR ")})`;
-}
+/** The mail search for one sender's mail (spec §6). Offload and Delete forever work on one
+ * sender at a time: the search language has no OR (controller ruling, task 8). */
+export const senderSearch = (address: string): string => `from:${address}`;
 
 export const useSenders = (
   accountId: number | null,

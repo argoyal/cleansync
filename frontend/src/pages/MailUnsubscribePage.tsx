@@ -10,7 +10,7 @@ import {
   SENDER_PAGE,
   type Sender,
   type SenderSort,
-  sendersSearch,
+  senderSearch,
   type SenderTab,
   SORT_TITLES,
   TAB_TITLES,
@@ -25,10 +25,6 @@ import { Button, Dialog, Empty, inputClass, Notice } from "../components/ui";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { useStartUnsubscribeJob } from "../hooks/useUnsubscribe";
 import { mailHref } from "../lib/mail";
-
-/** Offload and Delete forever take at most this many senders at once, so the search stays short. */
-export const MOST_SENDERS = 50;
-export const TOO_MANY_SENDERS = "Pick at most 50 senders for this.";
 
 function useDebounced<T>(value: T, ms: number): T {
   const [out, setOut] = useState(value);
@@ -84,19 +80,16 @@ function SendersView({ account }: { account: Account }) {
   const [jobId, setJobId] = useState<number | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [all, setAll] = useState(false);
-  const [tooMany, setTooMany] = useState(false);
   const [mailAction, setMailAction] = useState<MailAction | null>(null);
 
   const clearPicks = () => {
     setPicked(new Set());
     setAll(false);
-    setTooMany(false);
   };
   // Picks belong to one list: a new tab or search starts with none, on the first page.
   useEffect(() => {
     setPicked(new Set());
     setAll(false);
-    setTooMany(false);
     setPage(1);
   }, [tab, q]);
   useEffect(() => setPage(1), [sort]);
@@ -109,13 +102,11 @@ function SendersView({ account }: { account: Account }) {
     if (next.has(address)) next.delete(address);
     else next.add(address);
     setAll(false);
-    setTooMany(false);
     setPicked(next);
   };
   const togglePickAll = () => {
     if (all) return clearPicks();
     setPicked(new Set());
-    setTooMany(false);
     setAll(true);
   };
 
@@ -131,19 +122,14 @@ function SendersView({ account }: { account: Account }) {
     );
   const startPicked = (kind: JobKind) => startJob(kind, all ? { all: { tab, q } } : { addresses: [...picked] });
 
-  const openMailAction = (kind: MailAction["kind"], addresses: string[]) => setMailAction({ kind, q: sendersSearch(addresses) });
-  // The picked senders' mail: by hand, or Pick all when every one of them is on this page.
-  const mailForPicked = (kind: MailAction["kind"]) => {
-    const total = all ? (data?.total ?? 0) : picked.size;
-    if (total > MOST_SENDERS || (all && rows.length < total)) return setTooMany(true);
-    const addresses = all ? rows.map((r) => r.address) : [...picked];
-    if (addresses.length > 0) openMailAction(kind, addresses);
-  };
+  const openMailAction = (kind: MailAction["kind"], address: string) => setMailAction({ kind, q: senderSearch(address) });
+  // Offload and Delete forever take one sender: shown in the bar only for one sender picked by hand.
+  const onePicked = !all && picked.size === 1 ? [...picked][0] : null;
 
   const onRow = (action: RowAction, s: Sender) => {
     if (action === "unsubscribe" || action === "auto_archive" || action === "keep") return startJob(action, { addresses: [s.address] });
-    if (action === "open") return navigate(mailHref({ q: `from:${s.address}` }));
-    openMailAction(action, [s.address]);
+    if (action === "open") return navigate(mailHref({ q: senderSearch(s.address) }));
+    openMailAction(action, s.address);
   };
 
   const running = jobRunning(latestJob) ? latestJob : null;
@@ -214,20 +200,15 @@ function SendersView({ account }: { account: Account }) {
           <Button disabled={start.isPending} onClick={() => startPicked("keep")}>
             Keep
           </Button>
-          <Button onClick={() => mailForPicked("offload")}>Offload their mail</Button>
-          {account.permanent_delete && (
-            <Button tone="danger" onClick={() => mailForPicked("forever")}>
+          {onePicked && <Button onClick={() => openMailAction("offload", onePicked)}>Offload their mail</Button>}
+          {onePicked && account.permanent_delete && (
+            <Button tone="danger" onClick={() => openMailAction("forever", onePicked)}>
               Delete forever their mail
             </Button>
           )}
           <Button tone="quiet" onClick={clearPicks}>
             Clear
           </Button>
-          {tooMany && (
-            <p role="status" className="basis-full text-table text-err">
-              {TOO_MANY_SENDERS}
-            </p>
-          )}
         </section>
       )}
       {senders.isError && <Notice tone="err">{friendlyError(senders.error)}</Notice>}
@@ -263,7 +244,8 @@ function SendersView({ account }: { account: Account }) {
         </div>
       )}
       {jobId !== null && <UnsubscribeJobDialog accountId={account.id} jobId={jobId} onClose={() => setJobId(null)} />}
-      {mailAction?.kind === "offload" && <OffloadMailDialog account={account} start={{ view: "all", q: mailAction.q }} onClose={() => setMailAction(null)} />}
+      {/* A search start, as "Offload mail…" from a search: the dialog shows the from: search in its Filter box. */}
+      {mailAction?.kind === "offload" && <OffloadMailDialog account={account} start={{ q: mailAction.q }} onClose={() => setMailAction(null)} />}
       {mailAction?.kind === "forever" && <ForeverFor account={account} q={mailAction.q} onClose={() => setMailAction(null)} />}
     </div>
   );
