@@ -1,6 +1,6 @@
 [project]
 name = "drivesync"
-version = "0.5.1"
+version = "0.5.2"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",
