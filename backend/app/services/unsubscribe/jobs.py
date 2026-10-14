@@ -19,6 +19,8 @@ from app.core.clock import utcnow
 from app.models import Account, MailMessage, UnsubscribeJob, UnsubscribeJobItem, UnsubscribeSender
 from app.models.enums import UnsubscribeJobKind, UnsubscribeJobState
 from app.services.events.bus import EventBus, record_event
+from app.services.google.client import RateLimited
+from app.services.google.quota import BudgetReached
 from app.services.mail.adapter import MailAuthError, MailUnreachable
 from app.services.mail.reader import MailFileMissing, read_eml_of
 from app.services.mail.service import MailError
@@ -43,6 +45,7 @@ STOPPED_MSG = "Stopped by you."
 PICK_ONE_MSG = "Pick at least one sender."
 TOO_MANY_MSG = "Pick at most 5,000 senders at a time."
 MAX_ADDRESSES = 5000
+SETUP_FAILED_MSG = "CleanSync couldn't open this mailbox. Try again later."
 
 WAITING = UnsubscribeJobState.WAITING.value
 RUNNING = UnsubscribeJobState.RUNNING.value
@@ -112,8 +115,8 @@ def running_job(db: Session, account_id: int) -> UnsubscribeJob | None:
 
 
 class _JobEnds(Exception):
-    """Gmail login trouble or Gmail out of reach: the job fails; senders not reached keep no
-    outcome."""
+    """Gmail login trouble, Gmail out of reach, Google's limits, or no way to open the
+    mailbox: the job fails; senders not reached keep no outcome."""
 
 
 class UnsubscribeJobs:
@@ -246,14 +249,22 @@ class UnsubscribeJobs:
             db.commit()
             account_id, kind, email = job.account_id, job.kind, acc.email
         self._changed(account_id, job_id)
-        filters = FilterGate(
-            adapter=self.mail.adapter_for(acc), sf=self.sf, bus=self.bus, account_id=account_id
-        )
-        ladder = Ladder(
-            self.web, self.ai, self.connections, read_eml=lambda mid: self._read_eml(email, mid)
-        )
         state, reason = UnsubscribeJobState.DONE.value, None
         try:
+            try:
+                adapter = self.mail.adapter_for(acc)
+            except (MailAuthError, MailUnreachable) as e:
+                raise _JobEnds(str(e)) from None
+            except Exception:
+                log.exception("unsubscribe job %s: no mail adapter", job_id)
+                raise _JobEnds(SETUP_FAILED_MSG) from None
+            filters = FilterGate(adapter=adapter, sf=self.sf, bus=self.bus, account_id=account_id)
+            ladder = Ladder(
+                self.web,
+                self.ai,
+                self.connections,
+                read_eml=lambda mid: self._read_eml(email, mid),
+            )
             while True:
                 with self.sf() as db:
                     job = db.get(UnsubscribeJob, job_id)
@@ -305,7 +316,7 @@ class UnsubscribeJobs:
             if row is None:
                 return StepResult(NOT_CONFIRMED, None, NO_LINK_MSG, None)
             return await ladder.unsubscribe(row, filters=filters)
-        except (MailAuthError, MailUnreachable) as e:
+        except (MailAuthError, MailUnreachable, BudgetReached, RateLimited) as e:
             raise _JobEnds(str(e)) from None
         except asyncio.CancelledError:
             raise
@@ -358,10 +369,25 @@ class UnsubscribeJobs:
     def _finish(
         self, account_id: int, job_id: int, kind: str, state: str, reason: str | None
     ) -> None:
+        """Never raises: a job left RUNNING would refuse every later start until a restart."""
+        try:
+            with self.sf() as db:
+                job = db.get(UnsubscribeJob, job_id)
+                job.state, job.reason, job.finished_at = state, reason, self.clock()
+                db.commit()
+        except Exception:
+            log.exception("unsubscribe job %s: couldn't save its end", job_id)
+            return
+        try:
+            self._record_end(account_id, job_id, kind, state, reason)
+        except Exception:
+            log.exception("unsubscribe job %s: couldn't add the Activity line", job_id)
+        self._changed(account_id, job_id)
+
+    def _record_end(
+        self, account_id: int, job_id: int, kind: str, state: str, reason: str | None
+    ) -> None:
         with self.sf() as db:
-            job = db.get(UnsubscribeJob, job_id)
-            job.state, job.reason, job.finished_at = state, reason, self.clock()
-            db.commit()
             counts = Counter(
                 db.scalars(
                     select(UnsubscribeJobItem.outcome).where(
@@ -382,4 +408,3 @@ class UnsubscribeJobs:
                 account_id=account_id,
                 data={"unsubscribe_job_id": job_id},
             )
-        self._changed(account_id, job_id)

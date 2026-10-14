@@ -16,8 +16,15 @@ from app.services.accounts.oauth import SETTINGS_SCOPE
 from app.services.ai.client import AiAnswer, AiPaused
 from app.services.ai.connections import AiTarget
 from app.services.ai.limits import Pause
+from app.services.google.client import RateLimited
+from app.services.google.quota import BudgetReached
 from app.services.mail.service import MailError
-from app.services.unsubscribe.jobs import ALREADY_RUNNING_MSG, STOPPED_MSG, UnsubscribeJobs
+from app.services.unsubscribe.jobs import (
+    ALREADY_RUNNING_MSG,
+    SETUP_FAILED_MSG,
+    STOPPED_MSG,
+    UnsubscribeJobs,
+)
 from app.services.unsubscribe.steps import (
     DONE_FILTER,
     FILTER_CAP_MSG,
@@ -557,3 +564,50 @@ def test_app_wiring(app):
     jobs = app.state.unsubscribe_jobs
     assert jobs.tick in app.state.mail.tick_hooks
     assert app.state.unsubscribe_web.allow_private is False
+
+
+# ---- the job ends cleanly (final review) --------------------------------------------------
+
+
+async def test_adapter_trouble_ends_the_job_and_a_new_one_starts(box, monkeypatch):
+    def no_adapter(acc):
+        raise LookupError("no mail adapter for provider 'imap'")
+
+    monkeypatch.setattr(box.jobs.mail, "adapter_for", no_adapter)
+    job_id = await box.run("keep", ["a@x.com"])
+    job = box.job(job_id)
+    assert (job.state, job.reason) == ("FAILED", SETUP_FAILED_MSG)
+    assert SETUP_FAILED_MSG == "CleanSync couldn't open this mailbox. Try again later."
+    assert job.finished_at is not None
+    assert box.item(job_id).outcome is None
+    monkeypatch.undo()
+    again = await box.run("keep", ["a@x.com"])  # not refused with 409
+    assert box.job(again).state == "DONE"
+
+
+async def test_finish_trouble_still_ends_the_job(box, monkeypatch):
+    import app.services.unsubscribe.jobs as jobs_mod
+
+    def broken(*a, **kw):
+        raise RuntimeError("events table locked")
+
+    monkeypatch.setattr(jobs_mod, "record_event", broken)
+    job_id = await box.run("keep", ["a@x.com"])
+    assert box.job(job_id).state == "DONE"
+
+
+@pytest.mark.parametrize("which", ["budget", "rate"])
+async def test_google_limits_end_the_job(box, db, monkeypatch, which):
+    for n in (1, 2):
+        mail(db, box.acc, f"s{n}@x.com", lu=f"<https://x.example/u/{n}>")
+    err = BudgetReached(10000) if which == "budget" else RateLimited()
+
+    async def limited(self, sender, *, filters):
+        raise err
+
+    monkeypatch.setattr(Ladder, "unsubscribe", limited)
+    job_id = await box.run("unsubscribe", ["s1@x.com", "s2@x.com"])
+    job = box.job(job_id)
+    assert (job.state, job.reason) == ("FAILED", str(err))
+    assert job.reason.startswith("Paused:" if which == "budget" else "Google asked")
+    assert [i.outcome for i in box.items(job_id)] == [None, None]
