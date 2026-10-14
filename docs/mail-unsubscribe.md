@@ -18,14 +18,15 @@ You can search senders, sort them, and pick one, several or all of a list. Old m
 
 For each sender, CleanSync looks at the unsubscribe link in their newest mail and tries:
 
-1. **The one-click request.** Many senders accept a plain "unsubscribe me" request. If they answer yes, that's it.
+1. **The one-click request.** Only when the sender's mail says it takes one: a plain "unsubscribe me" request sent to the link in the mail's header. If they answer yes, that's it. If they send CleanSync on to another page instead, it goes to step 2. A link found only in the mail's text never gets this request.
 2. **Opening their link.** If the page is not a form, CleanSync counts the visit as the unsubscribe.
-3. **A simple form.** If the page is a form with nothing to type (no email box, no password, no choices of its own), CleanSync fills it in and sends it, then has your model read the page that comes back to check it says you're unsubscribed. It only ticks a box whose name or value is the whole word "unsubscribe", "unsub" or "all", and never one that talks about allowing, subscribing, marketing, offers or partners. A form that needs more than this is left to you.
+3. **A simple form.** If the page has one form with no password or file fields and no captcha, CleanSync sends it with what the page already filled in (for example your address in an email box), then has your model read the page that comes back to check it says you're unsubscribed. It only ticks a box whose name or value is the whole word "unsubscribe", "unsub" or "all", and never one that talks about allowing, subscribing, marketing, offers or partners. A form that needs more than this is left to you.
 4. **A mail address only.** If the only way is to write to an address, CleanSync does not write for you (see below). With Allow Gmail filters on, it makes a filter so their new mail skips your Inbox. Otherwise it says **Needs you** and gives you a **Write to it** link.
 
 Each sender ends with one of these:
 
-- **Unsubscribed**: the sender said yes (or CleanSync made the filter).
+- **Unsubscribed**: the sender said yes.
+- **Auto-archived**: the sender only gave a mail address, so with Allow Gmail filters on CleanSync made a filter that keeps their new mail out of your Inbox.
 - **Couldn't confirm**: CleanSync tried but the page didn't say you were unsubscribed, or it was a form CleanSync won't fill in, or there was no model to check the page. It gives you an **Open page** link to finish in your browser.
 - **Needs you**: only a mail address was available and filters are off, or a filter couldn't be made (for example Gmail's limit of 1,000 filters). Use **Write to it**, or turn on Allow Gmail filters.
 
