@@ -231,6 +231,7 @@ describe("rail and panel", () => {
         views: { inbox: 3, starred: 1, important: 0, sent: 2, archived: 4, all: 9, suggested: 1, offloaded: 5, deleted: 6 },
         labels: [{ id: "Label_2", name: "Receipts", count: 2 }],
       },
+      "GET /api/mail/unsubscribe/senders": { items: [], total: 0, suggested: 7, scan: { scanned: 0, total: 0 } },
     });
     renderApp(<AppShell />, { withAccount: true, route: "/mail?view=offloaded&tab=batches" });
     const views = await screen.findByRole("navigation", { name: "Mail views" });
@@ -239,7 +240,9 @@ describe("rail and panel", () => {
     await within(gmail).findByRole("link", { name: "Inbox 3" });
     expect(names(gmail)).toEqual(["Inbox 3", "Starred 1", "Important 0", "Sent 2", "Archived 4", "All mail 9", "Receipts 2"]);
     const own = within(views).getByRole("group", { name: "CleanSync" });
-    expect(names(own)).toEqual(["Suggested 1", "Rules", "Offloaded 5", "Deleted in Gmail 6"]);
+    await within(own).findByRole("link", { name: "Unsubscribe 7" });
+    expect(names(own)).toEqual(["Suggested 1", "Rules", "Unsubscribe 7", "Offloaded 5", "Deleted in Gmail 6"]);
+    expect(within(own).getByRole("link", { name: "Unsubscribe 7" })).toHaveAttribute("href", "/mail/unsubscribe");
     expect(within(own).getByRole("link", { name: "Offloaded 5" })).toHaveAttribute("aria-current", "page");
     expect(within(views).getByText("CleanSync")).toBeInTheDocument();
     expect(within(views).queryByRole("link", { name: /Local archive/ })).not.toBeInTheDocument();

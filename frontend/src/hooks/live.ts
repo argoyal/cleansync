@@ -61,6 +61,9 @@ const MAIL_KEYS = [
   "accounts",
 ];
 
+/** The Unsubscribe page's senders and jobs, all under this first key. */
+const UNSUBSCRIBE_KEYS = ["unsubscribe"];
+
 /** A backup's progress events (one per page of Gmail's list) refresh only these; the lists
  * and counts wait for the job's own events, so a big first backup doesn't keep re-reading
  * them (issue #16). */
@@ -112,6 +115,9 @@ export function useLiveEvents(): void {
     // Rule changes and sorting come in bursts too: same pace as mail.
     const rules = throttle(() => invalidate(RULES_KEYS), MAIL_REFRESH_MS);
     const mailProgress = throttle(() => invalidate(MAIL_PROGRESS_KEYS), MAIL_REFRESH_MS);
+    // Unsubscribe jobs (0.5.2 spec §4.1): one event per sender done; the sender list is a big
+    // query, so the same pace as mail.
+    const unsubscribe = throttle(() => invalidate(UNSUBSCRIBE_KEYS), MAIL_REFRESH_MS);
     // One refresh a minute after progress first comes in, then again only if more came.
     let listCatchUp: number | undefined;
     const catchUpLists = () => {
@@ -165,6 +171,7 @@ export function useLiveEvents(): void {
         else mail.call();
       });
       source.addEventListener("rules", rules.call);
+      source.addEventListener("unsubscribe", unsubscribe.call);
       source.addEventListener("pair", () => invalidate(["pairs", "status", "browse"]));
       source.addEventListener("progress", (e) => {
         const p = data(e) as Progress | null;
@@ -193,6 +200,7 @@ export function useLiveEvents(): void {
       mail.stop();
       rules.stop();
       mailProgress.stop();
+      unsubscribe.stop();
       window.clearTimeout(listCatchUp);
       source?.close();
       liveStore.set("connecting");

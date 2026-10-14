@@ -7,8 +7,13 @@ import { useDeleteConnection, useListModels, useResumeConnection, useSaveConnect
 import { formatWhen } from "../../lib/format";
 import { Button, Dialog, Field, inputClass, Notice } from "../ui";
 
-const TASK_TITLES: Record<AiTaskName, string> = { sorting: "Sorting", writing_rules: "Writing rules" };
-const TASK_ORDER: AiTaskName[] = ["sorting", "writing_rules"];
+const TASK_TITLES: Record<AiTaskName, string> = { sorting: "Sorting", writing_rules: "Writing rules", unsubscribe: "Unsubscribe" };
+const TASK_ORDER: AiTaskName[] = ["sorting", "writing_rules", "unsubscribe"];
+/** What a task is for, and its fallback: tasks other than Sorting use Sorting's model when not set. */
+const TASK_HINTS: Partial<Record<AiTaskName, string>> = {
+  writing_rules: "Uses the Sorting model when not set.",
+  unsubscribe: "Checks the page after an unsubscribe form. Uses the Sorting model when not set.",
+};
 
 const tested = (t: AiTest) =>
   t.ok
@@ -218,7 +223,7 @@ function TaskBlock({ name, task, connections }: { name: AiTaskName; task: AiTask
   return (
     <fieldset role="group" aria-label={TASK_TITLES[name]} className="space-y-3 rounded-card border border-line p-4">
       <legend className="px-1 font-medium">{TASK_TITLES[name]}</legend>
-      {name === "writing_rules" && <p className="text-meta text-ink-2">Uses the Sorting model when not set.</p>}
+      {TASK_HINTS[name] && <p className="text-meta text-ink-2">{TASK_HINTS[name]}</p>}
       <Field label="Connection">
         <select className={inputClass} value={connectionId ?? ""} onChange={(e) => setConnectionId(e.target.value ? Number(e.target.value) : null)}>
           <option value="">None</option>

@@ -21,6 +21,10 @@ export type Account = {
   permanent_delete_note: string | null;
   /** CleanSync holds this mailbox's Google profile photo (served at /api/accounts/{id}/photo). */
   has_photo: boolean;
+  /** Allow Gmail filters is on: the owner's switch, and Google allows it (0.5.2 spec §5). */
+  gmail_filters: boolean;
+  /** Why it went off by itself, when Google took the permission back. */
+  gmail_filters_note: string | null;
 };
 
 export type PairStatus = "NEW" | "HEALTHY" | "RUNNING" | "ATTENTION" | "ERROR" | "PAUSED";

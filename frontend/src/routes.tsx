@@ -6,6 +6,7 @@ import { AppShell } from "./components/AppShell";
 import { NewMenu } from "./components/NewMenu";
 import { useToast } from "./components/Toasts";
 import { UploadTray } from "./components/UploadTray";
+import { FILTERS_DENIED_TOAST, FILTERS_ON_TOAST } from "./components/settings/GmailFilters";
 import { PERMANENT_DENIED_TOAST, PERMANENT_ON_TOAST } from "./components/settings/PermanentDelete";
 import { SHOW_NEW } from "./config";
 import { AccountProvider, useCurrentAccount } from "./hooks/useAccount";
@@ -17,6 +18,7 @@ import { HomePage, RecentPage, SearchPage, StarredPage } from "./pages/ListPages
 import { MailOffloadPage } from "./pages/MailOffloadPage";
 import { MailPage } from "./pages/MailPage";
 import { MailRulesPage } from "./pages/MailRulesPage";
+import { MailUnsubscribePage } from "./pages/MailUnsubscribePage";
 import { OffloadedPage, OffloadPickPage } from "./pages/OffloadedPage";
 import { BlockedPage, PairDetailPage } from "./pages/PairDetailPage";
 import { RecoveryPage } from "./pages/RecoveryPage";
@@ -47,6 +49,7 @@ function OAuthReturn() {
   const error = (params.get("oauth_error") ?? "").slice(0, 300) || null;
   const mail = params.get("mail");
   const permanent = params.get("permanent");
+  const filters = params.get("filters");
   const handled = useRef(false);
   useEffect(() => {
     if (handled.current) return; // StrictMode runs effects twice; show the message once
@@ -65,12 +68,14 @@ function OAuthReturn() {
       else if (mail === "denied") toast(MAIL_DENIED_TOAST, { tone: "error" });
       else if (permanent === "on") toast(PERMANENT_ON_TOAST);
       else if (permanent === "denied") toast(PERMANENT_DENIED_TOAST, { tone: "error" });
+      else if (filters === "on") toast(FILTERS_ON_TOAST);
+      else if (filters === "denied") toast(FILTERS_DENIED_TOAST, { tone: "error" });
       else toast("Google account connected.");
       if (back.startsWith("/setup")) back = "/setup?step=folders";
     }
     if (error) toast(error, { tone: "error" });
     navigate(back, { replace: true });
-  }, [connected, error, mail, permanent, navigate, toast, setAccountId]);
+  }, [connected, error, mail, permanent, filters, navigate, toast, setAccountId]);
   return null;
 }
 
@@ -94,6 +99,7 @@ export function AppRoutes() {
           <Route path="mail/offloads" element={<Navigate to="/mail?view=offloaded&tab=batches" replace />} />
           <Route path="mail/offloads/:id" element={<MailOffloadPage />} />
           <Route path="mail/rules" element={<MailRulesPage />} />
+          <Route path="mail/unsubscribe" element={<MailUnsubscribePage />} />
           <Route path="mail/*" element={<MailPage />} />
           <Route path="offloaded" element={<OffloadedPage />} />
           <Route path="offloaded/pick" element={<OffloadPickPage />} />

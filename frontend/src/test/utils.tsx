@@ -88,6 +88,8 @@ export const ACCOUNT: Account = {
   permanent_delete: false,
   has_photo: false,
   permanent_delete_note: null,
+  gmail_filters: false,
+  gmail_filters_note: null,
 };
 
 export const PAIR: Pair = {

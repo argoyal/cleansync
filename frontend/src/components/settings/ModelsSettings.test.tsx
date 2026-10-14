@@ -9,6 +9,7 @@ const CONN = { id: 1, name: "Ollama", base_url: "http://ollama.example.com:11434
 const TASKS = {
   sorting: { task: "sorting", connection_id: null, model: "", temperature: 0, timeout_s: 60 },
   writing_rules: { task: "writing_rules", connection_id: null, model: "", temperature: 0, timeout_s: 60 },
+  unsubscribe: { task: "unsubscribe", connection_id: null, model: "", temperature: 0, timeout_s: 60 },
 };
 
 describe("Settings → Models", () => {
@@ -96,5 +97,14 @@ describe("Settings → Models", () => {
     const block = await screen.findByRole("group", { name: "Sorting" });
     await userEvent.click(within(block).getByRole("button", { name: "Test" }));
     expect(await within(block).findByText(/usage limit is used up\. The server said: Rate limit reached/)).toBeInTheDocument();
+  });
+
+  it("has an Unsubscribe task that says what it does and its fallback", async () => {
+    mockApi({ "GET /api/ai/connections": [CONN], "GET /api/ai/tasks": TASKS });
+    renderApp(<ModelsSettings />);
+    const block = await screen.findByRole("group", { name: "Unsubscribe" });
+    expect(block).toHaveTextContent("Checks the page after an unsubscribe form. Uses the Sorting model when not set.");
+    const names = screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"));
+    expect(names).toEqual(["Sorting", "Writing rules", "Unsubscribe"]);
   });
 });

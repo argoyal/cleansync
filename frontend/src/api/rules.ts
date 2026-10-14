@@ -135,7 +135,7 @@ export type AiConnection = {
   resets_tz: string;
   pause: AiPause | null;
 };
-export type AiTaskName = "sorting" | "writing_rules";
+export type AiTaskName = "sorting" | "writing_rules" | "unsubscribe";
 export type AiTask = { task: AiTaskName; connection_id: number | null; model: string; temperature: number; timeout_s: number };
 export type AiTest = { ok: boolean; took_ms: number; mode: string | null; chose: string | null; why: string; error: string | null; detail?: string | null };
 

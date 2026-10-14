@@ -3,6 +3,7 @@ import { Link, useLocation, useSearchParams } from "react-router-dom";
 
 import { friendlyError } from "../api/client";
 import { useMailCounts, useStatus } from "../api/queries";
+import { useSenders } from "../api/unsubscribe";
 import { useCurrentAccount } from "../hooks/useAccount";
 import { useSetUpMail } from "../hooks/useSetUpMail";
 import { CLEANSYNC_VIEWS, GMAIL_VIEWS, labelDot, type MailViewDef, mailHref, mailView } from "../lib/mail";
@@ -118,6 +119,7 @@ function labelsOpen(): boolean {
 export function MailViews() {
   const { account } = useCurrentAccount();
   const counts = useMailCounts(account?.id ?? null).data;
+  const suggested = useSenders(account?.id ?? null, { tab: "suggested" }).data?.suggested;
   const { pathname, search } = useLocation();
   // Only the mail list lights a view: not the Rules page or an offload's page under /mail.
   const onList = pathname === "/mail";
@@ -185,6 +187,7 @@ export function MailViews() {
         </div>
         {link(CLEANSYNC_VIEWS[0])}
         <PanelLink section="mail" to="/mail/rules" label="Rules" icon="view_list" />
+        <PanelLink section="mail" to="/mail/unsubscribe" label="Unsubscribe" icon="unsubscribe" count={suggested} />
         {CLEANSYNC_VIEWS.slice(1).map(link)}
       </div>
     </>

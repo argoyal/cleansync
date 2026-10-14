@@ -9,6 +9,7 @@ import { Avatar } from "../components/AccountSwitcher";
 import { ACCOUNT_DOT } from "../components/StatusBadge";
 import { ModelsSettings } from "../components/settings/ModelsSettings";
 import { ThemeSwitch } from "../components/ThemeSwitch";
+import { GmailFilters } from "../components/settings/GmailFilters";
 import { PermanentDelete } from "../components/settings/PermanentDelete";
 import { useToast } from "../components/Toasts";
 import { Bar, Button, Dialog, Field, inputClass, Notice } from "../components/ui";
@@ -169,7 +170,12 @@ function AccountRow({ account }: { account: Account }) {
           </Button>
         )}
       </div>
-      {account.status === "CONNECTED" && account.services.mail !== "not_set_up" && <PermanentDelete account={account} />}
+      {account.status === "CONNECTED" && account.services.mail !== "not_set_up" && (
+        <>
+          <PermanentDelete account={account} />
+          <GmailFilters account={account} />
+        </>
+      )}
       {confirm && (
         <Dialog
           title={`Disconnect ${account.email}?`}

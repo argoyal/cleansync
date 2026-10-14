@@ -30,6 +30,12 @@ afterEach(() => {
 });
 
 describe("live updates", () => {
+  it("refreshes the Unsubscribe page's lists and jobs on an unsubscribe event", () => {
+    const { spy, source } = setup();
+    act(() => source.emit("unsubscribe", { account_id: 1, job_id: 5 }));
+    expect(keys(spy)).toContain("unsubscribe");
+  });
+
   it("listens on /api/events and refreshes what an event touches", () => {
     const { spy, source } = setup();
     expect(source.url).toBe("/api/events");
