@@ -81,7 +81,11 @@ test("unsubscribe: one-click, needs you, then auto-archive and keep", async ({ p
 
   // 5. Settings → Accounts → Allow Gmail filters: the pretend account turns it on without Google.
   await page.goto("/settings?tab=accounts");
-  const box = page.getByRole("group", { name: "Allow Gmail filters" });
+  // Every mailbox with mail set up has this box: take carol's.
+  const box = page
+    .getByRole("listitem")
+    .filter({ hasText: "carol@example.com" })
+    .getByRole("group", { name: "Allow Gmail filters" });
   await box.getByRole("button", { name: "Turn on" }).click();
   await expect(box).toContainText("Allow Gmail filters: On");
 
