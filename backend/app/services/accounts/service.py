@@ -2,6 +2,7 @@ import json
 import logging
 import secrets
 from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
 
 import httpx
@@ -9,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
-from app.core.clock import utcnow
+from app.core.clock import as_utc, utcnow
 from app.models import Account
 from app.models.enums import AccountStatus, ServiceKind, ServiceState
 from app.paths import Layout, email_dirname
@@ -32,6 +33,7 @@ from app.services.accounts.oauth import (
     to_rclone_token,
 )
 from app.services.accounts.permanent import permission_lost
+from app.services.accounts.photos import photo_http_factory, save_photo
 from app.services.accounts.services import (
     ensure_services,
     get_service,
@@ -106,6 +108,9 @@ class AccountService:
         self.bus = bus
         self.env = rclone_env
         self.http_factory = http_factory
+        self.photo_http_factory = photo_http_factory
+        # Set in main.py once the Drive client exists; used to look up the profile photo.
+        self.drive_api = None
         self.runner = runner
         self.clock = clock
         self.states = OAuthStates()
@@ -365,6 +370,15 @@ class AccountService:
             )
             self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
             self._changed()
+            await save_photo(
+                self.layout,
+                self.session_factory,
+                acc.id,
+                email,
+                about.get("photo_link"),
+                self.photo_http_factory,
+                self.clock,
+            )
             return acc
 
     async def add_local_account(self, email: str, folder: Path) -> Account:
@@ -492,6 +506,7 @@ class AccountService:
         failure = classify_failure(res.exit_code, res.error_tail)
         if failure == Failure.AUTH:
             await self.mark_needs_reauth(account_id, "Google says the login expired or was revoked")
+        photo_due, email = False, ""
         with self.session_factory() as db:
             acc = db.get(Account, account_id)
             if failure is None:
@@ -501,4 +516,25 @@ class AccountService:
                 acc.quota_trash = data.get("trashed")
                 acc.last_checked_at = self.clock()
                 db.commit()
-            return acc
+                photo_due = (
+                    self.drive_api is not None
+                    and not is_pretend(acc, self.settings.allow_local_accounts)
+                    and (
+                        acc.photo_updated_at is None
+                        or as_utc(acc.photo_updated_at) < self.clock() - timedelta(days=1)
+                    )
+                )
+                email = acc.email
+        if photo_due:
+            link = await self.drive_api.photo_link(remote)
+            await save_photo(
+                self.layout,
+                self.session_factory,
+                account_id,
+                email,
+                link,
+                self.photo_http_factory,
+                self.clock,
+            )
+        with self.session_factory() as db:
+            return db.get(Account, account_id)

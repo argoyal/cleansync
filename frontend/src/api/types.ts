@@ -19,6 +19,8 @@ export type Account = {
   permanent_delete: boolean;
   /** Why it went off by itself, when Google took the permission back. */
   permanent_delete_note: string | null;
+  /** CleanSync holds this mailbox's Google profile photo (served at /api/accounts/{id}/photo). */
+  has_photo: boolean;
 };
 
 export type PairStatus = "NEW" | "HEALTHY" | "RUNNING" | "ATTENTION" | "ERROR" | "PAUSED";

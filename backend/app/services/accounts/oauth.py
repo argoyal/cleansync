@@ -169,7 +169,7 @@ def to_rclone_token(resp: dict, now: datetime) -> str:
 async def fetch_about(http: httpx.AsyncClient, access_token: str) -> dict:
     resp = await http.get(
         ABOUT_URL,
-        params={"fields": "user(emailAddress),storageQuota"},
+        params={"fields": "user(emailAddress,photoLink),storageQuota"},
         headers={"Authorization": f"Bearer {access_token}"},
     )
     if resp.status_code != 200:
@@ -181,4 +181,5 @@ async def fetch_about(http: httpx.AsyncClient, access_token: str) -> dict:
         "quota_total": int(quota["limit"]) if quota.get("limit") else None,
         "quota_used": int(quota.get("usage", 0)),
         "quota_trash": int(quota.get("usageInDriveTrash", 0)),
+        "photo_link": data["user"].get("photoLink"),
     }

@@ -14,7 +14,30 @@ import { useToast } from "./Toasts";
 
 const STATUS_TEXT = { CONNECTED: "Connected", NEEDS_REAUTH: "Needs reconnecting", DISCONNECTED: "Disconnected" };
 
-export function Avatar({ email, size = 36 }: { email: string; size?: number }) {
+export function Avatar({
+  email,
+  size = 36,
+  accountId,
+  hasPhoto,
+}: {
+  email: string;
+  size?: number;
+  accountId?: number;
+  hasPhoto?: boolean;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (accountId && hasPhoto && !failed) {
+    return (
+      <img
+        src={`/api/accounts/${accountId}/photo`}
+        alt=""
+        className="shrink-0 rounded-full object-cover"
+        width={size}
+        height={size}
+        onError={() => setFailed(true)}
+      />
+    );
+  }
   return (
     <span
       aria-hidden="true"
@@ -61,7 +84,7 @@ export function AccountSwitcher() {
         className="flex w-full items-center gap-2 rounded-menu border border-line bg-bg px-2.5 py-2 text-left hover:bg-sunken"
         onClick={() => setOpen(!open)}
       >
-        {account ? <Avatar email={account.email} size={26} /> : <Icon name="person_add" className="text-[20px] text-ink-2" />}
+        {account ? <Avatar email={account.email} size={26} accountId={account.id} hasPhoto={account.has_photo} /> : <Icon name="person_add" className="text-[20px] text-ink-2" />}
         <span className="min-w-0 flex-1 truncate">{account ? account.email : "Add a Google account"}</span>
         <Icon name="keyboard_arrow_down" className="text-ink-2" />
       </button>
@@ -89,7 +112,7 @@ export function AccountSwitcher() {
                 else if (section === "mail") navigate("/mail");
               }}
             >
-              <Avatar email={a.email} size={30} />
+              <Avatar email={a.email} size={30} accountId={a.id} hasPhoto={a.has_photo} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{a.email}</span>
                 <span className="flex items-center gap-1.5 text-meta text-ink-2">

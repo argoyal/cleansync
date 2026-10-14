@@ -144,7 +144,7 @@ function AccountRow({ account }: { account: Account }) {
   });
   return (
     <li className="flex flex-wrap items-center gap-3 py-3">
-      <Avatar email={account.email} />
+      <Avatar email={account.email} accountId={account.id} hasPhoto={account.has_photo} />
       <div className="min-w-0 flex-1">
         <p className="truncate font-semibold">{account.email}</p>
         <p className="flex items-center gap-1.5 text-meta text-ink-2">

@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from app.services.google.client import GoogleClient
 
 FILES_URL = "https://www.googleapis.com/drive/v3/files"
+ABOUT_URL = "https://www.googleapis.com/drive/v3/about"
 NATIVE_MIME = {
     "document": "application/vnd.google-apps.document",
     "spreadsheet": "application/vnd.google-apps.spreadsheet",
@@ -194,6 +195,24 @@ class DriveApi:
         if state is None:
             raise DriveApiError("Google Drive gave an unexpected answer")
         return state
+
+    async def photo_link(self, remote_name: str) -> str | None:
+        """The account's Google profile photo address, or None on any failure."""
+        try:
+            resp = await self._call(
+                remote_name,
+                "drive.files.get",
+                "GET",
+                ABOUT_URL,
+                params={"fields": "user(photoLink)"},
+            )
+            if resp.status_code != 200:
+                return None
+            data = json_or_none(resp)
+            link = data["user"].get("photoLink") if isinstance(data, dict) else None
+            return link if isinstance(link, str) else None
+        except Exception:
+            return None
 
     async def trashed_state(self, remote_name: str, file_id: str) -> bool | None:
         """True: in the trash. False: not in the trash. None: Google has no such file.

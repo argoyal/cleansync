@@ -333,6 +333,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     app.state.drive_api = DriveApi(app.state.tokens, google=app.state.google)
     app.state.engine.on_api_estimate = app.state.budget.add_drive_estimate
     app.state.accounts.on_login_changed = app.state.tokens.forget
+    app.state.accounts.drive_api = app.state.drive_api
     # Spec §3.2: the Drive calls made outside a sync run go through the Files adapter.
     app.state.files = FilesAdapters(
         {

@@ -86,6 +86,7 @@ export const ACCOUNT: Account = {
   services: { files: "active", mail: "not_set_up" },
   mail_permission: false,
   permanent_delete: false,
+  has_photo: false,
   permanent_delete_note: null,
 };
 

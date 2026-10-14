@@ -20,7 +20,7 @@ export function StoragePage() {
       {data.map((a) => (
         <section key={a.id} className="max-w-2xl rounded-card border border-line p-5">
           <h2 className="mb-4 flex items-center gap-3 font-semibold">
-            <Avatar email={a.email} size={28} />
+            <Avatar email={a.email} size={28} accountId={a.id} hasPhoto={a.has_photo} />
             {a.email}
           </h2>
           <StorageBars accountId={a.id} />

@@ -2,12 +2,13 @@ import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.deps import AuthContext, get_db, require_user
 from app.models import Account
+from app.paths import Layout
 from app.schemas.accounts import (
     AccountOut,
     AuthUrlOut,
@@ -25,6 +26,7 @@ from app.services.accounts.oauth import (
     has_scope,
 )
 from app.services.accounts.permanent import permanent_delete_on, turn_off
+from app.services.accounts.photos import photo_exists, photo_path
 from app.services.accounts.service import AccountError
 from app.services.accounts.services import service_states
 
@@ -32,7 +34,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def account_out(db: Session, acc: Account) -> AccountOut:
+def account_out(db: Session, acc: Account, layout: Layout) -> AccountOut:
     out = AccountOut.model_validate(acc, from_attributes=True)
     return out.model_copy(
         update={
@@ -40,13 +42,39 @@ def account_out(db: Session, acc: Account) -> AccountOut:
             "mail_permission": has_scope(acc.scopes, GMAIL_SCOPE),
             "permanent_delete": permanent_delete_on(acc),
             "gmail_filters": gmail_filters_on(acc),
+            "has_photo": photo_exists(layout, acc),
         }
     )
 
 
 @router.get("/api/accounts", response_model=list[AccountOut])
-def list_accounts(ctx: AuthContext = Depends(require_user), db: Session = Depends(get_db)):
-    return [account_out(db, a) for a in db.scalars(select(Account).order_by(Account.email))]
+def list_accounts(
+    request: Request, ctx: AuthContext = Depends(require_user), db: Session = Depends(get_db)
+):
+    layout = request.app.state.layout
+    return [account_out(db, a, layout) for a in db.scalars(select(Account).order_by(Account.email))]
+
+
+@router.get("/api/accounts/{account_id}/photo")
+def account_photo(
+    account_id: int,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    acc = db.get(Account, account_id)
+    layout = request.app.state.layout
+    if acc is None or not photo_exists(layout, acc):
+        raise HTTPException(404, "no photo")
+    try:
+        data = photo_path(layout, acc.email).read_bytes()
+    except OSError as e:
+        raise HTTPException(404, "no photo") from e
+    return Response(
+        data,
+        media_type=acc.photo_type,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @router.post("/api/accounts/connect", response_model=AuthUrlOut)
@@ -180,7 +208,9 @@ async def disconnect(
     db: Session = Depends(get_db),
 ):
     try:
-        return account_out(db, await request.app.state.accounts.disconnect(account_id))
+        return account_out(
+            db, await request.app.state.accounts.disconnect(account_id), request.app.state.layout
+        )
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
     except AccountError as e:
@@ -195,6 +225,8 @@ async def quota(
     db: Session = Depends(get_db),
 ):
     try:
-        return account_out(db, await request.app.state.accounts.refresh_quota(account_id))
+        return account_out(
+            db, await request.app.state.accounts.refresh_quota(account_id), request.app.state.layout
+        )
     except LookupError as e:
         raise HTTPException(404, str(e)) from e

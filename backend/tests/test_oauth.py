@@ -135,4 +135,5 @@ async def test_fetch_about_reads_email_and_quota():
         "quota_total": 16106127360,
         "quota_used": 100,
         "quota_trash": 7,
+        "photo_link": None,
     }
