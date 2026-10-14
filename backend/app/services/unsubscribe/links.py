@@ -40,7 +40,7 @@ def parse_list_unsubscribe(value: str | None) -> Links:
     return Links(web=https + http, mailto=mailto)
 
 
-_A_TAG = re.compile(r"<a\s([^<>]*)>", re.IGNORECASE)
+_A_TAG = re.compile(r"<a\s([^<>]*+)>", re.IGNORECASE)
 _HREF = re.compile(r"""href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""", re.IGNORECASE)
 _ANY_TAG = re.compile(r"<[^<>]*>")
 

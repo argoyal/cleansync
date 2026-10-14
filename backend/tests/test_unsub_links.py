@@ -48,3 +48,12 @@ def test_hostile_input_is_fast_and_bad_urls_are_skipped():
         == "https://ok.com/u"
     )
     assert parse_list_unsubscribe("<http://[x/unsub>").web == ["http://[x/unsub"]
+
+
+def test_long_unclosed_tag_name_is_fast():
+    import time
+
+    start = time.monotonic()
+    body_unsubscribe_link("<" + "a" * 65_000)
+    body_unsubscribe_link("<a " + "a" * 65_000)
+    assert time.monotonic() - start < 1

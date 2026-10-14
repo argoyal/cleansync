@@ -17,8 +17,8 @@ _NO_TICK_WORDS = {"allow", "subscribe", "marketing", "offers", "partners"}
 _BUTTONS = {"submit", "button", "reset", "image"}
 
 # Linear scans (no HTMLParser, which can be made very slow by unclosed quotes).
-_TAG = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)([^<>]*)>")
-_ATTR = re.compile(r"""([^\s=/>"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?""")
+_TAG = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*+)([^<>]*+)>")
+_ATTR = re.compile(r"""([^\s=/>"']++)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?""")
 
 
 @dataclass
@@ -52,6 +52,7 @@ class _Parsed:
 
     def _scan(self, html: str) -> None:
         tags = list(_TAG.finditer(html))
+        lowered = html.lower()
         in_form = False
         submit_taken = False
         select: str | None = None
@@ -93,7 +94,9 @@ class _Parsed:
             elif tag == "textarea":
                 name = a.get("name")
                 if name:
-                    stop = tags[i + 1].start() if i + 1 < len(tags) else len(html)
+                    stop = lowered.find("</textarea", m.end())
+                    if stop == -1:
+                        stop = tags[i + 1].start() if i + 1 < len(tags) else len(html)
                     self.fields.append((name, unescape(html[m.end() : stop])))
             elif tag == "input":
                 kind = a.get("type", "text").lower()

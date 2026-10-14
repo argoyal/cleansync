@@ -55,6 +55,10 @@ def test_hostile_input_is_fast():
     has_form(hostile)
     page_text(hostile)
     simple_form("<form " + "<input name='" * 100_000, BASE)
+    for bad in ("<" + "a" * 65_000, "<form>" + "<" + "a" * 65_000):
+        simple_form(bad, BASE)
+        has_form(bad)
+        page_text(bad)
     assert time.monotonic() - start < 1
 
 
@@ -75,3 +79,8 @@ def test_checkbox_rule_is_whole_word():
     </form>"""
     names = [n for n, _ in simple_form(html, BASE).fields]
     assert names == ["list_all", "unsubscribe_all", "phone", "n"]
+
+
+def test_textarea_runs_to_its_closing_tag():
+    f = simple_form('<form><textarea name="t">a <b>x</b> c</textarea></form>', BASE)
+    assert f.fields == [("t", "a <b>x</b> c")]
