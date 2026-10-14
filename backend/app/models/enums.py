@@ -187,3 +187,39 @@ class RuleJobState(StrEnum):
 class AiTaskName(StrEnum):
     SORTING = "sorting"
     WRITING_RULES = "writing_rules"  # falls back to SORTING's choice when not set
+
+
+class UnsubscribeStatus(StrEnum):
+    UNSUBSCRIBED = "unsubscribed"
+    KEPT = "kept"
+    AUTO_ARCHIVED = "auto_archived"
+
+
+class UnsubscribeMethod(StrEnum):
+    ONE_CLICK = "one_click"
+    LINK = "link"
+    FORM = "form"
+    FILTER = "filter"
+    MANUAL = "manual"
+
+
+class UnsubscribeJobKind(StrEnum):
+    UNSUBSCRIBE = "unsubscribe"
+    AUTO_ARCHIVE = "auto_archive"
+    KEEP = "keep"
+
+
+class UnsubscribeJobState(StrEnum):
+    WAITING = "WAITING"
+    RUNNING = "RUNNING"
+    DONE = "DONE"
+    STOPPED = "STOPPED"
+    FAILED = "FAILED"
+
+
+class UnsubscribeOutcome(StrEnum):
+    UNSUBSCRIBED = "unsubscribed"
+    AUTO_ARCHIVED = "auto_archived"
+    KEPT = "kept"
+    NOT_CONFIRMED = "not_confirmed"  # shown as "Couldn't confirm"
+    NEEDS_YOU = "needs_you"

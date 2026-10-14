@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,6 +46,20 @@ class MailMessage(Base):
             "size",
             "file_size",
         ),
+        # 0.5.2: the senders list reads mails that carry an unsubscribe header; the header
+        # scan finds the rows it hasn't read yet.
+        Index(
+            "ix_mail_unsub_sender",
+            "account_id",
+            "sender",
+            sqlite_where=text("list_unsubscribe IS NOT NULL"),
+        ),
+        Index(
+            "ix_mail_headers_todo",
+            "account_id",
+            "id",
+            sqlite_where=text("headers_scanned = 0"),
+        ),
         # Ids are the search table's row ids; never reuse one.
         {"sqlite_autoincrement": True},
     )
@@ -68,6 +83,12 @@ class MailMessage(Base):
     attachments: Mapped[list[dict]] = mapped_column(JSON, default=list)  # name, type, size
     snippet: Mapped[str] = mapped_column(Text, default="")
     file_path: Mapped[str] = mapped_column(Text)
+    # 0.5.2: saved from the mail's headers at backup; old mail is filled by the header scan.
+    list_unsubscribe: Mapped[str | None] = mapped_column(Text, nullable=True)
+    list_unsubscribe_post: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sender: Mapped[str | None] = mapped_column(Text, nullable=True)  # TEXT: see migration 0014
+    # New rows are read at backup (True); rows from before 0.5.2 start at 0 until scanned.
+    headers_scanned: Mapped[bool] = mapped_column(Boolean, default=True, server_default="0")
     state: Mapped[str] = mapped_column(String(24), default=MailState.IN_MAIL)
     # Plan 4's mail_offloads row; a plain number (SQLite can't add the link to an old table).
     offload_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

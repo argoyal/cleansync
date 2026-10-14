@@ -25,6 +25,7 @@ from app.models.rules import (
     RuleVersion,
 )
 from app.models.sync import Conflict, Offload, PlannedChange, SyncJob, SyncPair
+from app.models.unsubscribe import UnsubscribeJob, UnsubscribeJobItem, UnsubscribeSender
 from app.models.usage import ApiUsage
 
 __all__ = [
@@ -58,6 +59,9 @@ __all__ = [
     "SettingRow",
     "SyncJob",
     "SyncPair",
+    "UnsubscribeJob",
+    "UnsubscribeJobItem",
+    "UnsubscribeSender",
     "User",
     "UserSession",
 ]

@@ -11,6 +11,7 @@ from datetime import datetime
 from email import policy
 from email.message import EmailMessage, Message
 from email.parser import BytesParser
+from email.utils import getaddresses
 from html import unescape
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from app.services.mail.gmail import valid_mail_id
 log = logging.getLogger(__name__)
 TMP_PREFIX = ".tmp-"
 MAX_BODY_CHARS = 32_000
+MAX_UNSUB_HEADER = 2000
 MISSING_ROOT_MSG = (
     "The mail folder on the storage disk is missing (is the disk connected?), "
     "so nothing was written."
@@ -87,12 +89,27 @@ def read_message(raw: bytes) -> EmailMessage:
     return BytesParser(policy=policy.default).parsebytes(raw)  # type: ignore[return-value]
 
 
-def _header(msg: Message, name: str) -> str:
+def header_text(msg: Message, name: str) -> str:
     try:
         value = msg.get(name)
         return "" if value is None else " ".join(str(value).split())
     except Exception:  # a header the mail library can't decode: leave it out
         return ""
+
+
+def sender_of(from_header: str) -> str | None:
+    """The lower-cased address of a From header, or None when there's no usable one."""
+    for _name, addr in getaddresses([from_header or ""]):
+        addr = addr.strip().lower()
+        if "@" in addr and " " not in addr:
+            return addr
+    return None
+
+
+def unsubscribe_headers(msg: Message) -> tuple[str | None, str | None]:
+    lu = header_text(msg, "List-Unsubscribe")[:MAX_UNSUB_HEADER] or None
+    lup = header_text(msg, "List-Unsubscribe-Post")[:200] or None
+    return lu, lup
 
 
 def check_eml(path: Path, size: int, sha256: str) -> str | None:
@@ -116,7 +133,7 @@ def check_eml_bytes(raw: bytes, size: int, sha256: str) -> str | None:
         msg = read_message(raw)
     except Exception:
         return "the file doesn't read as a mail"
-    if not any(_header(msg, h) for h in ("From", "Date", "Message-ID", "Subject")):
+    if not any(header_text(msg, h) for h in ("From", "Date", "Message-ID", "Subject")):
         return "the file doesn't read as a mail"
     return None
 
@@ -200,6 +217,9 @@ class ParsedMail:
     subject: str = ""
     attachments: list[dict] = field(default_factory=list)
     body_text: str = ""
+    list_unsubscribe: str | None = None
+    list_unsubscribe_post: str | None = None
+    sender: str | None = None
 
 
 def parse_eml(raw: bytes) -> ParsedMail:
@@ -209,12 +229,14 @@ def parse_eml(raw: bytes) -> ParsedMail:
     except Exception:
         return ParsedMail()
     parsed = ParsedMail(
-        message_id=_header(msg, "Message-ID") or None,
-        from_addr=_header(msg, "From"),
-        to_addrs=_header(msg, "To"),
-        cc_addrs=_header(msg, "Cc"),
-        subject=_header(msg, "Subject"),
+        message_id=header_text(msg, "Message-ID") or None,
+        from_addr=header_text(msg, "From"),
+        to_addrs=header_text(msg, "To"),
+        cc_addrs=header_text(msg, "Cc"),
+        subject=header_text(msg, "Subject"),
     )
+    parsed.list_unsubscribe, parsed.list_unsubscribe_post = unsubscribe_headers(msg)
+    parsed.sender = sender_of(parsed.from_addr)
     try:
         parsed.attachments = [
             {

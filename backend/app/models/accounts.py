@@ -33,6 +33,13 @@ class Account(Base):
     permanent_delete: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # Why it went off by itself (Google took the permission back); cleared by Turn on/off.
     permanent_delete_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 0.5.2: Allow Gmail filters (opt-in; the gmail.settings.basic permission) and the photo.
+    gmail_filters: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    gmail_filters_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    photo_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    photo_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     quota_total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     quota_used: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     quota_trash: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

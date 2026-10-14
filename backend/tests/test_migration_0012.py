@@ -40,7 +40,7 @@ def test_old_runs_mean_every_rule_and_the_way_back_works(tmp_path):
         )
     eng.dispose()
     run_migrations(f)
-    assert read(f, "SELECT version_num FROM alembic_version") == [("0013",)]
+    assert read(f, "SELECT version_num FROM alembic_version") == [("0014",)]
     assert read(f, "SELECT id, rule_ids, view, q, filter_text FROM rule_jobs") == [
         (1, "[]", "", "", "older_than:1y")
     ]

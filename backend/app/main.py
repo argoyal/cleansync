@@ -60,6 +60,7 @@ from app.services.files.upload import clear_uploads, sweep_upload_leftovers
 from app.services.google.client import GoogleClient
 from app.services.google.quota import ApiBudget, Pacer
 from app.services.mail.adapters import MailAdapters
+from app.services.mail.header_scan import HeaderScan
 from app.services.mail.jobs import recover_mail_jobs
 from app.services.mail.offload import MailOffloads, recover_mail_restores
 from app.services.mail.offload_plan import recover_mail_offloads
@@ -369,6 +370,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         get_sync_queue=lambda: app.state.queue,  # tests swap the queue after startup
     )
     app.state.mail_offloads = MailOffloads(app.state.mail)
+    app.state.header_scan = HeaderScan(app.state.mail)
     app.state.ai = AiSettings(session_factory, layout.secrets_dir, on_secret=redactor.add_secret)
     app.state.ai.load_secrets()
     app.state.ai_client = AiClient(app.state.ai, limits=app.state.ai)

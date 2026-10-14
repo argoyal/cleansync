@@ -141,7 +141,7 @@ def test_a_v0_2_1_database_upgrades_to_ai_rules(tmp_path):
     from app.database.migrate import _MIGRATIONS
 
     script = ScriptDirectory(str(_MIGRATIONS))
-    assert script.get_heads() == ["0013"]
+    assert script.get_heads() == ["0014"]
     assert script.get_revision("0010").down_revision == "0009"
     assert script.get_revision("0013").down_revision == "0012"
     assert script.get_revision("0012").down_revision == "0011"
@@ -176,7 +176,7 @@ def test_a_v0_2_1_database_upgrades_to_ai_rules(tmp_path):
     run_migrations(f)
     eng = make_engine(f)
     with eng.begin() as c:
-        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0013"
+        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0014"
         tables = {r[0] for r in c.execute(text("SELECT name FROM sqlite_master")).all()}
         assert {"rules", "rule_todo", "rule_decisions", "mail_message_labels"} <= tables
         assert {"mail_labels_ai", "mail_labels_au", "mail_labels_ad"} <= tables
