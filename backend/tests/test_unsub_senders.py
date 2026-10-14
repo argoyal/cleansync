@@ -1,8 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from itertools import count
 
-import pytest
-
 from app.models import MailMessage, UnsubscribeSender
 from app.services.unsubscribe.senders import (
     list_senders,
@@ -133,6 +131,8 @@ def test_sort_and_search(db, make_account):
     mail(db, acc, "big@x.com", days=9, size=900, unread=False, name="Big")
     for i in range(3):
         mail(db, acc, "many@x.com", days=5 + i, size=10, name="Many")
+    for i in range(5):  # most mails, but all read: the "unread" order differs from "mails"
+        mail(db, acc, "allread@x.com", days=20 + i, size=10, unread=False, name="Read")
     mail(db, acc, "fresh@x.com", days=0, size=50, name="Shop New")
     mail(db, acc, "mix@x.com", days=7, size=50, unread=False, name="Mix")
     mail(db, acc, "mix@x.com", days=7, size=50, unread=True, name="Mix")
@@ -140,7 +140,7 @@ def test_sort_and_search(db, make_account):
     def order(sort):
         return [r.address for r in rows(db, acc, tab="all", sort=sort)]
 
-    assert order("mails")[0] == "many@x.com"
+    assert order("mails")[0] == "allread@x.com"
     assert order("unread")[0] == "many@x.com"
     assert order("newest")[0] == "fresh@x.com"
     assert order("size")[0] == "big@x.com"
@@ -200,6 +200,7 @@ def test_api_list_and_mark(auth_client, db, make_account):
         json={"account_id": acc.id, "addresses": ["a@x.com"], "status": "unsubscribed"},
     )
     assert r.status_code == 200 and r.json() == {"changed": 1}
+    assert db.query(UnsubscribeSender).one().method == "manual"
     r = auth_client.get(
         "/api/mail/unsubscribe/senders", params={"account_id": acc.id, "tab": "unsubscribed"}
     )
@@ -224,7 +225,39 @@ def test_api_mark_rejects_other_statuses(auth_client, db, make_account):
     assert r.status_code == 422
 
 
-@pytest.mark.parametrize("n", [0])
-def test_empty(db, make_account, n):
+def test_empty(db, make_account):
     acc = make_account()
     assert list_senders(db, acc.id, OWN, tab="all") == ([], 0)
+
+
+def test_api_mark_batch_dedupes_and_never_makes_empty_rows(auth_client, db, make_account):
+    acc = make_account(email=OWN)
+    r = auth_client.post(
+        "/api/mail/unsubscribe/mark",
+        json={"account_id": acc.id, "addresses": ["A@x.com", "a@x.com", "b@x.com"], "status": None},
+    )
+    assert r.json() == {"changed": 0}
+    assert db.query(UnsubscribeSender).count() == 0
+    r = auth_client.post(
+        "/api/mail/unsubscribe/mark",
+        json={
+            "account_id": acc.id,
+            "addresses": ["A@x.com", "a@x.com", "b@x.com"],
+            "status": "unsubscribed",
+        },
+    )
+    assert r.json() == {"changed": 2}
+    assert {u.address for u in db.query(UnsubscribeSender)} == {"a@x.com", "b@x.com"}
+    again = auth_client.post(
+        "/api/mail/unsubscribe/mark",
+        json={"account_id": acc.id, "addresses": ["a@x.com"], "status": "unsubscribed"},
+    )
+    assert again.json() == {"changed": 0}
+    cleared = auth_client.post(
+        "/api/mail/unsubscribe/mark",
+        json={"account_id": acc.id, "addresses": ["a@x.com"], "status": None},
+    )
+    assert cleared.json() == {"changed": 1}
+    db.expire_all()
+    row = db.query(UnsubscribeSender).filter_by(address="a@x.com").one()
+    assert row.status is None and row.method is None

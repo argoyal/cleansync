@@ -3,11 +3,14 @@
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.mail_reader import account_or_404
 from app.auth.deps import AuthContext, get_db, require_user
 from app.core.clock import utcnow
+from app.models import UnsubscribeSender
+from app.models.enums import UnsubscribeMethod
 from app.schemas.unsubscribe import ChangedOut, MarkIn, SendersOut
 from app.services.mail.header_scan import scan_progress
 from app.services.unsubscribe.senders import (
@@ -55,6 +58,17 @@ def mark(
     """Mark senders unsubscribed (by hand, outside CleanSync), or clear their status."""
     acc = account_or_404(db, body.account_id)
     now = utcnow()
-    for address in body.addresses:
-        set_status(db, acc.id, address, body.status, now=now)
-    return {"changed": len(body.addresses)}
+    method = UnsubscribeMethod.MANUAL.value if body.status else None
+    changed = 0
+    for address in dict.fromkeys(a.strip().lower() for a in body.addresses if a.strip()):
+        row = db.scalar(
+            select(UnsubscribeSender).where(
+                UnsubscribeSender.account_id == acc.id, UnsubscribeSender.address == address
+            )
+        )
+        if (row.status if row else None) == body.status:
+            continue  # nothing to change; clearing a sender with no row makes no row
+        set_status(db, acc.id, address, body.status, method=method, now=now, commit=False)
+        changed += 1
+    db.commit()
+    return {"changed": changed}

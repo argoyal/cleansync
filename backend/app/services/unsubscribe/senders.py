@@ -173,6 +173,7 @@ def set_status(
     note: str | None = None,
     filter_id=KEEP,
     now: datetime,
+    commit: bool = True,
 ) -> None:
     """Set or clear (status=None) a sender's status. The row is never deleted: it holds
     filter_id."""
@@ -191,4 +192,5 @@ def set_status(
     if filter_id is not KEEP:
         row.filter_id = filter_id
     row.updated_at = now
-    db.commit()
+    if commit:
+        db.commit()
