@@ -78,9 +78,10 @@ export function itemLink(item: UnsubscribeJobItem): { href: string; mail: boolea
   return null;
 }
 
-/** The mail search for one sender's mail (spec §6). Offload and Delete forever work on one
+/** The mail search for one sender's mail (spec §6): `sender:` matches the address exactly,
+ * so news@shop.com never takes in technews@shop.com. Offload and Delete forever work on one
  * sender at a time: the search language has no OR (controller ruling, task 8). */
-export const senderSearch = (address: string): string => `from:${address}`;
+export const senderSearch = (address: string): string => `sender:${address}`;
 
 export const useSenders = (
   accountId: number | null,

@@ -215,3 +215,15 @@ def test_label_names_match_whatever_their_case_outside_plain_ascii(db, make_acco
     assert _found(db, acc, q="label:STRASSE") == ["m2"]  # casefold, not just lower
     assert _found(db, acc, q="label:Label_7") == ["m1"]
     assert _found(db, acc, q="label:INBOX") == ["m1", "m2", "m3"]
+
+
+def test_sender_term_matches_one_address_exactly(db, make_account):
+    acc = make_account()
+    _add(db, acc, "m1", "a", sender="news@shop.com")
+    _add(db, acc, "m2", "b", sender="technews@shop.com")
+    _add(db, acc, "m3", "c", sender="news@shop.com.au")
+    q = parse_query("sender:News@Shop.com", now=NOW)
+    assert q.exact_senders == ["News@Shop.com"] and not q.is_empty()
+    assert _found(db, acc, q="sender:news@shop.com") == ["m1"]
+    assert _found(db, acc, q="sender:NEWS@shop.com") == ["m1"]
+    assert _found(db, acc, q="from:news@shop.com") == ["m1", "m2", "m3"]  # from: a part match

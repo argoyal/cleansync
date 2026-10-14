@@ -135,7 +135,7 @@ describe("Mail → Unsubscribe", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Delete forever their mail" }));
     expect(await screen.findByRole("dialog", { name: /Delete forever/ })).toBeInTheDocument();
     const totals = calls.find((c) => c.path === "/api/mail/totals");
-    expect(totals?.url.searchParams.get("q")).toBe("from:news@shop.example");
+    expect(totals?.url.searchParams.get("q")).toBe("sender:news@shop.example");
   });
 
   it("offers Offload and Delete forever on the bar only for one sender picked by hand", async () => {
@@ -155,15 +155,15 @@ describe("Mail → Unsubscribe", () => {
     expect(within(bar).queryByRole("button", { name: "Delete forever their mail" })).not.toBeInTheDocument();
   });
 
-  it("offloads one sender's mail with a from: search the dialog shows", async () => {
+  it("offloads one sender's mail with a sender: search the dialog shows", async () => {
     const { calls } = setUp({ "POST /api/mail/offloads/preview": { filter_text: "", count: 0, bytes: 0, oldest: [], largest: [], excluded: [] } });
     renderApp(<MailUnsubscribePage />, { withAccount: true });
     await userEvent.click(await screen.findByRole("checkbox", { name: "Pick news@shop.example" }));
     await userEvent.click(screen.getByRole("button", { name: "Offload their mail" }));
     const dialog = await screen.findByRole("dialog", { name: "Offload mail" });
-    expect(within(dialog).getByLabelText("Filter")).toHaveValue("from:news@shop.example");
+    expect(within(dialog).getByLabelText("Filter")).toHaveValue("sender:news@shop.example");
     await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/offloads/preview")?.body).toMatchObject({ q: "from:news@shop.example" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/api/mail/offloads/preview")?.body).toMatchObject({ q: "sender:news@shop.example" }));
   });
 
   it("Open their mail goes to a search for the sender", async () => {
@@ -171,7 +171,7 @@ describe("Mail → Unsubscribe", () => {
     renderApp(<MailUnsubscribePage />, { withAccount: true });
     await userEvent.click(await screen.findByRole("button", { name: "More actions for news@shop.example" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Open their mail" }));
-    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(`/mail?q=${encodeURIComponent("from:news@shop.example")}`));
+    await waitFor(() => expect(screen.getAllByTestId("location")[0]).toHaveTextContent(`/mail?q=${encodeURIComponent("sender:news@shop.example")}`));
   });
 
   it("offers Open page and Mark unsubscribed for a sender the last job couldn't confirm", async () => {

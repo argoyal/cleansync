@@ -155,3 +155,19 @@ async def test_an_empty_search_in_quotes_is_still_no_filter(auth_client, offload
         assert r.status_code == 422, q
         assert r.json()["detail"] == "Choose at least one filter, or pick mails in the list."
     assert _preview(auth_client, box.acc, q="older_than:1y").status_code == 200
+
+
+async def test_a_sender_search_counts_only_that_sender(auth_client, offload_box, db):
+    box = offload_box
+    await box.backup()
+    senders = {
+        "Old statement": "news@shop.com",
+        "Old photos": "technews@shop.com",
+        "Ancient note": "news@shop.com.au",
+    }
+    for subject, sender in senders.items():
+        row = db.get(MailMessage, box.row(subject).id)
+        row.sender = sender
+    db.commit()
+    p = _preview(auth_client, box.acc, q="sender:news@shop.com").json()
+    assert p["count"] == 1 and p["bytes"] == box.row("Old statement").size

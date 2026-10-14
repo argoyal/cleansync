@@ -42,6 +42,7 @@ OFFLOADED_ELSEWHERE_MSG = "Offloaded mail is in the Offloaded view."
 DELETED_ELSEWHERE_MSG = "Mail deleted in Gmail is in the Deleted in Gmail view."
 OPERATORS = (
     "from",
+    "sender",
     "to",
     "label",
     "has",
@@ -69,6 +70,7 @@ class SearchError(ValueError):
 class MailQuery:
     words: list[str] = field(default_factory=list)
     senders: list[str] = field(default_factory=list)
+    exact_senders: list[str] = field(default_factory=list)  # sender:a@b.com, one address
     recipients: list[str] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
     has_attachment: bool = False
@@ -156,6 +158,8 @@ def parse_query(text: str, *, now: datetime) -> MailQuery:
             raise SearchError(f'"{key}:" needs something after it.')
         if op == "from":
             q.senders.append(value)
+        elif op == "sender":
+            q.exact_senders.append(value)
         elif op == "to":
             q.recipients.append(value)
         elif op == "label":
@@ -245,6 +249,8 @@ def query_conditions(db: Session, account_id: int, q: MailQuery, *, view: str = 
             raise SearchError(DELETED_ELSEWHERE_MSG)
     for s in q.senders:
         conds.append(MailMessage.from_addr.ilike(f"%{_like(s)}%", escape="\\"))
+    for s in q.exact_senders:
+        conds.append(MailMessage.sender == s.lower())
     for r in q.recipients:
         pattern = f"%{_like(r)}%"
         conds.append(
