@@ -29,3 +29,22 @@ def test_body_link():
 
 def test_host_only():
     assert host_of("https://Shop.Example.com/u?token=SECRET") == "shop.example.com"
+
+
+def test_hostile_input_is_fast_and_bad_urls_are_skipped():
+    import time
+
+    hostile = "<a b='" * 200_000
+    start = time.monotonic()
+    assert body_unsubscribe_link(hostile) is None
+    assert parse_list_unsubscribe("<" * 1_000_000) is not None
+    assert host_of("http://[x/unsub") == ""
+    assert time.monotonic() - start < 1
+    assert body_unsubscribe_link('<a href="http://[x/unsub">unsubscribe</a>') is None
+    assert (
+        body_unsubscribe_link(
+            '<a href="http://[x/unsub">unsubscribe</a><a href="https://ok.com/u">Unsubscribe</a>'
+        )
+        == "https://ok.com/u"
+    )
+    assert parse_list_unsubscribe("<http://[x/unsub>").web == ["http://[x/unsub"]

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from html.parser import HTMLParser
+from html import unescape
 from urllib.parse import urlsplit
 
-_BODY_CAP = 512 * 1024
+# One cap for every HTML scan here; keeps hostile pages cheap.
+HTML_CAP = 64 * 1024
 _TEXT_HINTS = ("unsubscribe", "email preferences", "opt out", "opt-out", "manage subscriptions")
 _HREF_HINTS = ("unsub", "opt-out", "optout", "list-manage")
 
@@ -39,50 +40,30 @@ def parse_list_unsubscribe(value: str | None) -> Links:
     return Links(web=https + http, mailto=mailto)
 
 
-class _Anchors(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.found: list[tuple[str, str]] = []
-        self._href: str | None = None
-        self._text: list[str] = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag == "a":
-            self._close()
-            self._href = dict(attrs).get("href") or ""
-            self._text = []
-
-    def handle_data(self, data):
-        if self._href is not None:
-            self._text.append(data)
-
-    def handle_endtag(self, tag):
-        if tag == "a":
-            self._close()
-
-    def _close(self) -> None:
-        if self._href is not None:
-            self.found.append((self._href.strip(), "".join(self._text)))
-        self._href = None
-        self._text = []
-
-    def close(self) -> None:
-        super().close()
-        self._close()
+_A_TAG = re.compile(r"<a\s([^<>]*)>", re.IGNORECASE)
+_HREF = re.compile(r"""href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""", re.IGNORECASE)
+_ANY_TAG = re.compile(r"<[^<>]*>")
 
 
 def body_unsubscribe_link(html: str) -> str | None:
-    parser = _Anchors()
-    parser.feed(html[:_BODY_CAP])
-    parser.close()
-    for href, text in parser.found:
-        if urlsplit(href).scheme.lower() not in ("http", "https"):
+    # A plain regex scan, linear in the input: HTMLParser can be made very slow by hostile markup.
+    html = html[:HTML_CAP]
+    for tag in _A_TAG.finditer(html):
+        m = _HREF.search(tag.group(1))
+        if not m:
             continue
-        lowered_text = " ".join(text.lower().split())
+        href = unescape(next(g for g in m.groups() if g is not None)).strip()
+        try:
+            scheme = urlsplit(href).scheme.lower()
+        except ValueError:
+            continue
+        if scheme not in ("http", "https"):
+            continue
+        end = html.find("</a", tag.end(), tag.end() + 1000)
+        raw = html[tag.end() : end if end != -1 else tag.end() + 200]
+        text = " ".join(unescape(_ANY_TAG.sub(" ", raw)).lower().split())
         lowered_href = href.lower()
-        if any(h in lowered_text for h in _TEXT_HINTS) or any(
-            h in lowered_href for h in _HREF_HINTS
-        ):
+        if any(h in text for h in _TEXT_HINTS) or any(h in lowered_href for h in _HREF_HINTS):
             return href
     return None
 

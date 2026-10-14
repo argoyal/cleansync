@@ -44,3 +44,34 @@ def test_defaults_checked_select_textarea_and_has_form():
     assert f.action == BASE and f.method == "POST"
     assert ("c", "v") in f.fields and ("s", "b") in f.fields and ("t", "hi") in f.fields
     assert has_form(html) and not has_form("<p>x</p>")
+
+
+def test_hostile_input_is_fast():
+    import time
+
+    hostile = "<a b='" * 200_000
+    start = time.monotonic()
+    simple_form(hostile, BASE)
+    has_form(hostile)
+    page_text(hostile)
+    simple_form("<form " + "<input name='" * 100_000, BASE)
+    assert time.monotonic() - start < 1
+
+
+def test_bad_action_url_is_none():
+    assert simple_form('<form action="http://[x/a"></form>', BASE) is None
+
+
+def test_checkbox_rule_is_whole_word():
+    html = """<form>
+      <input type="checkbox" name="list_all" value="1">
+      <input type="checkbox" name="unsubscribe_all" value="1">
+      <input type="checkbox" name="allow_marketing" value="all">
+      <input type="checkbox" name="small" value="x">
+      <input type="checkbox" name="email_alerts_all_partners" value="1">
+      <input type="checkbox" name="keep_promos" value="promos">
+      <input type="tel" name="phone" value="123">
+      <input type="number" name="n" value="4">
+    </form>"""
+    names = [n for n, _ in simple_form(html, BASE).fields]
+    assert names == ["list_all", "unsubscribe_all", "phone", "n"]

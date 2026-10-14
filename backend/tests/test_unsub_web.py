@@ -151,3 +151,38 @@ async def test_no_addresses_and_timeout():
     web = SafeWeb(resolve=slow, timeout_s=0.05)
     with pytest.raises(WebTrouble, match="didn't answer in time"):
         await web.request("GET", "http://x.com/u")
+
+
+async def test_idn_host_is_punycoded_for_header_and_sni():
+    seen = {}
+
+    def handler(req):
+        seen["host"] = req.headers["host"]
+        seen["sni"] = req.extensions.get("sni_hostname")
+        seen["enc"] = req.headers["accept-encoding"]
+        return httpx.Response(200, text="ok")
+
+    web = SafeWeb(
+        resolve=resolver({"xn--bcher-kva.example": ["93.184.216.34"]}),
+        transport=httpx.MockTransport(handler),
+    )
+    await web.request("GET", "https://bücher.example/u")
+    assert seen["host"] == "xn--bcher-kva.example"
+    assert seen["sni"] == "xn--bcher-kva.example"
+    assert seen["enc"] == "identity"
+
+
+async def test_307_keeps_the_post_body():
+    seen = []
+
+    def handler(req):
+        seen.append((req.method, req.content))
+        if len(seen) == 1:
+            return httpx.Response(307, headers={"location": "/next"})
+        return httpx.Response(200, text="ok")
+
+    web = SafeWeb(
+        resolve=resolver({"x.com": ["93.184.216.34"]}), transport=httpx.MockTransport(handler)
+    )
+    await web.request("POST", "http://x.com/u", form={"a": "b"})
+    assert seen == [("POST", b"a=b"), ("POST", b"a=b")]

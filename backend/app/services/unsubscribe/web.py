@@ -24,6 +24,7 @@ _REDIRECTS = (301, 302, 303, 307, 308)
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; CleanSync unsubscribe)",
     "Accept": "text/html,*/*;q=0.5",
+    "Accept-Encoding": "identity",
 }
 
 
@@ -101,7 +102,10 @@ class SafeWeb:
                 return answer
             if hop == self.max_redirects:
                 raise WebTrouble(f"{host_of(url)} sent CleanSync round in circles.")
-            new_url = urljoin(url, location)
+            try:
+                new_url = urljoin(url, location)
+            except ValueError:
+                raise WebTrouble(f"{host_of(url)} sent a link CleanSync can't use.") from None
             if answer.status in (301, 302, 303) and method == "POST":
                 method, form = "GET", None
             url = new_url
@@ -129,11 +133,16 @@ class SafeWeb:
         ):
             raise RefusedAddress(f"Only web links on the usual ports are used ({host}).")
 
+        try:
+            wire_host = host.encode("idna").decode("ascii")
+        except UnicodeError:
+            raise WebTrouble(f"{host} couldn't be found.") from None
+
         effective_port = port or (443 if parts.scheme == "https" else 80)
         if self.resolve is not None:
-            addresses = await self.resolve(host)
+            addresses = await self.resolve(wire_host)
         else:
-            addresses = await _system_resolve(host, effective_port)
+            addresses = await _system_resolve(wire_host, effective_port)
         if not addresses:
             raise WebTrouble(f"{host} couldn't be found.")
         if not self.allow_private and not all(is_public_ip(a) for a in addresses):
@@ -143,11 +152,11 @@ class SafeWeb:
         ip_text = f"[{ip}]" if ":" in ip else ip
         netloc = ip_text if port is None else f"{ip_text}:{port}"
         target = parts._replace(netloc=netloc).geturl()
-        host_header = host if ":" not in host else f"[{host}]"
+        host_header = wire_host if ":" not in wire_host else f"[{wire_host}]"
         if port is not None:
             host_header = f"{host_header}:{port}"
         headers = {**_HEADERS, "Host": host_header}
-        extensions = {"sni_hostname": host} if parts.scheme == "https" else {}
+        extensions = {"sni_hostname": wire_host} if parts.scheme == "https" else {}
 
         try:
             async with httpx.AsyncClient(
@@ -155,6 +164,7 @@ class SafeWeb:
                 follow_redirects=False,
                 timeout=self.timeout_s,
                 verify=True,
+                trust_env=False,
                 cookies=None,
             ) as client:
                 async with client.stream(

@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from html.parser import HTMLParser
+from html import unescape
 from urllib.parse import urljoin, urlsplit
 
 from app.services.mail.store import html_to_text
+from app.services.unsubscribe.links import HTML_CAP
 
 _CAPTCHA = ("g-recaptcha", "h-captcha", "cf-turnstile", "captcha")
 _PAGE_TEXT_CAP = 4000
-_HTML_CAP = 1024 * 1024
+_TICK_WORDS = {"unsubscribe", "unsub", "all"}
+_NO_TICK_WORDS = {"allow", "subscribe", "marketing", "offers", "partners"}
+_BUTTONS = {"submit", "button", "reset", "image"}
+
+# Linear scans (no HTMLParser, which can be made very slow by unclosed quotes).
+_TAG = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)([^<>]*)>")
+_ATTR = re.compile(r"""([^\s=/>"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?""")
 
 
 @dataclass
@@ -20,123 +28,113 @@ class FormToSend:
     fields: list[tuple[str, str]]
 
 
-class _Forms(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
+def _attrs(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for m in _ATTR.finditer(raw):
+        value = next((g for g in m.groups()[1:] if g is not None), "")
+        out.setdefault(m.group(1).lower(), unescape(value))
+    return out
+
+
+def _ticks(name: str, value: str) -> bool:
+    tokens = set(re.split(r"[^a-z]+", f"{name} {value}".lower())) - {""}
+    return bool(tokens & _TICK_WORDS) and not tokens & _NO_TICK_WORDS
+
+
+class _Parsed:
+    def __init__(self, html: str) -> None:
         self.forms = 0
         self.action = ""
         self.method = "POST"
         self.blocked = False
         self.fields: list[tuple[str, str]] = []
-        self._in_form = False
-        self._submit_taken = False
-        self._select: str | None = None
-        self._select_value: str | None = None
-        self._select_chosen = False
-        self._textarea: str | None = None
-        self._text: list[str] = []
+        self._scan(html[:HTML_CAP])
 
-    def handle_starttag(self, tag, attrs):
-        a = {k: (v or "") for k, v in attrs}
-        if tag == "form":
-            self.forms += 1
-            if self.forms == 1:
-                self._in_form = True
-                self.action = a.get("action", "").strip()
-                self.method = "GET" if a.get("method", "").strip().lower() == "get" else "POST"
-            return
-        if not self._in_form or self.forms != 1:
-            return
-        if tag == "input":
-            self._input(a)
-        elif tag == "select":
-            self._select = a.get("name") or None
-            self._select_value = None
-            self._select_chosen = False
-        elif tag == "option" and self._select is not None:
-            value = a.get("value", "")
-            if self._select_value is None:
-                self._select_value = value
-            if "selected" in a and not self._select_chosen:
-                self._select_value = value
-                self._select_chosen = True
-        elif tag == "textarea":
-            self._textarea = a.get("name") or None
-            self._text = []
-        elif tag == "button":
-            self._button(a)
+    def _scan(self, html: str) -> None:
+        tags = list(_TAG.finditer(html))
+        in_form = False
+        submit_taken = False
+        select: str | None = None
+        select_value: str | None = None
+        select_chosen = False
+        for i, m in enumerate(tags):
+            closing, tag = m.group(1), m.group(2).lower()
+            if tag == "form":
+                if closing:
+                    in_form = in_form and self.forms != 1
+                    continue
+                self.forms += 1
+                if self.forms == 1:
+                    in_form = True
+                    a = _attrs(m.group(3))
+                    self.action = a.get("action", "").strip()
+                    self.method = "GET" if a.get("method", "").strip().lower() == "get" else "POST"
+                continue
+            if not in_form or self.forms != 1:
+                continue
+            if tag == "select":
+                if closing:
+                    if select is not None and select_value is not None:
+                        self.fields.append((select, select_value))
+                    select = None
+                else:
+                    select = _attrs(m.group(3)).get("name") or None
+                    select_value, select_chosen = None, False
+                continue
+            if closing:
+                continue
+            a = _attrs(m.group(3))
+            if tag == "option" and select is not None:
+                value = a.get("value", "")
+                if select_value is None:
+                    select_value = value
+                if "selected" in a and not select_chosen:
+                    select_value, select_chosen = value, True
+            elif tag == "textarea":
+                name = a.get("name")
+                if name:
+                    stop = tags[i + 1].start() if i + 1 < len(tags) else len(html)
+                    self.fields.append((name, unescape(html[m.end() : stop])))
+            elif tag == "input":
+                kind = a.get("type", "text").lower()
+                name, value = a.get("name", ""), a.get("value", "")
+                if kind in ("password", "file"):
+                    self.blocked = True
+                elif kind in ("checkbox", "radio"):
+                    if name and ("checked" in a or _ticks(name, value)):
+                        self.fields.append((name, value or "on"))
+                elif kind == "submit":
+                    submit_taken = self._submit(submit_taken, name, value)
+                elif kind not in _BUTTONS:
+                    if name:
+                        self.fields.append((name, value))
+            elif tag == "button" and a.get("type", "submit").lower() == "submit":
+                submit_taken = self._submit(submit_taken, a.get("name", ""), a.get("value", ""))
 
-    def _input(self, a: dict[str, str]) -> None:
-        kind = a.get("type", "text").lower()
-        name = a.get("name", "")
-        value = a.get("value", "")
-        if kind in ("password", "file"):
-            self.blocked = True
-        elif kind in ("hidden", "text", "email"):
-            if name:
-                self.fields.append((name, value))
-        elif kind in ("checkbox", "radio"):
-            if name and (
-                "checked" in a
-                or "unsubscribe" in value.lower()
-                or "all" in value.lower()
-                or "unsubscribe" in name.lower()
-                or "all" in name.lower()
-            ):
-                self.fields.append((name, value or "on"))
-        elif kind == "submit":
-            self._take_submit(name, value)
-
-    def _button(self, a: dict[str, str]) -> None:
-        if a.get("type", "submit").lower() == "submit":
-            self._take_submit(a.get("name", ""), a.get("value", ""))
-
-    def _take_submit(self, name: str, value: str) -> None:
-        if self._submit_taken:
-            return
-        self._submit_taken = True
-        if name:
+    def _submit(self, taken: bool, name: str, value: str) -> bool:
+        if not taken and name:
             self.fields.append((name, value))
-
-    def handle_data(self, data):
-        if self._textarea is not None:
-            self._text.append(data)
-
-    def handle_endtag(self, tag):
-        if tag == "form" and self.forms == 1:
-            self._in_form = False
-        elif tag == "select" and self._select is not None:
-            if self._select_value is not None:
-                self.fields.append((self._select, self._select_value))
-            self._select = None
-        elif tag == "textarea" and self._textarea is not None:
-            self.fields.append((self._textarea, "".join(self._text)))
-            self._textarea = None
-
-
-def _parse(html: str) -> _Forms:
-    parser = _Forms()
-    parser.feed(html[:_HTML_CAP])
-    parser.close()
-    return parser
+        return True
 
 
 def has_form(html: str) -> bool:
-    return _parse(html).forms > 0
+    return _Parsed(html).forms > 0
 
 
 def simple_form(html: str, base_url: str) -> FormToSend | None:
-    lowered = html[:_HTML_CAP].lower()
-    if any(word in lowered for word in _CAPTCHA):
+    if any(word in html[:HTML_CAP].lower() for word in _CAPTCHA):
         return None
-    parsed = _parse(html)
+    parsed = _Parsed(html)
     if parsed.forms != 1 or parsed.blocked:
         return None
-    action = urljoin(base_url, parsed.action) if parsed.action else base_url
-    if urlsplit(action).scheme.lower() not in ("http", "https"):
+    try:
+        action = urljoin(base_url, parsed.action) if parsed.action else base_url
+        if urlsplit(action).scheme.lower() not in ("http", "https"):
+            return None
+    except ValueError:
         return None
     return FormToSend(method=parsed.method, action=action, fields=parsed.fields)
 
 
 def page_text(html: str) -> str:
-    return html_to_text(html)[:_PAGE_TEXT_CAP]
+    return html_to_text(html[:HTML_CAP])[:_PAGE_TEXT_CAP]
