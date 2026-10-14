@@ -187,6 +187,7 @@ class RuleJobState(StrEnum):
 class AiTaskName(StrEnum):
     SORTING = "sorting"
     WRITING_RULES = "writing_rules"  # falls back to SORTING's choice when not set
+    UNSUBSCRIBE = "unsubscribe"  # checks the page after an unsubscribe form; same fallback
 
 
 class UnsubscribeStatus(StrEnum):

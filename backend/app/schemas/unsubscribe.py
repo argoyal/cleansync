@@ -41,3 +41,41 @@ class MarkIn(BaseModel):
 
 class ChangedOut(BaseModel):
     changed: int
+
+
+class PickAllIn(BaseModel):
+    tab: str = "all"
+    q: str = ""
+
+
+class JobIn(BaseModel):
+    account_id: int
+    kind: Literal["unsubscribe", "auto_archive", "keep"]
+    addresses: list[str] | None = None
+    all: PickAllIn | None = None
+
+
+class JobStartedOut(BaseModel):
+    job_id: int
+
+
+class JobItemOut(BaseModel):
+    address: str
+    outcome: str | None
+    method: str | None
+    note: str | None
+    link: str | None
+
+
+class JobOut(BaseModel):
+    id: int
+    account_id: int
+    kind: str
+    state: str
+    total: int
+    done: int
+    stop_asked: bool
+    reason: str | None
+    created_at: UtcDatetime
+    finished_at: UtcDatetime | None
+    items: list[JobItemOut]

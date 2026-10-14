@@ -61,6 +61,18 @@ def test_target_for_a_task_and_writing_rules_falls_back_to_sorting(ai):
     assert t.api_key is None and t.headers == {}
 
 
+def test_unsubscribe_falls_back_to_sorting_until_set(ai):
+    a = ai.create("Ollama", "http://ollama:11434/v1")
+    b = ai.create("Groq", "https://api.groq.com/openai/v1")
+    assert ai.target(AiTaskName.UNSUBSCRIBE) is None
+    ai.set_task(AiTaskName.SORTING, a.id, "llama3.1:8b")
+    t = ai.target(AiTaskName.UNSUBSCRIBE)
+    assert (t.connection_id, t.model) == (a.id, "llama3.1:8b")
+    ai.set_task(AiTaskName.UNSUBSCRIBE, b.id, "small", timeout_s=20)
+    t = ai.target(AiTaskName.UNSUBSCRIBE)
+    assert (t.connection_id, t.model, t.timeout_s) == (b.id, "small", 20)
+
+
 def test_deleting_a_connection_removes_files_and_unsets_tasks(ai, layout):
     conn = ai.create("A", "http://a:1/v1", api_key="sk-aaaaaaaa")
     ai.set_task(AiTaskName.SORTING, conn.id, "m")

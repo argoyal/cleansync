@@ -80,6 +80,8 @@ from app.services.scheduler import Scheduler
 from app.services.sync.engine import SyncEngine
 from app.services.sync.initial import InitialSync
 from app.services.sync.recovery import recover_interrupted
+from app.services.unsubscribe.jobs import UnsubscribeJobs
+from app.services.unsubscribe.web import SafeWeb
 from app.services.volume import open_volume
 from app.services.watcher import LocalWatcher, self_test
 from app.web import legal
@@ -167,6 +169,10 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                     db.rollback()
                     logger.exception("could not close mail jobs left running")
             try:
+                app.state.unsubscribe_jobs.recover()
+            except Exception:
+                logger.exception("could not put unsubscribe jobs back to waiting")
+            try:
                 sweep_delete_lists(layout)
             except Exception:
                 logger.exception("could not remove old offload delete lists")
@@ -193,6 +199,11 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
                 # A mail job a stop cut short goes on where it left off.
                 for account_id in recover_mail_jobs(db):
                     app.state.mail.queue.request(account_id, "backup", trigger="RECOVERY")
+            try:
+                # An unsubscribe job a stop cut short goes on at the next mail tick.
+                app.state.unsubscribe_jobs.recover()
+            except Exception:
+                logger.exception("could not put unsubscribe jobs back to waiting")
             try:
                 sweep_delete_lists(layout)
             except OSError as e:  # harmless leftovers: never stop startup over them
@@ -231,6 +242,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
             await app.state.offloads.stop()
             await app.state.rule_jobs.shutdown()
             await app.state.rule_worker.stop()
+            await app.state.unsubscribe_jobs.shutdown()
             await app.state.mail.stop()  # also saves the Google API units counted so far
             await app.state.queue.stop()
             await app.state.catalog.stop()
@@ -384,6 +396,18 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         return AiChooser(app.state.ai_client, lambda: app.state.ai.target(AiTaskName.SORTING))
 
     app.state.sorting_chooser = _sorting_chooser
+    # Unsubscribe links come from mail, so the web client only opens public addresses. Only
+    # the dev and test switch DRIVESYNC_ALLOW_LOCAL_ACCOUNTS lets it open local ones.
+    app.state.unsubscribe_web = SafeWeb(allow_private=settings.allow_local_accounts)
+    app.state.unsubscribe_jobs = UnsubscribeJobs(
+        sf=session_factory,
+        bus=app.state.bus,
+        mail=app.state.mail,
+        web=app.state.unsubscribe_web,
+        ai=app.state.ai_client,
+        connections=app.state.ai,
+    )
+    app.state.mail.tick_hooks.append(app.state.unsubscribe_jobs.tick)
     # One Applier for everything: its label-creation lock is per instance
     app.state.rule_applier = Applier(
         session_factory=session_factory,

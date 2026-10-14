@@ -43,6 +43,13 @@ def test_delete_connection(auth_client):
     assert auth_client.delete(f"/api/ai/connections/{c['id']}").status_code == 404
 
 
+def test_unsubscribe_task_listed_and_settable(auth_client):
+    assert auth_client.get("/api/ai/tasks").json()["unsubscribe"]["model"] == ""
+    c = make(auth_client)
+    r = auth_client.put("/api/ai/tasks/unsubscribe", json={"connection_id": c["id"], "model": "m"})
+    assert r.status_code == 200 and r.json()["task"] == "unsubscribe"
+
+
 def test_tasks_default_and_set(auth_client):
     assert auth_client.get("/api/ai/tasks").json()["sorting"]["model"] == ""
     c = make(auth_client)

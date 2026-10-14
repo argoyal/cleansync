@@ -9,7 +9,8 @@ three questions CleanSync asks, without any real AI:
 - sorting (and the Settings Test button): the first rule whose name is in the mail's subject,
   else the first rule with a word of its description in the subject, else 0;
 - a sentence to a rule: the sentence as the description, and Archive as the action;
-- picked mails to a name and description: from their first subject and their senders.
+- picked mails to a name and description: from their first subject and their senders;
+- the unsubscribe page check: "confirmed" when the page says "unsubscribed" or "removed".
 The model "fake-limited" always answers HTTP 429 (a used-up daily limit), to try the pause.
 """
 
@@ -21,6 +22,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from app.services.rules import chooser, drafting
+from app.services.unsubscribe import judge
 
 MODEL = "fake-sorter"
 LIMITED_MODEL = "fake-limited"  # always answers "daily limit used up" (HTTP 429)
@@ -86,7 +88,16 @@ def _describe(user: str) -> dict:
     return {"name": name, "description": f'Mail like "{subject}"{who}.'}
 
 
+def _judge(user: str) -> dict:
+    page = user.lower()
+    return {
+        "answer": "confirmed" if "unsubscribed" in page or "removed" in page else "not_confirmed"
+    }
+
+
 def answer(system: str, user: str) -> dict:
+    if system == judge.JUDGE_SYSTEM:
+        return _judge(user)
     if system == drafting.DRAFT_SYSTEM:
         return _draft(user)
     if system == drafting.DESCRIBE_SYSTEM:

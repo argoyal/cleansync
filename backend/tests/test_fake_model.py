@@ -135,3 +135,17 @@ def test_refuses_to_start_unless_pretend_accounts_are_allowed(monkeypatch, capsy
         main()
     assert e.value.code == 2
     assert "DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1" in capsys.readouterr().err
+
+
+def test_unsubscribe_page_check():
+    from app.services.unsubscribe import judge
+
+    assert answer(judge.JUDGE_SYSTEM, "Page text:\n<<<\nYou have been unsubscribed.\n>>>") == {
+        "answer": "confirmed"
+    }
+    assert answer(judge.JUDGE_SYSTEM, "Page text:\n<<<\nYou were removed.\n>>>") == {
+        "answer": "confirmed"
+    }
+    assert answer(judge.JUDGE_SYSTEM, "Page text:\n<<<\nPick your topics.\n>>>") == {
+        "answer": "not_confirmed"
+    }

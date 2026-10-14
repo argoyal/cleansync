@@ -272,7 +272,7 @@ class AiSettings:
         with self.sf() as db:
             row = db.get(AiTask, str(task))
             if (row is None or row.connection_id is None or not row.model) and (
-                task == AiTaskName.WRITING_RULES
+                task in (AiTaskName.WRITING_RULES, AiTaskName.UNSUBSCRIBE)
             ):
                 row = db.get(AiTask, str(AiTaskName.SORTING))
             if row is None or row.connection_id is None or not row.model:
