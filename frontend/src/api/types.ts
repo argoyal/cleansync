@@ -150,7 +150,6 @@ export type AppSettings = {
   log_retention_days: number;
   mail_check_interval_s: number;
   mail_min_age_days: number;
-  mail_batch_size: number;
   mail_disk_floor_gb: number;
   google_daily_budget_units: number;
 };

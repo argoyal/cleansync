@@ -4,15 +4,24 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.orm import Session, load_only
 
 from app.core.clock import as_utc, utcnow
-from app.models import Account, MailJob, MailLabel, MailMessage, MailOffload
-from app.models.enums import JobState, MailJobKind, MailOffloadKind, MailOffloadState, MailState
+from app.models import Account, MailJob, MailLabel, MailMessage, MailOffload, MailOffloadItem
+from app.models.enums import (
+    JobState,
+    MailItemResult,
+    MailJobKind,
+    MailOffloadKind,
+    MailOffloadState,
+    MailState,
+)
 from app.paths import Layout
 from app.services.mail.search import SearchError, mail_conditions, parse_query
-from app.services.mail.store import eml_path
+from app.services.mail.store import (
+    eml_path,  # noqa: F401  (tests patch it to prove no file is touched)
+)
 
 GMAIL_TRASH_DAYS = 30  # Gmail empties its trash after this many days (spec 5.4)
 RESTARTED_OFFLOAD_MSG = "CleanSync restarted during this offload. It goes on by itself."
@@ -207,13 +216,26 @@ def candidates(db: Session, account_id: int, pick: Pick, now: datetime) -> list[
     return list(db.scalars(stmt))
 
 
-def file_ok(layout: Layout, email: str, row: MailMessage) -> bool:
-    """The file is there with the size it had when it was saved (the full check, with the
-    SHA-256 and "reads as a mail", is made right before the mail goes to the trash)."""
-    try:
-        return eml_path(layout, email, row.file_path).stat().st_size == row.file_size
-    except OSError:
-        return False
+ITEM_CHUNK = 1000
+
+
+def recorded_ok(row: MailMessage) -> bool:
+    """Backed up as far as the index knows: a row is written only after its file is complete
+    on disk (§9). The full check (read, size, SHA-256) runs right before the mail leaves
+    Gmail, so a preview or Start never touches the disk."""
+    return bool(row.file_path) and (row.file_size or 0) > 0
+
+
+def insert_items(db: Session, offload_id: int, message_ids: list[int]) -> None:
+    """The offload's to-do rows, one bulk insert per 1,000 (not one ORM object per mail)."""
+    for part in chunked(list(message_ids), ITEM_CHUNK):
+        db.execute(
+            insert(MailOffloadItem),
+            [
+                {"offload_id": offload_id, "message_id": m, "result": MailItemResult.PENDING}
+                for m in part
+            ],
+        )
 
 
 def _brief(r: MailMessage) -> MailBrief:
@@ -232,7 +254,7 @@ def plan_offload(
             why[ALREADY] += 1
         elif as_utc(r.date) > cutoff:
             why[TOO_NEW] += 1  # spec 5.2: never offloaded
-        elif not file_ok(layout, account.email, r):
+        elif not recorded_ok(r):
             why[NOT_BACKED_UP] += 1
         else:
             kept.append(r)

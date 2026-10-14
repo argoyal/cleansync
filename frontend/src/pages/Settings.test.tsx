@@ -330,7 +330,7 @@ describe("setup wizard skip", () => {
   });
 });
 
-const MAIL_SETTINGS = { ...SETTINGS, mail_check_interval_s: 300, mail_min_age_days: 30, mail_batch_size: 100, mail_disk_floor_gb: 2, google_daily_budget_units: 10_000_000 };
+const MAIL_SETTINGS = { ...SETTINGS, mail_check_interval_s: 300, mail_min_age_days: 30, mail_disk_floor_gb: 2, google_daily_budget_units: 10_000_000 };
 
 describe("mail and Google API settings", () => {
   it("changes how often mail is checked and the offload and disk limits", async () => {
@@ -342,7 +342,6 @@ describe("mail and Google API settings", () => {
     await userEvent.clear(age);
     await userEvent.type(age, "60{Enter}");
     await waitFor(() => expect(calls.filter((c) => c.method === "PUT").at(-1)?.body).toEqual({ mail_min_age_days: 60 }));
-    expect(screen.getByLabelText("Mails per offload batch")).toHaveValue("100");
     expect(screen.getByLabelText("Pause the backup when free space drops below (GB)")).toHaveValue("2");
   });
 

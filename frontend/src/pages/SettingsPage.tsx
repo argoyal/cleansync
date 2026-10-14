@@ -320,13 +320,6 @@ function MailSettings() {
         onSave={(v) => save.mutate({ mail_min_age_days: v })}
       />
       <NumberSetting
-        label="Mails per offload batch"
-        value={settings.mail_batch_size}
-        min={1}
-        max={1000}
-        onSave={(v) => save.mutate({ mail_batch_size: v })}
-      />
-      <NumberSetting
         label="Pause the backup when free space drops below (GB)"
         value={settings.mail_disk_floor_gb}
         min={1}

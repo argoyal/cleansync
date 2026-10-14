@@ -79,6 +79,7 @@ from app.services.mail.offload_plan import (
     candidates,
     chunked,
     describe_pick,
+    insert_items,
     plan_offload,
     rows_where_in,
 )
@@ -354,7 +355,7 @@ class MailOffloads:
                 )
 
         try:
-            return await asyncio.to_thread(work)  # stats every file: off the event loop
+            return await asyncio.to_thread(work)  # loads many rows: off the event loop
         except SearchError as e:
             raise MailError(str(e), 422) from e
 
@@ -378,9 +379,7 @@ class MailOffloads:
             )
             db.add(off)
             db.flush()
-            db.add_all(
-                MailOffloadItem(offload_id=off.id, message_id=mid) for mid in preview.message_ids
-            )
+            insert_items(db, off.id, preview.message_ids)
             db.commit()
             off_id = off.id
             record_event(
@@ -431,7 +430,7 @@ class MailOffloads:
             )
             db.add(off)
             db.flush()
-            db.add_all(MailOffloadItem(offload_id=off.id, message_id=r.id) for r in mine)
+            insert_items(db, off.id, [r.id for r in mine])
             db.commit()
             off_id = off.id
             record_event(

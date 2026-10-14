@@ -15,7 +15,6 @@ def test_defaults_match_spec(db):
         "log_retention_days": 30,
         "mail_check_interval_s": 300,
         "mail_min_age_days": 30,
-        "mail_batch_size": 100,
         "mail_disk_floor_gb": 2,
         "google_daily_budget_units": 10_000_000,
     }
@@ -56,8 +55,6 @@ def test_invalid_values_rejected(db, bad):
         {"default_max_deletions": 1_000_001},
         {"log_retention_days": 3651},
         {"mail_check_interval_s": 42},
-        {"mail_batch_size": 0},
-        {"mail_batch_size": 1001},
         {"mail_min_age_days": 3651},
         {"mail_disk_floor_gb": 10_001},
         {"google_daily_budget_units": 40_000_001},  # half of Google's 80M paid line
@@ -79,3 +76,10 @@ def test_upper_bounds_are_accepted(db):
         "google_daily_budget_units": 40_000_000,
     }
     assert set_settings(db, ok)["max_parallel_pairs"] == 8
+
+
+def test_old_batch_size_is_ignored(db):
+    out = set_settings(db, {"mail_batch_size": 50, "mail_min_age_days": 31})
+    assert "mail_batch_size" not in out
+    assert out["mail_min_age_days"] == 31
+    assert "mail_batch_size" not in get_all(db)

@@ -126,3 +126,30 @@ def test_the_list_walk_reads_an_index_in_order(db, big_account, view):
     plan = _plan(db, listing.walk_statement(conds, (T0, "t5", 10)))
     assert "TEMP B-TREE" not in plan, plan  # no sort of the whole mailbox
     assert "ix_mail_messages_account_date_thread" in plan, plan
+
+
+def test_offload_preview_and_start_rows_stay_fast(db, big_account, monkeypatch):
+    """§9: 50,000 mails, no file touched, planning and the bulk insert stay quick."""
+    from app.models import MailOffload
+    from app.services.mail import offload_plan
+    from app.services.mail.offload_plan import Pick, insert_items, plan_offload
+
+    def _touched(*_a, **_k):
+        raise AssertionError("file touched")
+
+    monkeypatch.setattr(offload_plan, "eml_path", _touched)
+    acc = big_account
+    pick = Pick(q="from:example.com", view="all")
+    prev, ms = _timed(
+        lambda: plan_offload(
+            db, None, acc, pick, min_age_days=1, now=datetime(2026, 10, 14, tzinfo=UTC)
+        )
+    )
+    assert prev.count > 30_000
+    assert ms < 15_000
+    off = MailOffload(account_id=acc.id, filter_text="x", total=prev.count)
+    db.add(off)
+    db.flush()
+    _, ms2 = _timed(lambda: insert_items(db, off.id, prev.message_ids))
+    db.commit()
+    assert ms2 < 15_000

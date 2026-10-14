@@ -14,7 +14,6 @@ DEFAULTS: dict[str, object] = {
     # Mail (spec §8)
     "mail_check_interval_s": 300,
     "mail_min_age_days": 30,
-    "mail_batch_size": 100,
     "mail_disk_floor_gb": 2,
     # Google API (spec §7): one eighth of Google's 80M free line
     "google_daily_budget_units": 10_000_000,
@@ -32,7 +31,6 @@ MAX_VALUES = {
     "default_max_deletions": 1_000_000,
     "log_retention_days": 3650,
     "mail_min_age_days": 3650,
-    "mail_batch_size": 1000,
     "mail_disk_floor_gb": 10_000,
     "google_daily_budget_units": 40_000_000,  # half of Google's 80M paid line
 }
@@ -76,7 +74,13 @@ def get_all(db: Session) -> dict[str, object]:
     return {k: get_setting(db, k) for k in DEFAULTS}
 
 
+REMOVED = (
+    "mail_batch_size",
+)  # 0.5.2: removed; still accepted and ignored so an old open tab can save
+
+
 def set_settings(db: Session, values: dict[str, object]) -> dict[str, object]:
+    values = {k: v for k, v in values.items() if k not in REMOVED}
     for k, v in values.items():
         _validate(k, v)
     for k, v in values.items():

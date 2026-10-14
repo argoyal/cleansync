@@ -5,7 +5,6 @@ from app.models.enums import MailPhase, MailState, ServiceKind, ServiceState
 from app.services.accounts.services import set_service_state
 from app.services.app_settings import set_settings
 from app.services.mail.index import sync_state
-from app.services.mail.store import eml_path
 from app.services.queue import MISSING_DISK_MSG
 
 
@@ -34,9 +33,8 @@ async def test_the_preview_leaves_out_new_mail_unbacked_mail_and_mail_already_go
     await box.backup()
     db.get(MailMessage, box.row("Old photos").id).state = MailState.OFFLOADED
     db.commit()
-    eml_path(box.app.state.layout, box.acc.email, box.row("Ancient note").file_path).write_bytes(
-        b"short"
-    )
+    db.get(MailMessage, box.row("Ancient note").id).file_size = 0  # no file recorded (0.5.2)
+    db.commit()
     p = _preview(auth_client, box.acc, q="newer_than:3y").json()  # every mail in Gmail
     assert p["count"] == 2  # Old statement, Last month
     assert p["excluded"] == [
@@ -91,13 +89,14 @@ async def test_refusals_change_nothing(auth_client, offload_box, db, app):
     ]  # nothing changed in Gmail
 
 
-async def test_a_preview_without_the_mail_folder_offers_nothing(auth_client, offload_box, app):
+async def test_a_preview_does_not_look_at_the_disk(auth_client, offload_box, app):
+    """0.5.2 §9: the preview reads the index only. A missing file is caught right before the
+    mail would leave Gmail (see test_a_missing_file_is_never_trashed)."""
     box = offload_box
     await box.backup()
-    shutil.rmtree(app.state.layout.mail_root)  # the disk answers, but the saved mail is gone
+    shutil.rmtree(app.state.layout.mail_root)
     p = _preview(auth_client, box.acc, q="older_than:1y").json()
-    assert p["count"] == 0 and p["bytes"] == 0 and p["largest"] == []
-    assert [(e["reason"], e["count"]) for e in p["excluded"]] == [("not_backed_up", 3)]
+    assert p["count"] == 3 and p["excluded"] == []
 
 
 async def test_a_preview_waits_while_the_mailbox_is_being_listed_again(
