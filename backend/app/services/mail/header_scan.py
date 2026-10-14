@@ -80,6 +80,11 @@ class HeaderScan:
             if not self.mail.queue.is_busy(account_id):
                 self.mail.queue.request(account_id, "header_scan", {})
 
+    async def _disk_gone(self) -> bool:
+        return bool(
+            await self.mail.stopped() or not await asyncio.to_thread(self.layout.mail_root.is_dir)
+        )
+
     async def _run(self, account_id: int, args: dict, trigger: str) -> None:
         with self.sf() as db:
             acc = db.get(Account, account_id)
@@ -89,9 +94,7 @@ class HeaderScan:
         done = 0
         while done < RUN_LIMIT:
             # A missing disk is not every mail's fault: stop, mark nothing (Review Focus 1).
-            if await self.mail.stopped() or not await asyncio.to_thread(
-                self.layout.mail_root.is_dir
-            ):
+            if await self._disk_gone():
                 return
             with self.sf() as db:
                 rows = db.execute(
@@ -112,6 +115,8 @@ class HeaderScan:
                 ]
 
             found = await asyncio.to_thread(read_all)
+            if await self._disk_gone():  # it dropped out during the read: nothing was read
+                return
             with self.sf() as db:
                 for rid, got in found:
                     lu, lup, sender = got if got is not None else (None, None, None)

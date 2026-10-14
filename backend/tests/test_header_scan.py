@@ -129,3 +129,39 @@ async def test_scan_progress(offload_box):
     await box.mail.handle(box.acc.id, "header_scan", {}, "SCHEDULE")
     with box.app.state.session_factory() as db:
         assert scan_progress(db, box.acc.id) == (total, total)
+
+
+async def test_disk_lost_during_the_read_marks_nothing(offload_box, monkeypatch):
+    box = offload_box
+    await _old_box(box)
+    root = box.app.state.layout.mail_root
+    moved = root.with_name(root.name + "-away")
+    real = header_scan.read_headers
+
+    def read_then_lose_disk(path):
+        got = real(path)
+        if root.exists():
+            root.rename(moved)
+        return got
+
+    monkeypatch.setattr(header_scan, "read_headers", read_then_lose_disk)
+    try:
+        await box.mail.handle(box.acc.id, "header_scan", {}, "SCHEDULE")
+    finally:
+        if moved.exists():
+            moved.rename(root)
+    assert not any(r.headers_scanned for r in box.rows_all())
+    assert box.queue.requests == []
+
+
+async def test_tick_does_not_ask_when_mail_is_not_active(offload_box):
+    from app.models.enums import ServiceKind, ServiceState
+    from app.services.accounts.services import set_service_state
+
+    box = offload_box
+    await box.backup()
+    _make_old(box)
+    with box.app.state.session_factory() as db:
+        set_service_state(db, box.acc.id, ServiceKind.MAIL, ServiceState.PAUSED)
+    box.app.state.header_scan.ask_when_needed()
+    assert box.queue.requests == []
