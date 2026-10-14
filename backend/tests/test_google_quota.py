@@ -37,6 +37,7 @@ def test_one_table_has_a_cost_for_every_call_cleansync_makes():
         "drive.files.get",
         "drive.files.create",
         "drive.files.delete",
+        "drive.about.get",
     }
     assert cost("gmail.messages.get") == 20  # the higher of the published numbers
     assert cost("gmail.messages.import.upload") == 0  # a resumable import counts once

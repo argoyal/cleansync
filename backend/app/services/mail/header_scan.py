@@ -110,9 +110,15 @@ class HeaderScan:
                 return
 
             def read_all(batch=rows):
-                return [
-                    (rid, read_headers(eml_path(self.layout, email, rel))) for rid, rel in batch
-                ]
+                out = []
+                for rid, rel in batch:
+                    try:
+                        got = read_headers(eml_path(self.layout, email, rel))
+                    except Exception:  # a bad stored path: unreadable, like a missing file
+                        log.warning("header scan: mail %s has a path CleanSync can't use", rid)
+                        got = None
+                    out.append((rid, got))
+                return out
 
             found = await asyncio.to_thread(read_all)
             if await self._disk_gone():  # it dropped out during the read: nothing was read

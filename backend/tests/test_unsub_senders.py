@@ -179,6 +179,29 @@ def test_newest_with_link(db, make_account):
     assert newest_with_link(db, acc.id, OWN, "none@x.com") is None
 
 
+def test_newest_with_link_is_one_exact_address(db, make_account):
+    from sqlalchemy import event
+
+    acc = make_account()
+    tech = mail(db, acc, "technews@shop.com", days=0, lu="<https://tech.example/u>")
+    news = mail(db, acc, "news@shop.com", days=2, lu="<https://news.example/u>")
+    seen: list[str] = []
+
+    def spy(conn, cursor, statement, *a):
+        seen.append(statement)
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", spy)
+    try:
+        got = newest_with_link(db, acc.id, OWN, "News@Shop.com")
+    finally:
+        event.remove(engine, "before_cursor_execute", spy)
+    assert got.address == "news@shop.com" and got.newest_mail_id == news.id != tech.id
+    (sql,) = [q for q in seen if "FROM mail_messages m" in q]
+    assert "m.sender = ?" in sql and "LIKE" not in sql  # exact, so the index is used
+    assert newest_with_link(db, acc.id, OWN, "news@shop.com.au") is None
+
+
 def test_api_list_and_mark(auth_client, db, make_account):
     acc = make_account(email=OWN)
     for _ in range(3):

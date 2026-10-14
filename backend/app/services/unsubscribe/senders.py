@@ -80,7 +80,7 @@ class SenderRow:
     newest_mail_id: int
 
 
-def _build(account_id, own_email, tab, q):
+def _build(account_id, own_email, tab, q, *, address: str | None = None):
     if tab not in TABS:
         raise ValueError(f"unknown tab {tab!r}")
     params: dict = {
@@ -93,6 +93,9 @@ def _build(account_id, own_email, tab, q):
         escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         params["q"] = f"%{escaped}%"
         search = "AND (m.sender LIKE :q ESCAPE '\\' OR m.from_addr LIKE :q ESCAPE '\\')"
+    if address is not None:  # one sender, matched exactly (the index on sender is used)
+        params["address"] = address.lower()
+        search += " AND m.sender = :address"
     if tab in ("unsubscribed", "kept", "auto_archived"):
         params["status"] = tab
     return SENDERS_SQL.format(search=search, having=_HAVING[tab]), params
@@ -154,13 +157,9 @@ def suggested_count(db: Session, account_id: int, own_email: str) -> int:
 def newest_with_link(
     db: Session, account_id: int, own_email: str, address: str
 ) -> SenderRow | None:
-    sql, params = _build(account_id, own_email, "all", address.lower())
-    params["q"] = address.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    # An exact match: the LIKE above only narrows the work.
-    for r in db.execute(text(sql), params):
-        if r.address == address.lower():
-            return _row(r)
-    return None
+    sql, params = _build(account_id, own_email, "all", "", address=address)
+    r = db.execute(text(sql), params).first()
+    return _row(r) if r is not None else None
 
 
 def set_status(

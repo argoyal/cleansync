@@ -40,6 +40,7 @@ UNIT_COSTS: dict[str, int] = {
     "drive.files.get": 1,
     "drive.files.create": 1,
     "drive.files.delete": 1,
+    "drive.about.get": 1,
 }
 # rclone's Drive calls don't go through CleanSync's client: each run is estimated.
 DRIVE_UNITS_PER_RUN = 100

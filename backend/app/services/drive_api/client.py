@@ -201,7 +201,7 @@ class DriveApi:
         try:
             resp = await self._call(
                 remote_name,
-                "drive.files.get",
+                "drive.about.get",
                 "GET",
                 ABOUT_URL,
                 params={"fields": "user(photoLink)"},

@@ -91,6 +91,21 @@ async def test_unreadable_file_is_marked_scanned_without_header(offload_box):
     assert box.queue.requests == []
 
 
+async def test_a_bad_stored_path_is_marked_scanned_and_the_rest_go_on(offload_box):
+    box = offload_box
+    await _old_box(box)
+    with box.app.state.session_factory() as db:
+        db.execute(
+            text("UPDATE mail_messages SET file_path='../../outside.eml' WHERE subject='Big sale'")
+        )
+        db.commit()
+    await box.mail.handle(box.acc.id, "header_scan", {}, "SCHEDULE")
+    bad = box.row("Big sale")
+    assert bad.headers_scanned is True and bad.list_unsubscribe is None
+    assert all(r.headers_scanned for r in box.rows_all())
+    assert box.row("Yesterday").sender  # the others were read
+
+
 async def test_missing_disk_marks_nothing(offload_box, monkeypatch):
     box = offload_box
     await _old_box(box)

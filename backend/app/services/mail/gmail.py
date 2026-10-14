@@ -350,24 +350,36 @@ class GmailAdapter:
         except MailApiError as e:
             if e.status != 400 or isinstance(e, FiltersRefused):
                 raise
-            # Gmail says 400 when the same filter exists: take the one it already has.
-            for f in await self.list_filters():
-                if f.from_.lower() == sender.lower() and f.removes_inbox:
-                    return f.id
+            # Gmail says 400 when the same filter exists: take the one it already has, but
+            # only when it is exactly ours. A filter the owner made with more parts is theirs.
+            for f in await self._raw_filters():
+                criteria, action = f.get("criteria") or {}, f.get("action") or {}
+                if (
+                    isinstance(criteria, dict)
+                    and set(criteria) == {"from"}
+                    and str(criteria["from"]).lower() == sender.lower()
+                    and action == {"removeLabelIds": ["INBOX"]}
+                ):
+                    return f["id"]
             raise
         fid = _json(resp).get("id")
         if not isinstance(fid, str) or not fid:
             raise MailApiError("Gmail gave an unexpected answer")
         return fid
 
-    async def list_filters(self) -> list[GmailFilter]:
+    async def _raw_filters(self) -> list[dict]:
         data = _json(
             await self._settings("gmail.settings.filters.list", "GET", "/settings/filters")
         )
+        return [
+            f
+            for f in data.get("filter") or []
+            if isinstance(f, dict) and isinstance(f.get("id"), str)
+        ]
+
+    async def list_filters(self) -> list[GmailFilter]:
         out = []
-        for f in data.get("filter") or []:
-            if not isinstance(f, dict) or not isinstance(f.get("id"), str):
-                continue
+        for f in await self._raw_filters():
             criteria, action = f.get("criteria") or {}, f.get("action") or {}
             out.append(
                 GmailFilter(

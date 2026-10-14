@@ -9,6 +9,7 @@ from app.core.clock import utcnow
 from app.models import Account
 from app.services.accounts.oauth import ABOUT_URL, fetch_about
 from app.services.accounts.photos import PHOTO_MAX, allowed_photo_url, photo_path, save_photo
+from app.services.google.quota import cost
 from app.services.rclone.runner import RunResult
 
 URL = "https://lh3.googleusercontent.com/a/photo=s96"
@@ -205,6 +206,16 @@ async def test_drive_api_photo_link():
         return answers.pop(0)
 
     api = DriveApi(Tokens(), lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    ops = []
+    real_send = api._send
+
+    async def counted(remote, op, *a, **kw):
+        ops.append(op)
+        return await real_send(remote, op, *a, **kw)
+
+    api._send = counted
     assert await api.photo_link("gd_a") == URL
     assert seen == [("user(photoLink)", "Bearer tok")]
+    assert ops == ["drive.about.get"]  # counted under its own name, at 1 unit
+    assert cost("drive.about.get") == 1
     assert await api.photo_link("gd_a") is None

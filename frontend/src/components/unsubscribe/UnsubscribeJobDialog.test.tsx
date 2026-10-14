@@ -17,7 +17,7 @@ const JOB = {
   created_at: "2026-10-14T08:00:00Z",
   finished_at: null,
   items: [
-    { address: "a@x.example", outcome: "unsubscribed", method: "one_click", note: "Unsubscribed (one-click).", link: "https://x.example/u" },
+    { address: "a@x.example", outcome: "unsubscribed", method: "one_click", note: "Done by the one-click request.", link: "https://x.example/u" },
     { address: "b@x.example", outcome: "auto_archived", method: "filter", note: null, link: null },
     { address: "c@x.example", outcome: "kept", method: null, note: null, link: null },
     { address: "d@x.example", outcome: "not_confirmed", method: null, note: "No model to check the page. Open it to finish.", link: "https://d.example/u?t=1" },
@@ -31,7 +31,7 @@ describe("the unsubscribe job window", () => {
     mockApi({ "GET /api/mail/unsubscribe/jobs/5": JOB });
     renderApp(<UnsubscribeJobDialog accountId={1} jobId={5} onClose={() => undefined} />);
     expect(await screen.findByText("5 of 6 done")).toBeInTheDocument();
-    expect(screen.getByText("a@x.example: Unsubscribed (Unsubscribed (one-click).)")).toBeInTheDocument();
+    expect(screen.getByText("a@x.example: Unsubscribed (Done by the one-click request.)")).toBeInTheDocument();
     expect(screen.getByText("b@x.example: Auto-archived")).toBeInTheDocument();
     expect(screen.getByText("c@x.example: Kept")).toBeInTheDocument();
     expect(screen.getByText("d@x.example: Couldn't confirm (No model to check the page. Open it to finish.)")).toBeInTheDocument();

@@ -172,7 +172,7 @@ async def test_one_click_success(box, db):
     job_id = await box.run("unsubscribe", ["Shop@X.com"])
     it = box.item(job_id)
     assert (it.address, it.outcome, it.method) == ("shop@x.com", "unsubscribed", "one_click")
-    assert it.note == "Unsubscribed (one-click)."
+    assert it.note == "Done by the one-click request."
     assert it.link == "https://x.example/u/1"
     s = box.sender("shop@x.com")
     assert (s.status, s.method) == ("unsubscribed", "one_click")
@@ -186,7 +186,7 @@ async def test_post_fails_get_works(box, db):
     box.routes[("POST", "/u/1")] = (405, "text/plain", "no")
     box.routes[("GET", "/u/1")] = ok()
     it = box.item(await box.run("unsubscribe", ["shop@x.com"]))
-    assert (it.outcome, it.method, it.note) == ("unsubscribed", "link", "Unsubscribed (link).")
+    assert (it.outcome, it.method, it.note) == ("unsubscribed", "link", "Done by opening the link.")
 
 
 async def test_no_post_header_no_post(box, db):
@@ -229,7 +229,11 @@ def _form_box(box, db, reply="You have been unsubscribed."):
 async def test_form_confirmed(box, db):
     _form_box(box, db)
     it = box.item(await box.run("unsubscribe", ["shop@x.com"]))
-    assert (it.outcome, it.method, it.note) == ("unsubscribed", "form", "Unsubscribed (form).")
+    assert (it.outcome, it.method, it.note) == (
+        "unsubscribed",
+        "form",
+        "Done by filling in the form.",
+    )
     assert box.connections.asked == [AiTaskName.UNSUBSCRIBE]
     assert "You have been unsubscribed." in box.ai.calls[0]
     assert box.sender("shop@x.com").status == "unsubscribed"
@@ -399,7 +403,7 @@ async def test_keep_removes_our_filter(box):
     assert len(box.ob.fake.filters) == 1
     job_id = await box.run("keep", ["shop@x.com"])
     it = box.item(job_id)
-    assert (it.outcome, it.note) == ("kept", "Kept. CleanSync won't suggest this sender again.")
+    assert (it.outcome, it.note) == ("kept", "CleanSync won't suggest this sender again.")
     assert box.ob.fake.filters == {}
     s = box.sender("shop@x.com")
     assert (s.status, s.filter_id) == ("kept", None)

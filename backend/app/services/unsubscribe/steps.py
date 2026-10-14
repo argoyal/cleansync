@@ -41,9 +41,13 @@ FORM_NOT_SIMPLE_MSG = "The page needs you to finish it. Open it to finish."
 MAILTO_ONLY_MSG = "Write to this address to unsubscribe, or turn on Allow Gmail filters."
 FILTER_CAP_MSG = "Gmail allows 1,000 filters and this mailbox has {n}. Remove some in Gmail first."
 KEEP_NEEDS_FILTERS_MSG = "Turn on Allow Gmail filters to remove CleanSync's filter for this sender."
-DONE_UNSUBSCRIBED = "Unsubscribed ({how})."  # how: "one-click", "link", "form"
+# The notes never start with the outcome word: the job window shows "Unsubscribed (note)".
+DONE_UNSUBSCRIBED = "Done by {how}."
+HOW_ONE_CLICK = "the one-click request"
+HOW_LINK = "opening the link"
+HOW_FORM = "filling in the form"
 DONE_FILTER = "Their new mail skips the Inbox."
-DONE_KEPT = "Kept. CleanSync won't suggest this sender again."
+DONE_KEPT = "CleanSync won't suggest this sender again."
 ERROR_ANSWER_MSG = "{host} answered with an error ({status})."
 
 FILTER_CAP = 990
@@ -194,7 +198,7 @@ class Ladder:
                 return StepResult(
                     UNSUBSCRIBED,
                     UnsubscribeMethod.ONE_CLICK.value,
-                    DONE_UNSUBSCRIBED.format(how="one-click"),
+                    DONE_UNSUBSCRIBED.format(how=HOW_ONE_CLICK),
                     link,
                 )
         # (b) visit the link
@@ -204,7 +208,7 @@ class Ladder:
             return StepResult(
                 UNSUBSCRIBED,
                 UnsubscribeMethod.LINK.value,
-                DONE_UNSUBSCRIBED.format(how="link"),
+                DONE_UNSUBSCRIBED.format(how=HOW_LINK),
                 link,
             )
         # (c) a simple form, checked by the model
@@ -224,7 +228,7 @@ class Ladder:
             return StepResult(
                 UNSUBSCRIBED,
                 UnsubscribeMethod.FORM.value,
-                DONE_UNSUBSCRIBED.format(how="form"),
+                DONE_UNSUBSCRIBED.format(how=HOW_FORM),
                 link,
             )
         note = {"no_model": NO_MODEL_MSG, "paused": MODEL_PAUSED_MSG}.get(

@@ -50,6 +50,41 @@ def test_exists_answer_without_a_match_is_an_error():
         _run(fake_adapter(fake).create_filter("a@x.com"))
 
 
+@pytest.mark.parametrize(
+    "owners",
+    [
+        {
+            "criteria": {"from": "a@x.com", "subject": "sale"},
+            "action": {"removeLabelIds": ["INBOX"]},
+        },
+        {
+            "criteria": {"from": "a@x.com"},
+            "action": {"removeLabelIds": ["INBOX"], "addLabelIds": ["Label_9"]},
+        },
+        {"criteria": {"from": "a@x.com"}, "action": {"removeLabelIds": ["INBOX", "UNREAD"]}},
+    ],
+)
+def test_exists_answer_never_adopts_an_owner_filter_with_more_parts(owners):
+    from app.services.mail.adapter import MailApiError
+
+    fake = FakeGmail()
+    fake.filters["OWN1"] = {"id": "OWN1", **owners}
+    fake.fail("POST", "/settings/filters", 400)
+    with pytest.raises(MailApiError):
+        _run(fake_adapter(fake).create_filter("a@x.com"))
+
+
+def test_exists_answer_adopts_the_exact_same_filter():
+    fake = FakeGmail()
+    fake.filters["SAME1"] = {
+        "id": "SAME1",
+        "criteria": {"from": "A@x.com"},
+        "action": {"removeLabelIds": ["INBOX"]},
+    }
+    fake.fail("POST", "/settings/filters", 400)
+    assert _run(fake_adapter(fake).create_filter("a@x.com")) == "SAME1"
+
+
 def test_scope_refused_raises_filters_refused():
     fake = FakeGmail(settings_scope=False)
     adapter = fake_adapter(fake)
