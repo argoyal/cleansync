@@ -47,6 +47,7 @@ FORM_PAGE = """<html><body><form method="post" action="/done">
 CAPTCHA_PAGE = """<html><body><form method="post" action="/done">
 <div class="g-recaptcha"></div><button type="submit">Go</button></form></body></html>"""
 TARGET = AiTarget(1, "http://model/v1", None, {}, "m", 0.0, 5)
+ONE_CLICK = "List-Unsubscribe=One-Click"
 
 
 class FakeAi:
@@ -104,6 +105,8 @@ class Box:
         got = self.routes.get(key, (404, "text/plain", "no"))
         if callable(got):
             got = got(req)
+        if isinstance(got, httpx.Response):
+            return got
         status, ctype, body = got
         return httpx.Response(status, text=body, headers={"content-type": ctype})
 
@@ -164,7 +167,7 @@ def ok(ctype="text/plain", body="ok"):
 
 
 async def test_one_click_success(box, db):
-    mail(db, box.acc, "shop@x.com", lu="<https://x.example/u/1>")
+    mail(db, box.acc, "shop@x.com", lu="<https://x.example/u/1>", lup=ONE_CLICK)
     box.routes[("POST", "/u/1")] = ok()
     job_id = await box.run("unsubscribe", ["Shop@X.com"])
     it = box.item(job_id)
@@ -179,11 +182,41 @@ async def test_one_click_success(box, db):
 
 
 async def test_post_fails_get_works(box, db):
-    mail(db, box.acc, "shop@x.com", lu="<https://x.example/u/1>")
+    mail(db, box.acc, "shop@x.com", lu="<https://x.example/u/1>", lup="list-unsubscribe=one-click")
     box.routes[("POST", "/u/1")] = (405, "text/plain", "no")
     box.routes[("GET", "/u/1")] = ok()
     it = box.item(await box.run("unsubscribe", ["shop@x.com"]))
     assert (it.outcome, it.method, it.note) == ("unsubscribed", "link", "Unsubscribed (link).")
+
+
+async def test_no_post_header_no_post(box, db):
+    mail(db, box.acc, "shop@x.com", lu="<https://x.example/u/1>")
+    box.routes[("POST", "/u/1")] = ok()
+    box.routes[("GET", "/u/1")] = ok()
+    it = box.item(await box.run("unsubscribe", ["shop@x.com"]))
+    assert (it.outcome, it.method) == ("unsubscribed", "link")
+    assert box.calls[("POST", "/u/1")] == 0 and box.calls[("GET", "/u/1")] == 1
+
+
+async def test_post_header_without_one_click_no_post(box, db):
+    mail(db, box.acc, "shop@x.com", lu="<https://x.example/u/1>", lup="List-Unsubscribe=Other")
+    box.routes[("POST", "/u/1")] = ok()
+    box.routes[("GET", "/u/1")] = ok()
+    it = box.item(await box.run("unsubscribe", ["shop@x.com"]))
+    assert it.method == "link" and box.calls[("POST", "/u/1")] == 0
+
+
+async def test_redirected_post_is_not_one_click(box, db):
+    mail(db, box.acc, "shop@x.com", lu="<https://x.example/u/1>", lup=ONE_CLICK)
+    box.routes[("POST", "/u/1")] = httpx.Response(
+        302, headers={"location": "https://x.example/landing"}
+    )
+    box.routes[("GET", "/landing")] = ok()
+    box.routes[("GET", "/u/1")] = ok()
+    it = box.item(await box.run("unsubscribe", ["shop@x.com"]))
+    assert (it.outcome, it.method) == ("unsubscribed", "link")
+    assert box.calls[("GET", "/landing")] == 1  # the POST was turned into a GET
+    assert box.calls[("GET", "/u/1")] == 1  # so the link itself is visited (step b)
 
 
 def _form_box(box, db, reply="You have been unsubscribed."):
@@ -247,6 +280,7 @@ async def test_private_link_refused_then_next_link(box, db):
         box.acc,
         "shop@x.com",
         lu="<https://inside.example/a>, <https://x.example/b>",
+        lup=ONE_CLICK,
     )
     box.routes[("POST", "/a")] = ok()
     box.routes[("POST", "/b")] = ok()
@@ -308,11 +342,15 @@ async def test_body_link_used_when_header_has_only_mailto_and_filters_off(box, d
     (folder / "body.eml").write_bytes(eml)
     m.file_path = "body.eml"
     db.commit()
+    m.list_unsubscribe_post = ONE_CLICK  # it speaks of the header's link, not the body's
+    db.commit()
     box.routes[("POST", "/body-unsub")] = ok()
+    box.routes[("GET", "/body-unsub")] = ok()
     it = box.item(await box.run("unsubscribe", ["shop@x.com"]))
-    assert (it.outcome, it.method) == ("unsubscribed", "one_click")
+    assert (it.outcome, it.method) == ("unsubscribed", "link")
     assert it.link == "https://x.example/body-unsub?id=7"
-    assert box.calls[("POST", "/body-unsub")] == 1
+    assert box.calls[("POST", "/body-unsub")] == 0  # a body link never gets the POST
+    assert box.calls[("GET", "/body-unsub")] == 1
 
 
 # ---- Gmail filters ------------------------------------------------------------------------
@@ -425,7 +463,7 @@ async def test_addresses_cleaned_and_empty_refused(box):
 
 async def test_stop(box, db):
     for n in (1, 2, 3):
-        mail(db, box.acc, f"s{n}@x.com", lu=f"<https://x.example/u/{n}>")
+        mail(db, box.acc, f"s{n}@x.com", lu=f"<https://x.example/u/{n}>", lup=ONE_CLICK)
 
     job_ids = []
 
@@ -454,7 +492,7 @@ async def test_stop_a_waiting_job(box):
 
 async def test_recover_and_resume(box, db):
     for n in (1, 2, 3):
-        mail(db, box.acc, f"s{n}@x.com", lu=f"<https://x.example/u/{n}>")
+        mail(db, box.acc, f"s{n}@x.com", lu=f"<https://x.example/u/{n}>", lup=ONE_CLICK)
         box.routes[("POST", f"/u/{n}")] = ok()
     job_id = _job(
         box, UnsubscribeJobState.RUNNING, ["s1@x.com", "s2@x.com", "s3@x.com"], done_first=True
@@ -472,7 +510,7 @@ async def test_recover_and_resume(box, db):
 
 async def test_unexpected_error_goes_on(box, db, monkeypatch):
     mail(db, box.acc, "s1@x.com", lu="<https://x.example/u/1>")
-    mail(db, box.acc, "s2@x.com", lu="<https://x.example/u/2>")
+    mail(db, box.acc, "s2@x.com", lu="<https://x.example/u/2>", lup=ONE_CLICK)
     box.routes[("POST", "/u/2")] = ok()
     real = Ladder.unsubscribe
 

@@ -160,6 +160,10 @@ class Ladder:
 
     async def unsubscribe(self, sender: SenderRow, *, filters: FilterGate) -> StepResult:
         links = parse_list_unsubscribe(sender.newest_unsubscribe)
+        # The one-click request only when the sender says it takes one (RFC 8058), and only
+        # for the header's links.
+        one_click = "one-click" in (sender.newest_unsubscribe_post or "").lower()
+        header_links = set(links.web)
         if not links.web:
             found = await asyncio.to_thread(self._body_link, sender.newest_mail_id)
             if found:
@@ -168,7 +172,7 @@ class Ladder:
             last_error = NO_LINK_MSG
             for link in links.web:
                 try:
-                    return await self._try_link(link)
+                    return await self._try_link(link, one_click=one_click and link in header_links)
                 except (RefusedAddress, WebTrouble, _LinkFailed) as e:
                     last_error = str(e)
                     log.info("unsubscribe link on %s didn't work: %s", host_of(link), last_error)
@@ -181,16 +185,18 @@ class Ladder:
             return res
         return StepResult(NOT_CONFIRMED, None, NO_LINK_MSG, None)
 
-    async def _try_link(self, link: str) -> StepResult:
-        # (a) the one-click request
-        ans = await self.web.request("POST", link, form={"List-Unsubscribe": "One-Click"})
-        if _ok(ans):
-            return StepResult(
-                UNSUBSCRIBED,
-                UnsubscribeMethod.ONE_CLICK.value,
-                DONE_UNSUBSCRIBED.format(how="one-click"),
-                link,
-            )
+    async def _try_link(self, link: str, *, one_click: bool) -> StepResult:
+        # (a) the one-click request. A POST answered after a redirect was turned into a GET
+        # of another page, so it doesn't count.
+        if one_click:
+            ans = await self.web.request("POST", link, form={"List-Unsubscribe": "One-Click"})
+            if _ok(ans) and ans.url == link:
+                return StepResult(
+                    UNSUBSCRIBED,
+                    UnsubscribeMethod.ONE_CLICK.value,
+                    DONE_UNSUBSCRIBED.format(how="one-click"),
+                    link,
+                )
         # (b) visit the link
         ans = await self.web.request("GET", link)
         _check(ans, link)

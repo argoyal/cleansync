@@ -24,6 +24,7 @@ def mail(
     unread=True,
     labels=("INBOX",),
     lu="<https://x.example/u>",
+    lup=None,
     state="in_mail",
     size=100,
     name="Shop",
@@ -44,6 +45,7 @@ def mail(
         file_path="x",
         state=state,
         list_unsubscribe=lu,
+        list_unsubscribe_post=lup,
         sender=sender,
         headers_scanned=True,
     )
