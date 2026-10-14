@@ -153,3 +153,33 @@ def test_offload_preview_and_start_rows_stay_fast(db, big_account, monkeypatch):
     _, ms2 = _timed(lambda: insert_items(db, off.id, prev.message_ids))
     db.commit()
     assert ms2 < 15_000
+
+
+def test_unsubscribe_sender_list_is_quick_and_uses_its_index(db, big_account):
+    """0.5.2 §3.2: the sender list is one GROUP BY; half the mail has a link."""
+    from app.services.unsubscribe.senders import SENDERS_SQL, list_senders
+
+    db.execute(
+        text(
+            "UPDATE mail_messages SET sender = 'person' || (id % 500) || '@example.com', "
+            "list_unsubscribe = '<https://e.example/u>', headers_scanned = 1 WHERE id % 2 = 0"
+        )
+    )
+    db.commit()
+    db.execute(text("ANALYZE"))
+    db.commit()
+    for tab in ("all", "suggested"):
+        (rows, total), ms = _timed(
+            lambda tab=tab: list_senders(db, big_account.id, "me@example.com", tab=tab)
+        )
+        print(f"unsubscribe senders {tab}: {len(rows)} of {total}, {ms:.0f} ms")
+        assert ms < SLOW_MS * 2
+    sql = SENDERS_SQL.format(search="", having="")
+    plan = " | ".join(
+        str(r[-1])
+        for r in db.execute(
+            text(f"EXPLAIN QUERY PLAN {sql}"),
+            {"account_id": big_account.id, "own": "me@example.com", "in_mail": "in_mail"},
+        )
+    )
+    assert "ix_mail_unsub_sender" in plan, plan

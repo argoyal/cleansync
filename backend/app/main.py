@@ -33,6 +33,7 @@ from app.api import (
     serve,
     setup,
     system,
+    unsubscribe,
 )
 from app.auth.bootstrap import ensure_admin
 from app.auth.ratelimit import LoginLimiter
@@ -443,6 +444,7 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
         models_ai.router,
         rules.router,
         mail_offload.router,
+        unsubscribe.router,
         activity_jobs.router,
         system.router,
         google.router,
