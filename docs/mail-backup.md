@@ -1,6 +1,6 @@
 # Setting up mail backup
 
-CleanSync keeps a copy of every Gmail message on your server, as the original `.eml` file, and keeps it up to date every few minutes. It can then offload old or large mail out of Gmail, and put it back when you want. It never sends mail. With [mail rules](mail-rules.md) it can also sort new mail for you.
+CleanSync keeps a copy of every Gmail message on your server, as the original `.eml` file, and keeps it up to date every few minutes. It can then offload old or large mail out of Gmail, and put it back when you want. It never sends mail. With [mail rules](mail-rules.md) it can also sort new mail for you, and [Unsubscribe](mail-unsubscribe.md) helps you stop mail you don't want.
 
 ## 1. Let your Google client read mail
 

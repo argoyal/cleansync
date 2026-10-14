@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Unsubscribe** (Mail → CleanSync → Unsubscribe). Lists every sender whose mail has an unsubscribe link, with how many mails, how many you read and when the last came. Unsubscribe from one or many at once: CleanSync sends the sender's one-click request, or opens their link, or fills a simple form and has your model check the page. Senders it can't reach can be kept out of your Inbox with a Gmail filter (**Allow Gmail filters** in Settings → Accounts, off by default). Old mail is scanned once in the background. See docs/mail-unsubscribe.md.
+- **Account photos.** Each mailbox shows its Google profile picture in Settings → Accounts and the account switcher.
+- **Big offloads start quickly.** The preview and Start no longer check every mail's file on disk, which could take minutes on Docker Desktop or a network disk and run into a proxy's time limit. Each mail is still fully checked right before it leaves Gmail.
+- **Settings.** "Mails per offload batch" is gone; it wasn't used since 0.5.0 (offload works 1,000 at a time).
+- Upgrading: database upgrade 0014 runs by itself on start.
+
 ## 0.5.1 — 2026-10-13
 
 Fixes after 0.5.0.

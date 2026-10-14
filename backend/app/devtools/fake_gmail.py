@@ -715,6 +715,35 @@ def sample_mailbox(fake: FakeGmail, now: datetime) -> None:
     add(make_mail("Unfinished", sender=me, when=days(1)), labels=("DRAFT",), when=days(1))
 
 
+# The pretend site the unsubscribe browser test talks to (app.devtools.fake_unsub_site).
+UNSUB_SITE_PORT = 8766
+UNSUB_ONE_CLICK = ("one-click@promo.example", f"http://127.0.0.1:{UNSUB_SITE_PORT}/one-click")
+UNSUB_MAILTO = ("mailto-only@promo.example", "mailto:off@promo.example")
+
+
+def unsubscribe_mailbox(fake: FakeGmail, now: datetime) -> None:
+    """A small mailbox for the Unsubscribe browser test, kept apart from the sample mailbox
+    (other tests count that one): two senders with 3 unread mails each. The first can be
+    unsubscribed with a one-click request; the second only by writing to an address."""
+    for sender, target in (UNSUB_ONE_CLICK, UNSUB_MAILTO):
+        headers = {"List-Unsubscribe": f"<{target}>"}
+        if target.startswith("http"):
+            headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+        for n in range(1, 4):
+            when = now - timedelta(days=n)
+            fake.add(
+                make_mail(
+                    f"Offer {n} from {sender}",
+                    sender=sender,
+                    to=fake.email,
+                    when=when,
+                    headers=headers,
+                ),
+                labels=("INBOX", "UNREAD"),
+                when=when,
+            )
+
+
 def _subject(raw: bytes) -> str:
     return str(email.message_from_bytes(raw).get("Subject") or "").strip()
 

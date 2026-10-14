@@ -124,3 +124,26 @@ export function fakeGmailDelete(subject: string): boolean {
   }
   return true;
 }
+
+/** The requests the pretend unsubscribe site (app.devtools.fake_unsub_site) has recorded, or
+ * null without a way to ask it (see below). Needs E2E_CONTAINER (the site runs inside the
+ * container, as the app's own web client reaches it at 127.0.0.1) or E2E_UNSUB_SITE (its
+ * address when it runs on this machine, e.g. http://127.0.0.1:8766). In CI a missing name
+ * throws, so the check is never silently skipped. */
+export async function fakeUnsubHits(): Promise<{ method: string; path: string }[] | null> {
+  const name = process.env.E2E_CONTAINER;
+  const url = process.env.E2E_UNSUB_SITE;
+  if (!name && !url) {
+    if (process.env.CI) throw new Error("E2E_CONTAINER must name the container in CI, or the unsubscribe request check is skipped");
+    return null;
+  }
+  if (name) {
+    const out = execFileSync(
+      "docker",
+      ["exec", name, "python", "-c", "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/hits').read().decode())"],
+      { encoding: "utf8" },
+    );
+    return JSON.parse(out) as { method: string; path: string }[];
+  }
+  return (await (await fetch(`${url}/hits`)).json()) as { method: string; path: string }[];
+}

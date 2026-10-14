@@ -102,6 +102,8 @@ jobs:
         run: |
           docker exec -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 cs python -m app.devtools.seed_local_account alice@example.com --sample-files --sample-mail
           docker exec -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 cs python -m app.devtools.seed_local_account bob@example.com
+          # carol has a small mailbox of two senders to unsubscribe from (the Unsubscribe test).
+          docker exec -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 cs python -m app.devtools.seed_local_account carol@example.com --unsub-mail
       - name: Start the pretend model
         # For the rules browser test: CleanSync's server calls it at http://127.0.0.1:11999/v1.
         run: |
@@ -111,6 +113,16 @@ jobs:
             sleep 1
           done
           echo "The pretend model didn't start."
+          exit 1
+      - name: Start the pretend unsubscribe site
+        # For the Unsubscribe browser test: CleanSync's server posts a one-click request to it.
+        run: |
+          docker exec -d -e DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 cs python -m app.devtools.fake_unsub_site --port 8766
+          for i in $(seq 1 30); do
+            docker exec cs python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/hits')" && exit 0
+            sleep 1
+          done
+          echo "The pretend unsubscribe site didn't start."
           exit 1
       - uses: actions/setup-node@v4
         with:

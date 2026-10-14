@@ -5,6 +5,9 @@ import { defineConfig, devices } from "@playwright/test";
 // needs the pretend model (DRIVESYNC_ALLOW_LOCAL_ACCOUNTS=1 python -m app.devtools.fake_model, or
 // make fake-model) where the server can reach it;
 // E2E_FAKE_MODEL_URL says where, by default http://127.0.0.1:11999/v1.
+// The unsubscribe test needs the pretend account carol@example.com (seed_local_account carol@example.com
+// --unsub-mail) and the pretend unsubscribe site (python -m app.devtools.fake_unsub_site --port 8766)
+// where the server can reach it; E2E_UNSUB_SITE is its address when it runs on this machine.
 export default defineConfig({
   testDir: "./e2e",
   timeout: 180_000,
@@ -25,5 +28,8 @@ export default defineConfig({
     { name: "rules", testMatch: "rules.spec.ts", dependencies: ["chromium"], use: { ...devices["Desktop Chrome"] } },
     // After the rules test: it removes mail from the pretend Gmail for good, then restores it.
     { name: "permanent-delete", testMatch: "permanent-delete.spec.ts", dependencies: ["rules"], use: { ...devices["Desktop Chrome"] } },
+    // After the permanent-delete test: it uses its own pretend account (carol), so it only needs
+    // the pretend unsubscribe site (python -m app.devtools.fake_unsub_site --port 8766).
+    { name: "unsubscribe", testMatch: "unsubscribe.spec.ts", dependencies: ["permanent-delete"], use: { ...devices["Desktop Chrome"] } },
   ],
 });

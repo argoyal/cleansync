@@ -36,20 +36,26 @@ def write_samples(folder: Path) -> None:
     Image.new("RGB", (595, 842), "white").save(folder / "Reports" / "summary.pdf")
 
 
-def write_sample_mail(layout: Layout, email: str) -> Path:
-    """The pretend account's Gmail: the sample mailbox, saved where its mail adapter reads it."""
+def write_sample_mail(layout: Layout, email: str, unsubscribe: bool = False) -> Path:
+    """The pretend account's Gmail: the sample mailbox (or, for the Unsubscribe browser test,
+    the small unsubscribe one), saved where its mail adapter reads it."""
     from app.core.clock import utcnow
-    from app.devtools.fake_gmail import FakeGmail, sample_mailbox
+    from app.devtools.fake_gmail import FakeGmail, sample_mailbox, unsubscribe_mailbox
 
     fake = FakeGmail(email=email)
-    sample_mailbox(fake, utcnow())
+    (unsubscribe_mailbox if unsubscribe else sample_mailbox)(fake, utcnow())
     fake.path = layout.data / "fake-gmail" / f"{email}.json"
     fake.save()  # once, at the end: each change would rewrite the whole file
     return fake.path
 
 
 async def seed(
-    settings: Settings, email: str, folder: Path | None, samples: bool, mail: bool = False
+    settings: Settings,
+    email: str,
+    folder: Path | None,
+    samples: bool,
+    mail: bool = False,
+    unsub_mail: bool = False,
 ) -> str:
     if not settings.allow_local_accounts:
         raise SystemExit(
@@ -81,15 +87,15 @@ async def seed(
             await service.add_local_account(email, target)
         except (AccountError, UnsafeArgument) as e:
             raise SystemExit(str(e)) from e
-        if mail:
-            write_sample_mail(layout, email)
+        if mail or unsub_mail:
+            write_sample_mail(layout, email, unsubscribe=unsub_mail)
     finally:
         engine.dispose()
     text = (
         f"Added {email}. Its pretend Google Drive is {target}\n"
         "If the app is running, restart the app to pick up the new account."
     )
-    if mail:
+    if mail or unsub_mail:
         text += "\nIts pretend Gmail has sample mail; set up mail backup in the Mail section."
     return text
 
@@ -102,9 +108,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--sample-mail", action="store_true", help="give it a fake Gmail with sample mail"
     )
+    parser.add_argument(
+        "--unsub-mail",
+        action="store_true",
+        help="give it a fake Gmail with two senders to unsubscribe from (the browser test)",
+    )
     args = parser.parse_args(argv)
     print(
-        asyncio.run(seed(Settings(), args.email, args.folder, args.sample_files, args.sample_mail))
+        asyncio.run(
+            seed(
+                Settings(),
+                args.email,
+                args.folder,
+                args.sample_files,
+                args.sample_mail,
+                args.unsub_mail,
+            )
+        )
     )
     return 0
 

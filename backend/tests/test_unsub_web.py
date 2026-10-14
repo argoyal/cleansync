@@ -138,6 +138,17 @@ async def test_allow_private_for_tests_only():
     assert (await web.request("GET", "http://localhost/u")).status == 200
 
 
+async def test_allow_private_also_allows_other_ports_but_the_default_does_not():
+    # The browser test's pretend unsubscribe site listens on 8766: only the test switch allows it.
+    answers = {"localhost": ["127.0.0.1"], "127.0.0.1": ["127.0.0.1"]}
+    ok = httpx.MockTransport(lambda r: httpx.Response(200))
+    web = SafeWeb(resolve=resolver(answers), allow_private=True, transport=ok)
+    assert (await web.request("POST", "http://127.0.0.1:8766/one-click")).status == 200
+    strict = SafeWeb(resolve=resolver(answers), transport=ok)
+    with pytest.raises(RefusedAddress):
+        await strict.request("POST", "http://localhost:8766/one-click")
+
+
 async def test_no_addresses_and_timeout():
     web = SafeWeb(resolve=resolver({"x.com": []}))
     with pytest.raises(WebTrouble, match="couldn't be found"):

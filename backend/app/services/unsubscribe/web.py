@@ -124,12 +124,8 @@ class SafeWeb:
             parts is None
             or parts.scheme not in ("http", "https")
             or not host
-            or port
-            not in (
-                None,
-                80,
-                443,
-            )
+            # Other ports only with the dev and test switch (the browser test's pretend site).
+            or (port not in (None, 80, 443) and not self.allow_private)
         ):
             raise RefusedAddress(f"Only web links on the usual ports are used ({host}).")
 
