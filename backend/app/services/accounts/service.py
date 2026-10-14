@@ -13,12 +13,15 @@ from app.core.clock import utcnow
 from app.models import Account
 from app.models.enums import AccountStatus, ServiceKind, ServiceState
 from app.paths import Layout, email_dirname
+from app.services.accounts.filters import permission_lost as filters_permission_lost
 from app.services.accounts.oauth import (
     DRIVE_SCOPE,
+    FILTERS_PURPOSE,
     FULL_MAIL_SCOPE,
     GMAIL_SCOPE,
     PERMANENT_PURPOSE,
     SCOPES,
+    SETTINGS_SCOPE,
     OAuthError,
     OAuthStates,
     build_auth_url,
@@ -144,7 +147,11 @@ class AccountService:
                 "GOOGLE_CLIENT_SECRET (see docs/google-oauth-setup.md)."
             )
         state, challenge = self.states.new(reconnect_account_id, purpose)
-        scope = f"{SCOPES} {FULL_MAIL_SCOPE}" if purpose == PERMANENT_PURPOSE else SCOPES
+        scope = SCOPES
+        if purpose == PERMANENT_PURPOSE:
+            scope = f"{SCOPES} {FULL_MAIL_SCOPE}"
+        elif purpose == FILTERS_PURPOSE:
+            scope = f"{SCOPES} {SETTINGS_SCOPE}"
         return build_auth_url(
             self.settings.google_client_id,
             self.settings.oauth_redirect_uri,
@@ -213,6 +220,38 @@ class AccountService:
                 db.commit()
         elif acc.permanent_delete:
             permission_lost(db, self.bus, acc.id)
+
+    def start_gmail_filters(self, account_id: int) -> str | None:
+        """Turn on Allow Gmail filters (0.5.2 spec §5). Google is asked for the Gmail settings
+        permission only when it hasn't granted it yet; a pretend local account gets it
+        without Google. None: it is on now."""
+        with self.session_factory() as db:
+            acc = db.get(Account, account_id)
+            if acc is None:
+                raise LookupError("account not found")
+            if acc.status != AccountStatus.CONNECTED:
+                raise AccountError("Connect this Google account again first (Settings, Accounts).")
+            if service_state(db, acc.id, ServiceKind.MAIL) == ServiceState.NOT_SET_UP:
+                raise AccountError("Set up mail backup for this account first.")
+            if is_pretend(acc, self.settings.allow_local_accounts):
+                acc.scopes = " ".join(sorted(set(acc.scopes.split()) | {SETTINGS_SCOPE}))
+            if has_scope(acc.scopes, SETTINGS_SCOPE):
+                acc.gmail_filters, acc.gmail_filters_note = True, None
+                db.commit()
+                self.bus.publish("account", {"account_id": acc.id, "status": acc.status})
+                return None
+        return self.start_connect(account_id, purpose=FILTERS_PURPOSE)
+
+    def _follow_gmail_filters(self, db: Session, acc: Account, purpose: str) -> None:
+        """After any sign-in: Turn on's sign-in that granted the scope turns the switch on;
+        a sign-in without it, while the switch was on, means Google took it back. Any other
+        sign-in never turns it on."""
+        if has_scope(acc.scopes, SETTINGS_SCOPE):
+            if purpose == FILTERS_PURPOSE:
+                acc.gmail_filters, acc.gmail_filters_note = True, None
+                db.commit()
+        elif acc.gmail_filters:
+            filters_permission_lost(db, self.bus, acc.id)
 
     def _follow_mail_permission(self, db: Session, acc: Account, purpose: str) -> None:
         """Mail's state after a sign-in, from what Google granted (see the plan's rulings)."""
@@ -315,6 +354,7 @@ class AccountService:
             ensure_services(db, acc)
             self._follow_mail_permission(db, acc, pending.purpose)
             self._follow_permanent_delete(db, acc, pending.purpose)
+            self._follow_gmail_filters(db, acc, pending.purpose)
             self.layout.account_dir(email).mkdir(parents=True, exist_ok=True)
             record_event(
                 db,

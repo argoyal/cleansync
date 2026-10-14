@@ -94,6 +94,18 @@ class PermanentDeleteRefused(MailApiError):
     longer allows permanent delete. Not a reason to reconnect mail."""
 
 
+class FiltersRefused(MailApiError):
+    """Google refused the Gmail settings permission (0.5.2 spec §5): the mailbox no longer
+    allows Gmail filters. Not a reason to reconnect mail."""
+
+
+@dataclass(frozen=True)
+class GmailFilter:
+    id: str
+    from_: str
+    removes_inbox: bool
+
+
 class MailAdapter(Protocol):
     async def profile(self) -> MailboxInfo: ...
 
@@ -124,3 +136,9 @@ class MailAdapter(Protocol):
     async def import_raw(self, raw: bytes, labels: list[str], internal_date: datetime) -> str: ...
 
     async def find_by_message_id(self, message_id: str) -> list[str]: ...
+
+    async def create_filter(self, sender: str) -> str: ...
+
+    async def list_filters(self) -> list[GmailFilter]: ...
+
+    async def delete_filter(self, filter_id: str) -> None: ...

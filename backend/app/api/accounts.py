@@ -8,8 +8,22 @@ from sqlalchemy.orm import Session
 
 from app.auth.deps import AuthContext, get_db, require_user
 from app.models import Account
-from app.schemas.accounts import AccountOut, AuthUrlOut, MailSetupOut, PermanentDeleteIn
-from app.services.accounts.oauth import GMAIL_SCOPE, PERMANENT_PURPOSE, OAuthError, has_scope
+from app.schemas.accounts import (
+    AccountOut,
+    AuthUrlOut,
+    GmailFiltersIn,
+    MailSetupOut,
+    PermanentDeleteIn,
+)
+from app.services.accounts.filters import gmail_filters_on
+from app.services.accounts.filters import turn_off as filters_turn_off
+from app.services.accounts.oauth import (
+    FILTERS_PURPOSE,
+    GMAIL_SCOPE,
+    PERMANENT_PURPOSE,
+    OAuthError,
+    has_scope,
+)
 from app.services.accounts.permanent import permanent_delete_on, turn_off
 from app.services.accounts.service import AccountError
 from app.services.accounts.services import service_states
@@ -25,6 +39,7 @@ def account_out(db: Session, acc: Account) -> AccountOut:
             "services": service_states(db, acc.id),
             "mail_permission": has_scope(acc.scopes, GMAIL_SCOPE),
             "permanent_delete": permanent_delete_on(acc),
+            "gmail_filters": gmail_filters_on(acc),
         }
     )
 
@@ -94,6 +109,33 @@ def permanent_delete(
         raise HTTPException(400, str(e)) from e
 
 
+@router.post("/api/accounts/{account_id}/gmail-filters", response_model=MailSetupOut)
+def gmail_filters(
+    account_id: int,
+    body: GmailFiltersIn,
+    request: Request,
+    ctx: AuthContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    """Allow Gmail filters, per mailbox (0.5.2 spec §5). auth_url: Google's sign-in that asks
+    for the Gmail settings permission; None when nothing more is needed."""
+    acc = db.get(Account, account_id)
+    if acc is None:
+        raise HTTPException(404, "account not found")
+    if not body.on:
+        filters_turn_off(db, account_id)
+        # An old Google tab left open must not turn it back on.
+        request.app.state.accounts.states.forget(account_id, FILTERS_PURPOSE)
+        request.app.state.bus.publish("account", {"account_id": account_id, "status": acc.status})
+        return MailSetupOut(auth_url=None)
+    try:
+        return MailSetupOut(auth_url=request.app.state.accounts.start_gmail_filters(account_id))
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except (AccountError, OAuthError) as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @router.get("/api/oauth/callback")
 async def oauth_callback(request: Request, state: str = "", code: str = "", error: str = ""):
     # No session check: Google's redirect is cross-site, so the SameSite=Strict cookie is not
@@ -124,6 +166,9 @@ async def oauth_callback(request: Request, state: str = "", code: str = "", erro
     if purpose == PERMANENT_PURPOSE:
         outcome = "on" if permanent_delete_on(acc) else "denied"
         return RedirectResponse(f"/?connected={acc.id}&permanent={outcome}", 303)
+    if purpose == FILTERS_PURPOSE:
+        outcome = "on" if gmail_filters_on(acc) else "denied"
+        return RedirectResponse(f"/?connected={acc.id}&filters={outcome}", 303)
     return RedirectResponse(f"/?connected={acc.id}", 303)
 
 

@@ -31,6 +31,9 @@ UNIT_COSTS: dict[str, int] = {
     "gmail.messages.batchModify": 50,
     "gmail.messages.delete": 10,
     "gmail.labels.create": 5,
+    "gmail.settings.filters.create": 5,
+    "gmail.settings.filters.delete": 5,
+    "gmail.settings.filters.list": 1,
     "gmail.messages.import": 25,
     "gmail.messages.import.upload": 0,  # the bytes of a resumable import: part of that call
     # Drive API calls CleanSync makes itself (rclone's own calls are estimated below).

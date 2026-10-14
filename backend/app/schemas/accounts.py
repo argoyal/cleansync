@@ -17,6 +17,9 @@ class AccountOut(BaseModel):
     mail_permission: bool = False
     permanent_delete: bool = False  # on means: the switch is on and Google allows it
     permanent_delete_note: str | None = None
+    gmail_filters: bool = False  # on means: the switch is on and Google allows it
+    gmail_filters_note: str | None = None
+    has_photo: bool = False
 
 
 class MailSetupOut(BaseModel):
@@ -28,4 +31,8 @@ class AuthUrlOut(BaseModel):
 
 
 class PermanentDeleteIn(BaseModel):
+    on: bool
+
+
+class GmailFiltersIn(BaseModel):
     on: bool

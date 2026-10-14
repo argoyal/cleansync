@@ -19,8 +19,12 @@ GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 # Read, send and permanently delete all mail (bulk offload spec §3). Asked for only when
 # the owner turns on Allow permanent delete for a mailbox.
 FULL_MAIL_SCOPE = "https://mail.google.com/"
+# Create, list and delete Gmail filters (0.5.2 spec §5). Asked for only when the owner turns
+# on Allow Gmail filters for a mailbox.
+SETTINGS_SCOPE = "https://www.googleapis.com/auth/gmail.settings.basic"
 SCOPES = f"{DRIVE_SCOPE} {GMAIL_SCOPE}"
 PERMANENT_PURPOSE = "permanent_delete"  # a sign-in for Turn on (bulk offload spec §3)
+FILTERS_PURPOSE = "gmail_filters"  # a sign-in for Turn on of Allow Gmail filters
 
 
 def granted_scopes(token_answer: dict) -> str:
@@ -45,7 +49,7 @@ class PendingAuth:
     verifier: str
     created: float
     reconnect_account_id: int | None
-    purpose: str = "connect"  # "connect", "mail" (set up Mail) or "permanent_delete"
+    purpose: str = "connect"  # "connect", "mail", "permanent_delete" or "gmail_filters"
 
 
 class OAuthStates:

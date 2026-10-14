@@ -69,6 +69,9 @@ class FakeGmail:
     history_id: int = 1000
     oldest_history: int = 1000
     revoked: bool = False
+    # False: the mailbox has no Gmail settings permission, so every filter call answers 403.
+    settings_scope: bool = True
+    filters: dict[str, dict] = field(default_factory=dict)  # id -> {id, criteria, action}
     calls: list[tuple[str, str, dict]] = field(default_factory=list)
     _failures: list[_Failure] = field(default_factory=list)
     _uploads: dict[str, list[str]] = field(default_factory=dict)  # resumable: id -> labels
@@ -106,7 +109,14 @@ class FakeGmail:
     ) -> str:
         mid = self._new_id()
         when = when or datetime.now(UTC)
-        msg = FakeMessage(mid, thread_id or mid, raw, list(labels), int(when.timestamp() * 1000), 0)
+        labels = list(labels)
+        sender = email.utils.parseaddr(str(email.message_from_bytes(raw).get("From") or ""))[1]
+        for f in self.filters.values():  # a filter works on new mail only
+            wanted = str(f["criteria"].get("from") or "").lower()
+            if wanted and wanted == sender.lower():
+                drop = set(f["action"].get("removeLabelIds") or [])
+                labels = [x for x in labels if x not in drop]
+        msg = FakeMessage(mid, thread_id or mid, raw, labels, int(when.timestamp() * 1000), 0)
         self.messages[mid] = msg
         self._record("messagesAdded", msg)
         self.save()
@@ -235,6 +245,8 @@ class FakeGmail:
                     "historyId": str(self.history_id),
                 },
             )
+        if rest == "/settings/filters" or rest.startswith("/settings/filters/"):
+            return self._filters(request, rest)
         if rest == "/labels" and request.method == "POST":
             name = str(json.loads(request.content or b"{}").get("name") or "").strip()
             taken = {v.lower() for v in self.user_labels.values()} | {
@@ -306,6 +318,32 @@ class FakeGmail:
                 + [x for x in add if x not in msg.labels],
             )
             return httpx.Response(200, json={"id": msg.id, "labelIds": msg.labels})
+        return self._error(404)
+
+    def _filters(self, request: httpx.Request, rest: str) -> httpx.Response:
+        if not self.settings_scope:
+            return self._error(403, "insufficientPermissions")
+        if rest == "/settings/filters" and request.method == "GET":
+            return httpx.Response(200, json={"filter": list(self.filters.values())})
+        if rest == "/settings/filters" and request.method == "POST":
+            body = json.loads(request.content or b"{}")
+            criteria, action = body.get("criteria") or {}, body.get("action") or {}
+            if any(
+                f["criteria"] == criteria and f["action"] == action for f in self.filters.values()
+            ):
+                return httpx.Response(
+                    400, json={"error": {"code": 400, "message": "Filter already exists"}}
+                )
+            fid = f"ANe1Bm{len(self.filters) + 1}"
+            while fid in self.filters:
+                fid += "x"
+            self.filters[fid] = {"id": fid, "criteria": criteria, "action": action}
+            return httpx.Response(200, json=self.filters[fid])
+        fid = rest.removeprefix("/settings/filters/")
+        if request.method == "DELETE":
+            if self.filters.pop(fid, None) is None:
+                return self._error(404)
+            return httpx.Response(204)
         return self._error(404)
 
     def _ordered(self, include_left_out: bool) -> list[FakeMessage]:

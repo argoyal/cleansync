@@ -15,6 +15,8 @@ from app.services.mail.adapter import (
     IN_INBOX,
     IN_TRASH,
     TOO_OLD,
+    FiltersRefused,
+    GmailFilter,
     MailApiError,
     MailAuthError,
     MailboxInfo,
@@ -52,6 +54,7 @@ API_OFF_REASONS = frozenset({"accessNotConfigured", "SERVICE_DISABLED"})
 # Gmail takes at most 1,000 ids in one batchDelete or batchModify.
 BATCH_MAX = 1000
 PERMANENT_REFUSED_MSG = "Google no longer lets CleanSync delete mail from this Gmail for good."
+FILTERS_REFUSED_MSG = "Google no longer allows CleanSync to change Gmail filters for this mailbox."
 
 
 def all_error_reasons(resp: httpx.Response) -> set[str]:
@@ -325,6 +328,66 @@ class GmailAdapter:
             if e.login:
                 raise
             raise PermanentDeleteRefused(PERMANENT_REFUSED_MSG, 403) from None
+
+    async def _settings(self, op: str, method: str, path: str, **kwargs) -> httpx.Response:
+        """A call that needs the Gmail settings permission. Gmail's "insufficient permission"
+        means only that permission is gone, not the mail permission."""
+        try:
+            return await self._call(op, method, path, **kwargs)
+        except MailAuthError as e:
+            if e.login:
+                raise
+            raise FiltersRefused(FILTERS_REFUSED_MSG, 403) from None
+
+    async def create_filter(self, sender: str) -> str:
+        """A filter that takes mail from this sender out of the Inbox (0.5.2 spec §5). If
+        Gmail already has the same filter, that one's id is returned."""
+        body = {"criteria": {"from": sender}, "action": {"removeLabelIds": ["INBOX"]}}
+        try:
+            resp = await self._settings(
+                "gmail.settings.filters.create", "POST", "/settings/filters", json=body
+            )
+        except MailApiError as e:
+            if e.status != 400 or isinstance(e, FiltersRefused):
+                raise
+            # Gmail says 400 when the same filter exists: take the one it already has.
+            for f in await self.list_filters():
+                if f.from_.lower() == sender.lower() and f.removes_inbox:
+                    return f.id
+            raise
+        fid = _json(resp).get("id")
+        if not isinstance(fid, str) or not fid:
+            raise MailApiError("Gmail gave an unexpected answer")
+        return fid
+
+    async def list_filters(self) -> list[GmailFilter]:
+        data = _json(
+            await self._settings("gmail.settings.filters.list", "GET", "/settings/filters")
+        )
+        out = []
+        for f in data.get("filter") or []:
+            if not isinstance(f, dict) or not isinstance(f.get("id"), str):
+                continue
+            criteria, action = f.get("criteria") or {}, f.get("action") or {}
+            out.append(
+                GmailFilter(
+                    id=f["id"],
+                    from_=str(criteria.get("from") or ""),
+                    removes_inbox="INBOX" in (action.get("removeLabelIds") or []),
+                )
+            )
+        return out
+
+    async def delete_filter(self, filter_id: str) -> None:
+        """Remove one filter. One Gmail no longer has counts as removed."""
+        if not _ID.fullmatch(filter_id):
+            raise ValueError("not a usable filter id")
+        try:
+            await self._settings(
+                "gmail.settings.filters.delete", "DELETE", f"/settings/filters/{filter_id}"
+            )
+        except MailNotFound:
+            return None
 
     async def batch_delete(self, ids: list[str]) -> None:
         """Remove mail from Gmail for good (bulk offload spec §4). Gmail says nothing about
