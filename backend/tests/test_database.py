@@ -20,6 +20,30 @@ def test_pragmas_are_safe_for_network_and_windows_drives(tmp_path):
         assert c.execute(text("PRAGMA busy_timeout")).scalar() == 10000
 
 
+def test_wal_is_used_when_asked_and_undone_when_not(tmp_path):
+    db_file = tmp_path / "t.db"
+    engine = make_engine(db_file, wal=True)
+    with engine.connect() as c:
+        assert c.execute(text("PRAGMA journal_mode")).scalar() == "wal"
+        assert c.execute(text("PRAGMA synchronous")).scalar() == 2  # still FULL
+    engine.dispose()
+    engine = make_engine(db_file)  # the setting turned off again: back to the safe mode
+    with engine.connect() as c:
+        assert c.execute(text("PRAGMA journal_mode")).scalar() == "delete"
+    engine.dispose()
+
+
+def test_the_app_uses_wal_when_database_wal_is_set(settings):
+    from app.main import create_app
+
+    settings.database_wal = True
+    app = create_app(settings, start_background=False)
+    engine = app.state.session_factory.kw["bind"]
+    with engine.connect() as c:
+        assert c.execute(text("PRAGMA journal_mode")).scalar() == "wal"
+    engine.dispose()
+
+
 def test_migrations_match_models(tmp_path):
     from app.database.fts import include_name
 

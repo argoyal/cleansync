@@ -117,8 +117,8 @@ def create_app(settings: Settings | None = None, *, start_background: bool = Tru
     layout = Layout(settings.drivesync_root)
     layout.ensure()
     clear_uploads(layout)
-    run_migrations(layout.db_file)
-    engine = make_engine(layout.db_file)
+    run_migrations(layout.db_file, wal=settings.database_wal)
+    engine = make_engine(layout.db_file, wal=settings.database_wal)
     session_factory = sessionmaker(engine, expire_on_commit=False)
 
     @asynccontextmanager

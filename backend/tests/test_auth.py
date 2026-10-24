@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.auth.deps import require_user
 from app.config import Settings
-from app.core.clock import utcnow
+from app.core.clock import as_utc, utcnow
 from app.main import create_app
 from app.models import User, UserSession
 from tests.conftest import NEW_PASSWORD
@@ -196,3 +196,23 @@ def test_initial_password_file_removed_after_change(tmp_path):
         )
         assert r.status_code == 200
     assert not pw_file.exists()
+
+
+def test_last_seen_is_saved_at_most_once_a_minute(auth_client, app):
+    """Every request checks the login. Saving the time on each one would make every page a
+    write, queued behind any background job holding the database."""
+    with app.state.session_factory() as db:
+        s = db.scalar(select(UserSession))
+        s.last_seen_at = utcnow() - timedelta(seconds=20)
+        db.commit()
+        before = as_utc(s.last_seen_at)
+    assert auth_client.get("/api/auth/me").status_code == 200
+    with app.state.session_factory() as db:
+        assert as_utc(db.scalar(select(UserSession)).last_seen_at) == before
+        s = db.scalar(select(UserSession))
+        s.last_seen_at = utcnow() - timedelta(minutes=2)
+        db.commit()
+    assert auth_client.get("/api/auth/me").status_code == 200
+    with app.state.session_factory() as db:
+        seen = as_utc(db.scalar(select(UserSession)).last_seen_at)
+        assert utcnow() - seen < timedelta(seconds=5)

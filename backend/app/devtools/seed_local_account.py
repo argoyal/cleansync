@@ -64,7 +64,7 @@ async def seed(
         )
     layout = Layout(settings.drivesync_root)
     layout.ensure()
-    run_migrations(layout.db_file)
+    run_migrations(layout.db_file, wal=settings.database_wal)
     email = email_dirname(email)
     env = build_rclone_env(settings, layout)
     try:
@@ -74,7 +74,7 @@ async def seed(
     if samples:  # before the account exists, so a failure here leaves no half-made account
         target.mkdir(parents=True, exist_ok=True)
         write_samples(target)
-    engine = make_engine(layout.db_file)
+    engine = make_engine(layout.db_file, wal=settings.database_wal)
     try:
         service = AccountService(
             settings=settings,

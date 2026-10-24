@@ -94,3 +94,39 @@ def test_record_event_redacts_message_and_data(db):
         assert "abcdef" not in text
         assert "XYZsecret" not in text
         assert "hunter2hunter2" not in text
+
+
+def test_open_event_streams_hold_no_database_connection(app, auth_client):
+    """Each open tab keeps an event stream open for hours. If its login check kept the
+    session, a few tabs would use up the connection pool and every other request would wait."""
+    import socket
+    import threading
+
+    import httpx
+    import uvicorn
+
+    engine = app.state.session_factory.kw["bind"]
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    server = uvicorn.Server(uvicorn.Config(app, port=port, log_level="error", lifespan="off"))
+    threading.Thread(target=server.run, daemon=True).start()
+    try:
+        while not server.started:
+            time.sleep(0.05)
+        clients, streams = [], []
+        for _ in range(3):
+            c = httpx.Client(base_url=f"http://127.0.0.1:{port}", cookies=dict(auth_client.cookies))
+            stream = c.stream("GET", "/api/events")
+            assert stream.__enter__().status_code == 200
+            clients.append(c)
+            streams.append(stream)
+        time.sleep(0.3)
+        assert engine.pool.checkedout() == 0
+        for stream in streams:
+            stream.__exit__(None, None, None)
+        for c in clients:
+            c.close()
+    finally:
+        server.should_exit = True

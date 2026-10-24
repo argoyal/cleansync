@@ -44,6 +44,7 @@ Open `PUBLIC_URL`, log in, choose your own password, and the setup wizard walks 
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | first start | Initial login. If no password is set, one is generated into `app/data/secrets/initial-admin-password`. |
 | `RCLONE_CONFIG_PASS` | no | Encrypts the saved Google logins. Generated into `app/data/secrets/` on first start if empty. |
 | `FORWARDED_ALLOW_IPS` | behind a proxy | Address of your reverse proxy (for example the Docker network gateway). Only these addresses may say which client address a request came from. Default `127.0.0.1`. See [docs/security.md](docs/security.md). |
+| `DATABASE_WAL` | no | Set to `1` when CleanSync's data folder is on a local disk. Pages and searches then keep loading while backups, sorting and unsubscribe write to the database. Leave it off for a network share or a Windows drive, where it can corrupt the database. Default off. |
 | `TZ`, `LOG_LEVEL`, `APP_NAME` | no | Container time zone (log timestamps; syncing always uses UTC), log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`), name shown in the UI. |
 
 ## Docs
