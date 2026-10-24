@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3 — 2026-10-24
+
+Fixes CleanSync slowing down and going unhealthy while background jobs run.
+
+- **Pages no longer pile up behind background jobs.** Every request saved the time the login was last used, so every page and search had to wait for the database while backups, sorting or unsubscribe were writing. The wait used up the database connections and the app went unhealthy ("QueuePool limit of size 5 overflow 10 reached"). The time is now saved at most once a minute.
+- **Open tabs no longer hold a database connection.** The live-updates connection of each open tab kept one until the tab closed.
+- **`DATABASE_WAL=1`** (new, off by default): lets pages and searches keep loading while background jobs write. Set it only when the data folder is on a local disk; on a network share or a Windows drive it can corrupt the database.
+- Upgrading: nothing to do. No database upgrade.
+
 ## 0.5.2 — 2026-10-14
 
 Unsubscribe, account photos, and quicker big offloads.
