@@ -12,6 +12,7 @@
 | Too many failed logins from the wrong address | Behind a proxy, `FORWARDED_ALLOW_IPS` is not set, so everyone looks like the proxy. | Set it to your proxy's address. See [security](security.md). |
 | "Paused: less than 2 GB free on the storage disk" | The disk is nearly full, so the mail backup stopped before writing. | Free some space (or lower the floor in Settings → Mail), then press Check now. |
 | "Paused: CleanSync used its Google API budget for today" | Today's Google API budget (Settings → Google API) is used up. | Nothing to do: mail backup and offloads go on after midnight UTC. Raise the budget only if you're sure. |
+| Pages hang while backups, sorting or unsubscribe run; the log says "database is locked" or "QueuePool limit … reached" | Background jobs are writing, and pages wait for the database. | If the data folder is on a local disk, set `DATABASE_WAL=1` and restart. Not on a network share or a Windows drive. |
 | "Google asked CleanSync to slow down" | Gmail answered "too many requests" for a long time. | Nothing to do: it goes on at the next check. |
 | "The Gmail API is turned off for this Google Cloud project" | The Gmail API is not enabled in your Google Cloud project. | In Google Cloud: APIs & Services → Library → Gmail API → Enable. Then try again. |
 | Mail says "Reconnect mail" | Google no longer lets CleanSync read this account's mail (the permission was removed, or the login expired). | Press Reconnect mail and tick the Gmail box. Check `gmail.modify` is on the consent screen ([mail backup](mail-backup.md)). |

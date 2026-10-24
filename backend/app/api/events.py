@@ -3,14 +3,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from app.auth.deps import get_db, require_user
+from app.auth.deps import get_db, require_user, require_user_briefly
 from app.models import Event
 from app.services.events.bus import event_stream, event_to_dict
 
 router = APIRouter()
 
 
-@router.get("/api/events", dependencies=[Depends(require_user)])
+@router.get("/api/events", dependencies=[Depends(require_user_briefly)])
 async def events(request: Request):
     return EventSourceResponse(
         event_stream(request.app.state.bus, request.is_disconnected), ping=15

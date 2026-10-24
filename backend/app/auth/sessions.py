@@ -20,6 +20,11 @@ def create_session(db: Session, user: User) -> UserSession:
     return s
 
 
+# The idle limit is hours long, so the time a login was last used only needs saving now and
+# then. Saving it on every request made every page a write, queued behind background jobs.
+SEEN_EVERY = timedelta(minutes=1)
+
+
 def load_session(db: Session, sid: str, idle: timedelta, now: datetime) -> UserSession | None:
     s = db.get(UserSession, sid)
     if s is None:
@@ -28,8 +33,9 @@ def load_session(db: Session, sid: str, idle: timedelta, now: datetime) -> UserS
         db.delete(s)
         db.commit()
         return None
-    s.last_seen_at = now
-    db.commit()
+    if now - as_utc(s.last_seen_at) >= SEEN_EVERY:
+        s.last_seen_at = now
+        db.commit()
     return s
 
 

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Development and CI only: lets the seed tool add a "pretend Google account" backed by a
     # local folder. Leave it off in production.
     drivesync_allow_local_accounts: bool = False
+    # SQLite's WAL mode: pages keep loading while background jobs write. Only for a database
+    # on a local disk; on a network share or some Windows drives it can corrupt it.
+    database_wal: bool = False
     log_level: str = "INFO"
     # Container time zone (TZ), used for log timestamps only; syncing always works in UTC.
     tz: str = "UTC"

@@ -28,6 +28,10 @@ class AuthContext:
 
 
 def current_session(request: Request, db: Session = Depends(get_db)) -> AuthContext:
+    return _check_session(request, db)
+
+
+def _check_session(request: Request, db: Session) -> AuthContext:
     sid = request.cookies.get(SESSION_COOKIE)
     if not sid:
         raise HTTPException(401, "not_logged_in")
@@ -49,3 +53,11 @@ def require_user(ctx: AuthContext = Depends(current_session)) -> AuthContext:
     if ctx.user.must_change_password:
         raise HTTPException(403, "password_change_required")
     return ctx
+
+
+def require_user_briefly(request: Request) -> None:
+    """require_user for responses that stay open, like the event stream. get_db's session
+    lives until the response ends, so each open tab would keep a pool connection for hours;
+    this one is closed as soon as the login is checked."""
+    with request.app.state.session_factory() as db:
+        require_user(_check_session(request, db))

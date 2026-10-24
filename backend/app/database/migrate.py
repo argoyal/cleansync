@@ -9,10 +9,10 @@ from app.database.engine import make_engine
 _MIGRATIONS = Path(__file__).parent / "migrations"
 
 
-def run_migrations(db_file: Path, revision: str = "head") -> None:
+def run_migrations(db_file: Path, revision: str = "head", *, wal: bool = False) -> None:
     cfg = Config()
     cfg.set_main_option("script_location", str(_MIGRATIONS))
-    engine = make_engine(db_file)
+    engine = make_engine(db_file, wal=wal)
     try:
         with engine.connect() as connection:
             # Some migrations rebuild tables (SQLite can't alter them in place). With foreign
