@@ -1,8 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.5.4 — 2026-11-13
+
+A new logo.
 
 - **New logo.** CleanSync has a new logo: in the app, as the browser tab icon, on the privacy and terms pages and at the top of the README. Adding CleanSync to an iPhone or iPad home screen uses it too.
+- Upgrading: nothing to do. No database upgrade.
 
 ## 0.5.3 — 2026-10-24
 
