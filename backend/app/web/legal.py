@@ -52,7 +52,7 @@ def _page(request: Request, title: str, body: str) -> HTMLResponse:
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{escape(title)} · {name}</title><style>{_STYLE}</style></head>
-<body><main><header><img src="/favicon.svg" alt=""><h1>{escape(title)}</h1></header>
+<body><main><header><img src="/logo.png" alt=""><h1>{escape(title)}</h1></header>
 <div class="card">{body}</div>
 <p class="muted"><a href="/privacy">Privacy policy</a> · <a href="/terms">Terms of service</a> · <a href="/">Open {name}</a></p>
 </main></body></html>"""

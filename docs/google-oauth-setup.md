@@ -26,7 +26,7 @@ your address.
 |---|---|
 | App name | CleanSync |
 | User support email | your email |
-| App logo | `frontend/public/favicon.svg` turned into a 120 × 120 px PNG (optional; Google only shows it after verification) |
+| App logo | `frontend/public/logo.png` resized to 120 × 120 px (optional; Google only shows it after verification) |
 | Application home page | `https://<your address>/` |
 | Privacy policy link | `https://<your address>/privacy` |
 | Terms of service link | `https://<your address>/terms` |

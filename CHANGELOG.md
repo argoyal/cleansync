@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **New logo.** CleanSync has a new logo: in the app, as the browser tab icon, on the privacy and terms pages and at the top of the README. Adding CleanSync to an iPhone or iPad home screen uses it too.
+
 ## 0.5.3 — 2026-10-24
 
 Fixes CleanSync slowing down and going unhealthy while background jobs run.
