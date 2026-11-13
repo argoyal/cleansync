@@ -36,7 +36,7 @@ def mount_spa(app: FastAPI, dist: Path) -> None:
         if path and "/" not in path:
             top = dist / path
             if top.is_file() and top.name != "index.html":
-                # favicon.svg and the like. theme.js keeps its name between releases, so it
+                # favicon.png and the like. theme.js keeps its name between releases, so it
                 # must be re-checked each time or a stale copy would outlive an upgrade.
                 headers = {"cache-control": "no-cache"} if top.name == "theme.js" else None
                 return FileResponse(top, headers=headers)

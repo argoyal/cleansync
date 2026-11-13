@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/cleansync-banner.png" alt="CleanSync" width="600"></p>
+
 # CleanSync
 
 CleanSync keeps Google Drive in sync with your own server and keeps a copy of every Gmail message, with a web page to watch it and safety checks so a sync can never quietly delete your files. It can offload old files and mail to free space on Google, with a way back.

@@ -1,12 +1,12 @@
-/** CleanSync's mark: a white tile with an indigo "C" (on the rail), or the reverse. */
+/** CleanSync's mark: the logo on a white tile on the rail, or on its own elsewhere. */
 export function Mark({ size = 40, onRail = true }: { size?: number; onRail?: boolean }) {
   return (
     <span
       aria-hidden="true"
-      style={{ width: size, height: size, fontSize: size * 0.45 }}
-      className={`grid shrink-0 place-items-center rounded-[11px] font-extrabold ${onRail ? "bg-rail-mark text-rail" : "bg-rail text-rail-mark"}`}
+      style={{ width: size, height: size, padding: onRail ? size * 0.12 : 0 }}
+      className={`grid shrink-0 place-items-center rounded-[11px] ${onRail ? "bg-rail-mark" : ""}`}
     >
-      C
+      <img src="/logo.png" alt="" className="h-full w-full object-contain" />
     </span>
   );
 }
